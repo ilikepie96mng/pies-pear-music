@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "pies-alac-rip-tool"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+    "mutagen>=1.47",
+    "requests>=2.31",
+    "textual>=0.60",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+music-sync = "alac_rip.cli:app"
+music-add = "alac_rip.cli:app"
+music-status = "alac_rip.cli:app"
+music-clean = "alac_rip.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["alac_rip*"]

@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# App secrets — NEVER commit
+config.yaml
+
+# Music files — too large for git
+*.m4a
+*.flac
+*.mp3
+*.mp4
+*.aac
+
+# Binaries installed by install.sh
+.local/
+
+# .state/ is intentionally NOT gitignored — it's committed after each sync
+# to back up playlist state to GitHub

@@ -1,0 +1,25 @@
+# Copy this to ~/.config/pies-alac-rip/config.yaml and fill in values.
+# This file is safe to commit. config.yaml (without .example) is gitignored.
+
+# Your Apple Music media-user-token.
+# Get it: open Apple Music in browser → DevTools → Application → Cookies → media-user-token
+media_user_token: "YOUR_TOKEN_HERE"
+
+# Where to store downloaded music (must exist or be creatable)
+music_dir: "~/Music/Apple Music"
+
+# Staging area for in-progress downloads (auto-created)
+staging_dir: "~/Music/.staging"
+
+# Path to cloned zhaarey downloader repo
+downloader_repo: "~/.local/share/pies-alac-rip/apple-music-downloader"
+
+# Path to wrapper binary
+wrapper_bin: "~/.local/share/pies-alac-rip/wrapper"
+
+# Path to state directory — MUST be inside the repo root so git add works.
+# install.sh sets this to the absolute path of <repo>/.state automatically.
+state_dir: "FILLED_BY_INSTALL_SCRIPT"
+
+# GitHub remote for state sync (set automatically by install.sh)
+github_remote: ""
