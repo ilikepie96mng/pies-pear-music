@@ -1,7 +1,7 @@
 typer==0.12.3
 rich==13.7.1
 mutagen==1.47.0
-requests==2.31.0
+requests==2.32.3
 textual==0.60.1
 pyyaml==6.0.1
 pytest==8.2.0

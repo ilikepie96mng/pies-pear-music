@@ -10,16 +10,14 @@ dependencies = [
     "typer>=0.12",
     "rich>=13",
     "mutagen>=1.47",
-    "requests>=2.31",
+    "requests>=2.32",
     "textual>=0.60",
     "pyyaml>=6.0",
 ]
 
 [project.scripts]
+# Single entrypoint — subcommands: sync (default), add, status, clean
 music-sync = "alac_rip.cli:app"
-music-add = "alac_rip.cli:app"
-music-status = "alac_rip.cli:app"
-music-clean = "alac_rip.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["."]
