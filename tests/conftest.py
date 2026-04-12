@@ -16,3 +16,13 @@ def tmp_config(tmp_path):
         "github_remote: 'git@github.com:user/pies-alac-rip-tool.git'\n"
     )
     return config_file
+
+
+from alac_rip.state import StateManager
+
+
+@pytest.fixture
+def state(tmp_path):
+    """Return a StateManager backed by a temp SQLite DB."""
+    db_path = tmp_path / "downloaded.db"
+    return StateManager(db_path)
