@@ -1,3 +1,5 @@
+from mutagen.mp4 import MP4, MP4Cover
+
 from alac_rip.metadata import read_tags, write_tags, embed_cover_art, save_cover_file
 
 # Minimal 1x1 white JPEG for testing cover art embedding
@@ -42,8 +44,19 @@ def test_write_and_read_track_num(sample_m4a):
     assert tags["track_num"] == 1
 
 
-def test_embed_cover_art_does_not_raise(sample_m4a):
-    embed_cover_art(sample_m4a, _TINY_JPEG)  # should not raise
+def test_embed_cover_art_writes_covr_atom(sample_m4a):
+    embed_cover_art(sample_m4a, _TINY_JPEG)
+    audio = MP4(sample_m4a)
+    assert "covr" in audio.tags
+    assert isinstance(audio.tags["covr"][0], MP4Cover)
+    assert audio.tags["covr"][0].imageformat == MP4Cover.FORMAT_JPEG
+
+
+def test_write_and_read_playlist_name(sample_m4a):
+    write_tags(sample_m4a, title="Track", artist="Artist",
+               album="Album", track_num=1, playlist_name="Mega Playlist")
+    audio = MP4(sample_m4a)
+    assert audio.tags["©gen"] == ["Mega Playlist"]
 
 
 def test_save_cover_file_writes_bytes(tmp_path):

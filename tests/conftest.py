@@ -37,7 +37,7 @@ def sample_m4a(tmp_path):
     m4a_path = tmp_path / "test_track.m4a"
     subprocess.run(
         [
-            "/home/linuxbrew/.linuxbrew/bin/ffmpeg", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "ffmpeg", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
             "-c:a", "alac", "-y", str(m4a_path),
         ],
         check=True,
