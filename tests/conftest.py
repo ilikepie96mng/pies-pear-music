@@ -26,3 +26,21 @@ def state(tmp_path):
     """Return a StateManager backed by a temp SQLite DB."""
     db_path = tmp_path / "downloaded.db"
     return StateManager(db_path)
+
+
+import subprocess
+
+
+@pytest.fixture
+def sample_m4a(tmp_path):
+    """Generate a minimal valid M4A file using ffmpeg for metadata operation tests."""
+    m4a_path = tmp_path / "test_track.m4a"
+    subprocess.run(
+        [
+            "/home/linuxbrew/.linuxbrew/bin/ffmpeg", "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-c:a", "alac", "-y", str(m4a_path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return m4a_path
