@@ -87,7 +87,11 @@ def music_clean(
         console.print(f"[red]uninstall.sh not found at {uninstall_script}[/red]")
         raise typer.Exit(1)
 
-    subprocess.run(["bash", str(uninstall_script)], check=True)
+    try:
+        subprocess.run(["bash", str(uninstall_script)], check=True)
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Uninstall failed (exit {e.returncode})[/red]")
+        raise typer.Exit(e.returncode)
 
 
 @app.command("sync")
