@@ -127,3 +127,53 @@ def test_sync_returns_summary(music_dir, downloads_dir, sync_state, mock_downloa
     assert result.new_count == 1
     assert result.skipped_count == 0
     assert result.error_count == 0
+
+
+def test_sync_writes_m3u8_playlist(music_dir, downloads_dir, sync_state, mock_downloader):
+    make_fake_m4a(
+        downloads_dir / "Queen" / "A Night at the Opera" / "01 - Bohemian Rhapsody.m4a",
+        title="Bohemian Rhapsody", artist="Queen",
+        album="A Night at the Opera", track_num=1,
+    )
+    engine = SyncEngine(
+        downloader=mock_downloader,
+        state=sync_state,
+        music_dir=music_dir,
+        playlist_name="Test Playlist",
+    )
+    engine.sync("https://music.apple.com/playlist/xyz")
+    m3u8 = music_dir / "Playlists" / "Test Playlist.m3u8"
+    assert m3u8.exists()
+    content = m3u8.read_text()
+    assert "#EXTM3U" in content
+    assert "Bohemian Rhapsody" in content
+    assert "Queen" in content
+
+
+def test_sync_m3u8_includes_skipped_tracks(music_dir, downloads_dir, sync_state, mock_downloader):
+    """Tracks downloaded in a previous sync still appear in the M3U8."""
+    local_path = str(music_dir / "Queen" / "A Night at the Opera" / "01 - Bohemian Rhapsody.m4a")
+    track_relative = "Queen/A Night at the Opera/01 - Bohemian Rhapsody.m4a"
+    sync_state.add_track(Track(
+        track_id=track_relative,
+        title="Bohemian Rhapsody", artist="Queen",
+        album="A Night at the Opera",
+        local_path=local_path,
+        downloaded_at=datetime.now().isoformat(),
+    ))
+    sync_state.add_track_to_playlist("Test Playlist", track_relative)
+
+    make_fake_m4a(
+        downloads_dir / "Queen" / "A Night at the Opera" / "01 - Bohemian Rhapsody.m4a",
+        title="Bohemian Rhapsody", artist="Queen",
+        album="A Night at the Opera", track_num=1,
+    )
+    engine = SyncEngine(
+        downloader=mock_downloader,
+        state=sync_state,
+        music_dir=music_dir,
+        playlist_name="Test Playlist",
+    )
+    engine.sync("https://music.apple.com/playlist/xyz")
+    m3u8 = music_dir / "Playlists" / "Test Playlist.m3u8"
+    assert "Bohemian Rhapsody" in m3u8.read_text()

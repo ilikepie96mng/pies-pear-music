@@ -125,6 +125,8 @@ def music_sync(
         downloader_repo=cfg.downloader_repo,
         wrapper_bin=cfg.wrapper_bin,
         media_user_token=cfg.media_user_token,
+        apple_id_email=cfg.apple_id_email,
+        apple_id_password=cfg.apple_id_password,
     )
 
     total_new = 0

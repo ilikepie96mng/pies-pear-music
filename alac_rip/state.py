@@ -49,6 +49,13 @@ class StateManager:
                     last_synced TEXT
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS playlist_tracks (
+                    playlist_name TEXT NOT NULL,
+                    track_id      TEXT NOT NULL,
+                    PRIMARY KEY (playlist_name, track_id)
+                )
+            """)
 
     def is_downloaded(self, track_id: str) -> bool:
         with self._conn() as conn:
@@ -64,6 +71,28 @@ class StateManager:
                 (track.track_id, track.title, track.artist,
                  track.album, track.local_path, track.downloaded_at),
             )
+
+    def add_track_to_playlist(self, playlist_name: str, track_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO playlist_tracks VALUES (?, ?)",
+                (playlist_name, track_id),
+            )
+
+    def get_playlist_tracks(self, playlist_name: str) -> list[Track]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT t.track_id, t.title, t.artist, t.album,
+                       t.local_path, t.downloaded_at
+                FROM tracks t
+                JOIN playlist_tracks pt ON t.track_id = pt.track_id
+                WHERE pt.playlist_name = ?
+                ORDER BY t.artist, t.album, t.title
+                """,
+                (playlist_name,),
+            ).fetchall()
+            return [Track(*r) for r in rows]
 
     def add_playlist(self, name: str, url: str) -> None:
         with self._conn() as conn:

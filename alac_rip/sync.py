@@ -5,7 +5,7 @@ from pathlib import Path
 
 from alac_rip.downloader import Downloader
 from alac_rip.metadata import read_tags, write_tags
-from alac_rip.organizer import ensure_album_dir, track_path
+from alac_rip.organizer import ensure_album_dir, sanitize, track_path
 from alac_rip.state import StateManager, Track
 
 
@@ -33,14 +33,34 @@ class SyncEngine:
         """Derive a stable track ID from its relative path in the downloads dir."""
         return relative_path
 
+    def _write_m3u8(self) -> None:
+        """Write/update the M3U8 playlist file for all tracks in this playlist."""
+        tracks = self.state.get_playlist_tracks(self.playlist_name)
+        if not tracks:
+            return
+
+        playlists_dir = self.music_dir / "Playlists"
+        playlists_dir.mkdir(exist_ok=True)
+
+        m3u8_path = playlists_dir / f"{sanitize(self.playlist_name)}.m3u8"
+
+        lines = ["#EXTM3U", ""]
+        for track in tracks:
+            lines.append(f"#EXTINF:-1,{track.artist} - {track.title}")
+            lines.append(track.local_path)
+
+        m3u8_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
     def sync(self, playlist_url: str) -> SyncResult:
         """
         Run a full sync for one playlist URL.
 
         1. Invoke downloader → get downloads_dir
         2. Walk downloads_dir for .m4a files
-        3. For each file: if not in DB, move to music_dir + tag + record
-        4. Return SyncResult
+        3. For each file: move to music_dir + tag + record (new), or skip (seen)
+        4. Record playlist membership for every track encountered
+        5. Write/update the M3U8 playlist file
+        6. Return SyncResult
         """
         self.downloader.start_wrapper()
         try:
@@ -59,6 +79,8 @@ class SyncEngine:
             if self.state.is_downloaded(track_id):
                 skipped_count += 1
                 src.unlink()  # discard staging copy
+                # Still record that this track belongs to this playlist
+                self.state.add_track_to_playlist(self.playlist_name, track_id)
                 continue
 
             try:
@@ -83,9 +105,12 @@ class SyncEngine:
                     local_path=str(dest),
                     downloaded_at=datetime.now().isoformat(),
                 ))
+                self.state.add_track_to_playlist(self.playlist_name, track_id)
                 new_count += 1
 
             except Exception:
                 error_count += 1
+
+        self._write_m3u8()
 
         return SyncResult(new_count=new_count, skipped_count=skipped_count, error_count=error_count)

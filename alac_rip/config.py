@@ -15,6 +15,8 @@ class Config:
     wrapper_bin: Path
     state_dir: Path
     github_remote: str
+    apple_id_email: str
+    apple_id_password: str  # use an app-specific password from appleid.apple.com
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
@@ -32,4 +34,6 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         wrapper_bin=p("wrapper_bin"),
         state_dir=p("state_dir"),
         github_remote=data.get("github_remote", ""),
+        apple_id_email=data.get("apple_id_email", ""),
+        apple_id_password=data.get("apple_id_password", ""),
     )

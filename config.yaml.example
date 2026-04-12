@@ -25,3 +25,9 @@ state_dir: "FILLED_BY_INSTALL_SCRIPT"
 
 # GitHub remote for state sync (set automatically by install.sh)
 github_remote: ""
+
+# Apple ID credentials for the FairPlay decryption wrapper.
+# IMPORTANT: Use an app-specific password, not your main Apple ID password.
+# Generate one at: appleid.apple.com → Security → App-Specific Passwords
+apple_id_email: "YOUR_APPLE_ID@email.com"
+apple_id_password: "xxxx-xxxx-xxxx-xxxx"

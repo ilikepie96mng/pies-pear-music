@@ -20,11 +20,16 @@ class Downloader:
         downloader_repo: Path,
         wrapper_bin: Path,
         media_user_token: str,
+        apple_id_email: str = "",
+        apple_id_password: str = "",
     ):
         self.downloader_repo = downloader_repo
         self.wrapper_bin = wrapper_bin
         self.media_user_token = media_user_token
+        self.apple_id_email = apple_id_email
+        self.apple_id_password = apple_id_password
         self._wrapper_proc: Optional[subprocess.Popen] = None
+        self._wrapper_container: Optional[str] = None  # Podman container name
 
     def _write_downloader_config(self) -> None:
         """Update media-user-token in the downloader's config.yaml, preserving all other settings."""
@@ -54,23 +59,56 @@ class Downloader:
             folder = "downloads"
         return self.downloader_repo / folder
 
+    _CONTAINER_NAME = "alac-rip-wrapper"
+    _WRAPPER_IMAGE = "localhost/alac-rip-wrapper:latest"
+
     def start_wrapper(self) -> None:
-        """Start the wrapper decryption service in the background."""
-        if self._wrapper_proc and self._wrapper_proc.poll() is None:
-            return  # already running
-        self._wrapper_proc = subprocess.Popen(
-            [str(self.wrapper_bin)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        """Start the FairPlay decryption service via Podman container."""
+        # Check if already running
+        check = subprocess.run(
+            ["podman", "container", "exists", self._CONTAINER_NAME],
+            capture_output=True,
         )
-        time.sleep(1)  # give wrapper a moment to bind its port
+        if check.returncode == 0:
+            return  # already running
+
+        # Remove any stopped container with the same name
+        subprocess.run(
+            ["podman", "rm", "-f", self._CONTAINER_NAME],
+            capture_output=True,
+        )
+
+        # Build the run command; only pass -L credentials if provided.
+        # The wrapper can resume a saved session without them.
+        cmd = [
+            "podman", "run", "-d",
+            "--name", self._CONTAINER_NAME,
+            "--network", "host",
+            "--privileged",
+            "-v", "/dev:/app/rootfs/dev",
+            "--entrypoint", "/app/wrapper",
+            self._WRAPPER_IMAGE,
+        ]
+        if self.apple_id_email and self.apple_id_password:
+            cmd += ["-L", f"{self.apple_id_email}:{self.apple_id_password}"]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise DownloadError(
+                f"Failed to start wrapper container: {result.stderr}"
+            )
+        time.sleep(4)  # give wrapper time to authenticate and bind ports
 
     def stop_wrapper(self) -> None:
-        """Stop the wrapper decryption service."""
-        if self._wrapper_proc and self._wrapper_proc.poll() is None:
-            self._wrapper_proc.terminate()
-            self._wrapper_proc.wait(timeout=5)
-        self._wrapper_proc = None
+        """Stop the wrapper container."""
+        subprocess.run(
+            ["podman", "stop", self._CONTAINER_NAME],
+            capture_output=True,
+        )
+        subprocess.run(
+            ["podman", "rm", "-f", self._CONTAINER_NAME],
+            capture_output=True,
+        )
 
     def download_playlist(self, playlist_url: str) -> Path:
         """
