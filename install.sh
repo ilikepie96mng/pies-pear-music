@@ -20,10 +20,12 @@ if [ ! -d "$INSTALL_DIR/apple-music-downloader" ]; then
     echo "==> Cloning zhaarey/apple-music-downloader..."
     git clone https://github.com/zhaarey/apple-music-downloader "$INSTALL_DIR/apple-music-downloader"
 fi
-echo "==> Building Go downloader..."
-cd "$INSTALL_DIR/apple-music-downloader"
-go build -o apple-music-dl .
-cd "$SCRIPT_DIR"
+if [ ! -f "$INSTALL_DIR/apple-music-downloader/apple-music-dl" ]; then
+    echo "==> Building Go downloader..."
+    cd "$INSTALL_DIR/apple-music-downloader"
+    go build -o apple-music-dl .
+    cd "$SCRIPT_DIR"
+fi
 
 # 4. Download wrapper binary
 # The wrapper binary is the decryption service used by the downloader.
@@ -46,8 +48,9 @@ if [ ! -d "$BENTO4_DIR" ]; then
     mkdir -p "$BENTO4_DIR"
     unzip -q "$BENTO4_ZIP" -d "$BENTO4_DIR"
     rm "$BENTO4_ZIP"
-    # Symlink MP4Box to ~/.local/bin
-    find "$BENTO4_DIR" -name "mp4box" -exec ln -sf {} "$HOME/.local/bin/mp4box" \;
+    # Symlink MP4Box to ~/.local/bin (use head -1 to get a deterministic single match)
+    MP4BOX_BIN="$(find "$BENTO4_DIR" -name "mp4box" -type f | head -1)"
+    ln -sf "$MP4BOX_BIN" "$HOME/.local/bin/mp4box"
 fi
 
 # 6. Write zhaarey downloader config (with token placeholder — user fills in)
@@ -65,12 +68,14 @@ python3 -m venv .venv
 .venv/bin/pip install --quiet --upgrade pip
 .venv/bin/pip install --quiet -e .
 
-# 8. Create wrapper shims in ~/.local/bin
-cat > "$HOME/.local/bin/music-sync" <<EOF
+# 8. Create wrapper shim in ~/.local/bin
+if [ ! -f "$HOME/.local/bin/music-sync" ]; then
+    cat > "$HOME/.local/bin/music-sync" <<EOF
 #!/usr/bin/env bash
 exec "$SCRIPT_DIR/.venv/bin/music-sync" "\$@"
 EOF
-chmod +x "$HOME/.local/bin/music-sync"
+    chmod +x "$HOME/.local/bin/music-sync"
+fi
 
 # 9. Install systemd user units
 echo "==> Installing systemd units..."
