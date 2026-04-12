@@ -1,8 +1,11 @@
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
 from typing import Optional
+
+import yaml
 
 
 class DownloadError(Exception):
@@ -24,9 +27,32 @@ class Downloader:
         self._wrapper_proc: Optional[subprocess.Popen] = None
 
     def _write_downloader_config(self) -> None:
-        """Write the zhaarey downloader's config.yaml with the current media-user-token."""
+        """Update media-user-token in the downloader's config.yaml, preserving all other settings."""
         config_path = self.downloader_repo / "config.yaml"
-        config_path.write_text(f"media-user-token: {self.media_user_token}\n")
+        if config_path.exists():
+            content = config_path.read_text()
+            content = re.sub(
+                r'^(media-user-token:\s*).*$',
+                f'media-user-token: {self.media_user_token}',
+                content,
+                flags=re.MULTILINE,
+            )
+            config_path.write_text(content)
+        else:
+            config_path.write_text(
+                f"media-user-token: {self.media_user_token}\n"
+                "alac-save-folder: downloads\n"
+            )
+
+    def _get_downloads_dir(self) -> Path:
+        """Return the directory where the downloader saves ALAC files, per its config."""
+        config_path = self.downloader_repo / "config.yaml"
+        if config_path.exists():
+            data = yaml.safe_load(config_path.read_text()) or {}
+            folder = data.get("alac-save-folder", "downloads")
+        else:
+            folder = "downloads"
+        return self.downloader_repo / folder
 
     def start_wrapper(self) -> None:
         """Start the wrapper decryption service in the background."""
@@ -50,15 +76,21 @@ class Downloader:
         """
         Download all tracks from an Apple Music playlist URL.
 
-        The zhaarey downloader writes output to ./downloads/ relative to its repo dir.
-        Returns the path to that downloads directory.
-
+        Returns the path to the downloader's configured save directory.
         Raises DownloadError if the downloader exits with a non-zero status.
         """
         self._write_downloader_config()
 
+        # Prefer the pre-built binary; fall back to go run for dev environments
+        binary = self.downloader_repo / "apple-music-dl"
+        cmd = (
+            [str(binary), playlist_url]
+            if binary.exists()
+            else ["go", "run", "main.go", playlist_url]
+        )
+
         result = subprocess.run(
-            ["go", "run", "main.go", playlist_url],
+            cmd,
             cwd=str(self.downloader_repo),
             capture_output=True,
             text=True,
@@ -72,11 +104,11 @@ class Downloader:
                 f"stdout: {result.stdout}"
             )
 
-        downloads_dir = self.downloader_repo / "downloads"
+        downloads_dir = self._get_downloads_dir()
         if not downloads_dir.exists():
             raise DownloadError(
-                f"Downloader succeeded but ./downloads/ dir not found at {downloads_dir}. "
-                "Check the downloader's actual output directory."
+                f"Downloader succeeded but output directory not found at {downloads_dir}. "
+                "Check the alac-save-folder setting in the downloader's config.yaml."
             )
 
         return downloads_dir
