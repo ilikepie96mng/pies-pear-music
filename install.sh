@@ -27,14 +27,41 @@ if [ ! -f "$INSTALL_DIR/apple-music-downloader/apple-music-dl" ]; then
     cd "$SCRIPT_DIR"
 fi
 
-# 4. Download wrapper binary
-# The wrapper binary is the decryption service used by the downloader.
-# Source: https://github.com/zhaarey/wrapper (check releases page for latest URL)
-WRAPPER_URL="https://github.com/zhaarey/wrapper/releases/latest/download/wrapper-linux-amd64"
+# 4. Locate or download wrapper binary
+# The wrapper is the FairPlay decryption service used by the Go downloader.
+# Check known local paths first (e.g. from a previous alac-rip install),
+# then fall back to downloading from GitHub releases.
 if [ ! -f "$INSTALL_DIR/wrapper" ]; then
-    echo "==> Downloading wrapper binary..."
-    wget -q -O "$INSTALL_DIR/wrapper" "$WRAPPER_URL"
-    chmod +x "$INSTALL_DIR/wrapper"
+    # Check common local paths from existing alac-rip setups
+    WRAPPER_LOCAL=""
+    for candidate in \
+        "$HOME/alac-rip/wrapper/wrapper" \
+        "$HOME/apple-music-sync/wrapper" \
+        "$HOME/.local/share/alac-rip/wrapper"; do
+        if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+            WRAPPER_LOCAL="$candidate"
+            break
+        fi
+    done
+
+    if [ -n "$WRAPPER_LOCAL" ]; then
+        echo "==> Copying wrapper from existing install: $WRAPPER_LOCAL"
+        cp "$WRAPPER_LOCAL" "$INSTALL_DIR/wrapper"
+        chmod +x "$INSTALL_DIR/wrapper"
+    else
+        echo "==> Downloading wrapper binary..."
+        # Update this URL if the GitHub release URL changes:
+        WRAPPER_URL="https://github.com/zhaarey/wrapper/releases/latest/download/wrapper-linux-amd64"
+        if ! wget -q -O "$INSTALL_DIR/wrapper" "$WRAPPER_URL"; then
+            echo ""
+            echo "ERROR: Could not download wrapper binary."
+            echo "  1. Check the release URL: https://github.com/zhaarey/wrapper/releases"
+            echo "  2. Download manually and place at: $INSTALL_DIR/wrapper"
+            echo "  3. Re-run install.sh"
+            exit 1
+        fi
+        chmod +x "$INSTALL_DIR/wrapper"
+    fi
 fi
 
 # 5. Download and set up Bento4
@@ -48,10 +75,13 @@ if [ ! -d "$BENTO4_DIR" ]; then
     mkdir -p "$BENTO4_DIR"
     unzip -q "$BENTO4_ZIP" -d "$BENTO4_DIR"
     rm "$BENTO4_ZIP"
-    # Symlink MP4Box to ~/.local/bin (use head -1 to get a deterministic single match)
-    MP4BOX_BIN="$(find "$BENTO4_DIR" -name "mp4box" -type f | head -1)"
-    ln -sf "$MP4BOX_BIN" "$HOME/.local/bin/mp4box"
 fi
+# Symlink mp4decrypt from Bento4 (used by the Go downloader for decryption)
+MP4DECRYPT_BIN="$(find "$BENTO4_DIR" -name "mp4decrypt" -type f | head -1)"
+if [ -n "$MP4DECRYPT_BIN" ]; then
+    ln -sf "$MP4DECRYPT_BIN" "$HOME/.local/bin/mp4decrypt"
+fi
+# mp4box comes from GPAC (installed via brew above) — no symlink needed
 
 # 6. Write zhaarey downloader config (with token placeholder — user fills in)
 DOWNLOADER_CONFIG="$INSTALL_DIR/apple-music-downloader/config.yaml"

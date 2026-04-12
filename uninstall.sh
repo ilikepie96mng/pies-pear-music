@@ -20,7 +20,7 @@ rm -rf "$INSTALL_DIR"
 
 # 3. Remove shim
 rm -f "$HOME/.local/bin/music-sync"
-rm -f "$HOME/.local/bin/mp4box"
+rm -f "$HOME/.local/bin/mp4decrypt"
 
 # 4. Remove venv
 rm -rf "$SCRIPT_DIR/.venv"
