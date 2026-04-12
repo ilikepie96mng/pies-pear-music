@@ -26,7 +26,7 @@ class Downloader:
     def _write_downloader_config(self) -> None:
         """Write the zhaarey downloader's config.yaml with the current media-user-token."""
         config_path = self.downloader_repo / "config.yaml"
-        config_path.write_text(f"media-user-token: {self.media_user_token!r}\n")
+        config_path.write_text(f"media-user-token: {self.media_user_token}\n")
 
     def start_wrapper(self) -> None:
         """Start the wrapper decryption service in the background."""

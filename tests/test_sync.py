@@ -126,3 +126,4 @@ def test_sync_returns_summary(music_dir, downloads_dir, sync_state, mock_downloa
     result = engine.sync("https://music.apple.com/playlist/xyz")
     assert result.new_count == 1
     assert result.skipped_count == 0
+    assert result.error_count == 0
