@@ -79,6 +79,7 @@ def test_sync_streams_done_event(client, monkeypatch):
     done = next(e for e in events if e["status"] == "done")
     assert done["new"] == 3
     assert done["skipped"] == 1
+    assert done["errors"] == 0
 
     # Cleanup
     client.delete("/playlists/SSE Test")
