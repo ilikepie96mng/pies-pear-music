@@ -191,8 +191,11 @@ class ConfigUpdate(BaseModel):
 
 @app.get("/config")
 def get_config():
-    with open(DEFAULT_CONFIG_PATH) as f:
-        data = yaml.safe_load(f) or {}
+    try:
+        with open(DEFAULT_CONFIG_PATH) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        raise HTTPException(503, "Config file not found")
     data.pop("apple_id_password", None)
     return data
 
@@ -204,7 +207,7 @@ def update_config(body: ConfigUpdate):
     updates = body.model_dump(exclude_none=True)
     data.update(updates)
     with open(DEFAULT_CONFIG_PATH, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
     global cfg
     cfg = load_config(DEFAULT_CONFIG_PATH)
     return {"status": "ok"}
