@@ -1,3 +1,4 @@
+import json
 import pytest
 from fastapi.testclient import TestClient
 import alac_rip.server as server_mod
@@ -45,3 +46,39 @@ def test_add_and_delete_playlist(client):
 
     names = [p["name"] for p in client.get("/playlists").json()]
     assert "Test PL" not in names
+
+
+def test_sync_unknown_playlist_returns_404(client):
+    resp = client.get("/sync/Nonexistent Playlist")
+    assert resp.status_code == 404
+
+
+def test_sync_streams_done_event(client, monkeypatch):
+    from alac_rip import sync as sync_mod
+    from alac_rip.sync import SyncResult
+
+    # Add a real playlist first
+    client.post("/playlists", json={"name": "SSE Test", "url": "https://music.apple.com/fake"})
+
+    # Patch SyncEngine.sync to return immediately without touching the downloader
+    monkeypatch.setattr(
+        sync_mod.SyncEngine,
+        "sync",
+        lambda self, url: SyncResult(new_count=3, skipped_count=1, error_count=0),
+    )
+
+    events = []
+    with client.stream("GET", "/sync/SSE Test") as r:
+        assert r.status_code == 200
+        for line in r.iter_lines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[5:].strip()))
+                if events[-1]["status"] != "running":
+                    break
+
+    done = next(e for e in events if e["status"] == "done")
+    assert done["new"] == 3
+    assert done["skipped"] == 1
+
+    # Cleanup
+    client.delete("/playlists/SSE Test")
