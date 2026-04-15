@@ -61,8 +61,8 @@ def add_playlist(body: PlaylistIn):
 @app.delete("/playlists/{name}", status_code=204)
 def delete_playlist(name: str):
     with sqlite3.connect(cfg.state_dir / "downloaded.db") as conn:
-        conn.execute("DELETE FROM playlists WHERE name = ?", (name,))
         conn.execute("DELETE FROM playlist_tracks WHERE playlist_name = ?", (name,))
+        conn.execute("DELETE FROM playlists WHERE name = ?", (name,))
     return None
 
 
