@@ -1,8 +1,8 @@
+import asyncio
 import json
 import socket
 import sqlite3
 import threading
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -72,11 +72,20 @@ def delete_playlist(name: str):
     return None
 
 
+_active_syncs: set[str] = set()
+_active_syncs_lock = threading.Lock()
+
+
 @app.get("/sync/{name}")
-def sync_playlist(name: str):
+async def sync_playlist(name: str):
     playlists = {p.name: p for p in state.get_playlists()}
     if name not in playlists:
         raise HTTPException(404, f"Playlist '{name}' not found")
+
+    with _active_syncs_lock:
+        if name in _active_syncs:
+            raise HTTPException(409, f"Playlist '{name}' is already syncing")
+        _active_syncs.add(name)
 
     playlist = playlists[name]
     pre_count = state.get_downloaded_count()
@@ -102,21 +111,27 @@ def sync_playlist(name: str):
             state.update_playlist_synced(name)
         except Exception as exc:
             error_holder["error"] = str(exc)
+        finally:
+            with _active_syncs_lock:
+                _active_syncs.discard(name)
 
     thread = threading.Thread(target=run_sync, daemon=True)
     thread.start()
 
-    def event_stream():
+    async def event_stream():
         while thread.is_alive():
             current = max(state.get_downloaded_count() - pre_count, 0)
             yield f"data: {json.dumps({'status': 'running', 'new_so_far': current})}\n\n"
-            time.sleep(1)
+            await asyncio.sleep(1)
 
         if "error" in error_holder:
             yield f"data: {json.dumps({'status': 'error', 'message': error_holder['error']})}\n\n"
         else:
             r = result_holder.get("result")
-            yield f"data: {json.dumps({'status': 'done', 'new': r.new_count, 'skipped': r.skipped_count, 'errors': r.error_count})}\n\n"
+            if r is None:
+                yield f"data: {json.dumps({'status': 'error', 'message': 'sync thread terminated unexpectedly'})}\n\n"
+            else:
+                yield f"data: {json.dumps({'status': 'done', 'new': r.new_count, 'skipped': r.skipped_count, 'errors': r.error_count})}\n\n"
 
     return StreamingResponse(
         event_stream(),
