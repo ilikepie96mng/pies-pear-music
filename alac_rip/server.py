@@ -1,4 +1,5 @@
 import socket
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -6,6 +7,7 @@ from typing import Optional
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config
 from alac_rip.state import StateManager
@@ -35,6 +37,33 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+class PlaylistIn(BaseModel):
+    name: str
+    url: str
+
+
+@app.get("/playlists")
+def get_playlists():
+    return [
+        {"name": p.name, "url": p.url, "last_synced": p.last_synced}
+        for p in state.get_playlists()
+    ]
+
+
+@app.post("/playlists", status_code=201)
+def add_playlist(body: PlaylistIn):
+    state.add_playlist(body.name, body.url)
+    return {"name": body.name, "url": body.url, "last_synced": None}
+
+
+@app.delete("/playlists/{name}", status_code=204)
+def delete_playlist(name: str):
+    with sqlite3.connect(cfg.state_dir / "downloaded.db") as conn:
+        conn.execute("DELETE FROM playlists WHERE name = ?", (name,))
+        conn.execute("DELETE FROM playlist_tracks WHERE playlist_name = ?", (name,))
+    return None
 
 
 if __name__ == "__main__":
