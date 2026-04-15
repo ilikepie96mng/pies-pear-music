@@ -83,3 +83,17 @@ def test_sync_streams_done_event(client, monkeypatch):
 
     # Cleanup
     client.delete("/playlists/SSE Test")
+
+
+def test_library_returns_dict(client):
+    resp = client.get("/library")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, dict)
+    for tracks in data.values():
+        assert isinstance(tracks, list)
+
+
+def test_track_art_missing_path_returns_404(client):
+    resp = client.get("/track-art", params={"path": "/tmp/nonexistent.m4a"})
+    assert resp.status_code == 404

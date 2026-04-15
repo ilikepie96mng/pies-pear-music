@@ -10,7 +10,8 @@ from typing import Optional
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from mutagen.mp4 import MP4, MP4Cover
 from pydantic import BaseModel
 
 from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config
@@ -138,6 +139,44 @@ async def sync_playlist(name: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/library")
+def get_library():
+    result: dict = {}
+    for pl in state.get_playlists():
+        tracks = state.get_playlist_tracks(pl.name)
+        result[pl.name] = [
+            {
+                "track_id": t.track_id,
+                "title": t.title,
+                "artist": t.artist,
+                "album": t.album,
+                "local_path": t.local_path,
+                "downloaded_at": t.downloaded_at,
+            }
+            for t in tracks
+        ]
+    return result
+
+
+@app.get("/track-art")
+def get_track_art(path: str):
+    track_path = Path(path)
+    if not track_path.exists():
+        raise HTTPException(404, "File not found")
+    try:
+        tags = MP4(track_path)
+        covers = tags.get("covr", [])
+        if not covers:
+            raise HTTPException(404, "No cover art embedded")
+        cover = covers[0]
+        fmt = "image/jpeg" if cover.imageformat == MP4Cover.FORMAT_JPEG else "image/png"
+        return Response(content=bytes(cover), media_type=fmt)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
 
 
 if __name__ == "__main__":
