@@ -97,3 +97,29 @@ def test_library_returns_dict(client):
 def test_track_art_missing_path_returns_404(client):
     resp = client.get("/track-art", params={"path": "/tmp/nonexistent.m4a"})
     assert resp.status_code == 404
+
+
+def test_get_config_omits_password(client):
+    resp = client.get("/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "music_dir" in data
+    assert "apple_id_password" not in data
+
+
+def test_put_config_roundtrip(client, tmp_path, monkeypatch):
+    import alac_rip.server as server_mod
+
+    fake_cfg_path = tmp_path / "config2.yaml"
+    fake_cfg_path.write_text(
+        "music_dir: ~/Music\nmedia_user_token: tok\napple_id_email: a@b.com\n"
+        "apple_id_password: secret\nstaging_dir: /tmp/s\n"
+        "downloader_repo: /tmp/d\nwrapper_bin: /tmp/w\nstate_dir: /tmp/st\n"
+        "github_remote: ''\n"
+    )
+    monkeypatch.setattr(server_mod, "DEFAULT_CONFIG_PATH", fake_cfg_path)
+
+    resp = client.put("/config", json={"apple_id_email": "new@email.com"})
+    assert resp.status_code == 200
+    data = fake_cfg_path.read_text()
+    assert "new@email.com" in data

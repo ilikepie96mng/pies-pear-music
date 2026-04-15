@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
+import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -177,6 +178,36 @@ def get_track_art(path: str):
         raise
     except Exception as exc:
         raise HTTPException(500, str(exc))
+
+
+class ConfigUpdate(BaseModel):
+    music_dir: Optional[str] = None
+    staging_dir: Optional[str] = None
+    media_user_token: Optional[str] = None
+    apple_id_email: Optional[str] = None
+    apple_id_password: Optional[str] = None
+    github_remote: Optional[str] = None
+
+
+@app.get("/config")
+def get_config():
+    with open(DEFAULT_CONFIG_PATH) as f:
+        data = yaml.safe_load(f) or {}
+    data.pop("apple_id_password", None)
+    return data
+
+
+@app.put("/config")
+def update_config(body: ConfigUpdate):
+    with open(DEFAULT_CONFIG_PATH) as f:
+        data = yaml.safe_load(f) or {}
+    updates = body.model_dump(exclude_none=True)
+    data.update(updates)
+    with open(DEFAULT_CONFIG_PATH, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+    global cfg
+    cfg = load_config(DEFAULT_CONFIG_PATH)
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":
