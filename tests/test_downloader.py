@@ -28,6 +28,15 @@ class FakeProc:
         self._poll_result = -9
 
 
+class FakeDownloaderProc:
+    def __init__(self, stdout_lines, returncode=0):
+        self.stdout = iter(stdout_lines)
+        self.returncode = returncode
+
+    def wait(self):
+        return self.returncode
+
+
 @pytest.fixture
 def downloader_repo(tmp_path):
     repo = tmp_path / "apple-music-downloader"
@@ -125,3 +134,51 @@ def test_start_wrapper_raises_when_process_exits_before_ports_open(tmp_path, dow
 
     with pytest.raises(DownloadError, match="Wrapper exited before becoming ready"):
         dl.start_wrapper()
+
+
+def test_start_wrapper_restarts_external_process_when_ports_are_taken(tmp_path, downloader_repo, monkeypatch):
+    wrapper_bin = tmp_path / "wrapper"
+    wrapper_bin.write_text("fake")
+    proc = FakeProc(stdout_lines=["ready\n"])
+    popen = MagicMock(return_value=proc)
+
+    ports = iter([True, False, False, True])
+    monkeypatch.setattr(Downloader, "_ports_open", lambda self: next(ports, True))
+    terminate = MagicMock(return_value=True)
+    monkeypatch.setattr(Downloader, "_terminate_external_wrapper", terminate)
+    monkeypatch.setattr("alac_rip.downloader.subprocess.Popen", popen)
+    monkeypatch.setattr("alac_rip.downloader.threading.Thread", lambda target, daemon: MagicMock(start=lambda: target()))
+
+    dl = Downloader(
+        downloader_repo=downloader_repo,
+        wrapper_bin=wrapper_bin,
+        media_user_token="token",
+    )
+    dl.start_wrapper()
+
+    terminate.assert_called_once()
+    assert popen.called
+
+
+def test_download_playlist_raises_on_decrypt_failures_even_with_zero_exit(tmp_path, downloader_repo, monkeypatch):
+    config = downloader_repo / "config.yaml"
+    config.write_text("alac-save-folder: downloads\n")
+    downloads = downloader_repo / "downloads"
+    downloads.mkdir()
+    binary = downloader_repo / "apple-music-dl"
+    binary.write_text("fake")
+
+    proc = FakeDownloaderProc([
+        "Track 1 of 1: songs\n",
+        "Decrypting...   0%  (1.0 kB/68 MB, 341 MB/s) Failed to run v2: decryptFragment: read tcp 127.0.0.1:1->127.0.0.1:10020: read: connection reset by peer\n",
+    ])
+    monkeypatch.setattr("alac_rip.downloader.subprocess.Popen", MagicMock(return_value=proc))
+
+    dl = Downloader(
+        downloader_repo=downloader_repo,
+        wrapper_bin=tmp_path / "wrapper",
+        media_user_token="token",
+    )
+
+    with pytest.raises(DownloadError, match="decryption failures"):
+        dl.download_playlist("https://music.apple.com/test")

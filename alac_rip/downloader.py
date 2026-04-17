@@ -106,6 +106,46 @@ class Downloader:
                 return False
         return True
 
+    def _terminate_external_wrapper(self) -> bool:
+        """Terminate any existing wrapper process for the configured binary path."""
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", str(self.wrapper_bin)],
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return False
+
+        if result.returncode != 0:
+            return False
+
+        terminated = False
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                pid = int(line)
+            except ValueError:
+                continue
+            if pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, 15)
+                terminated = True
+            except ProcessLookupError:
+                continue
+            except PermissionError:
+                continue
+
+        if terminated:
+            for _ in range(20):
+                if not self._ports_open():
+                    break
+                time.sleep(0.25)
+        return terminated
+
     def start_wrapper(self, force_login: bool = False) -> None:
         """Start the configured FairPlay wrapper binary and wait until it is ready."""
         if self._wrapper_proc and self._wrapper_proc.poll() is None and self._ports_open() and not force_login:
@@ -113,8 +153,13 @@ class Downloader:
             return
 
         if self._ports_open() and not force_login:
-            self._log("Wrapper already running and ready", "wrapper_starting")
-            return
+            self._log("Existing wrapper detected on decrypt ports; restarting configured wrapper...", "wrapper_starting")
+            self._terminate_external_wrapper()
+            if self._ports_open():
+                raise DownloadError(
+                    "A wrapper process is already bound to the decrypt ports and could not be restarted. "
+                    "Stop the existing wrapper and try again."
+                )
 
         if self._wrapper_proc and self._wrapper_proc.poll() is None:
             self.stop_wrapper()
@@ -257,11 +302,19 @@ class Downloader:
         )
 
         output_lines: list[str] = []
+        decrypt_failures: list[str] = []
         for line in proc.stdout:
             line = line.rstrip()
             if line:
                 output_lines.append(line)
                 self._log(line, "downloading")
+                lower = line.lower()
+                if (
+                    "failed to run v2" in lower
+                    or "decryptfragment" in lower
+                    or "connection reset by peer" in lower
+                ):
+                    decrypt_failures.append(line)
 
         proc.wait()
 
@@ -269,6 +322,13 @@ class Downloader:
             tail = "\n".join(output_lines[-20:]) if output_lines else "(no output)"
             raise DownloadError(
                 f"Downloader exited with code {proc.returncode}.\n{tail}"
+            )
+
+        if decrypt_failures:
+            tail = "\n".join(decrypt_failures[-10:])
+            raise DownloadError(
+                "Downloader reported decryption failures even though it exited successfully.\n"
+                f"{tail}"
             )
 
         downloads_dir = self._get_downloads_dir()
