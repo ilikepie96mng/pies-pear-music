@@ -26,8 +26,10 @@
   let logEl = $state<HTMLElement | null>(null);
   let source: EventSource | null = null;
   let copied = $state(false);
+  let copiedLogPath = $state(false);
   let autoFollow = $state(true);
   let latestMessage = $state("Waiting for output…");
+  let logPath = $state<string | null>(null);
 
   // Live counters during processing
   let liveNew = $state(0);
@@ -158,12 +160,20 @@
     setTimeout(() => (copied = false), 2000);
   }
 
+  async function copyLogPath() {
+    if (!logPath) return;
+    await navigator.clipboard.writeText(logPath);
+    copiedLogPath = true;
+    setTimeout(() => (copiedLogPath = false), 2000);
+  }
+
   onMount(() => {
     source = new EventSource(api.syncUrl(playlistName));
 
     source.onmessage = async (e) => {
       const data: SyncEvent = JSON.parse(e.data);
       status = data.status;
+      if (data.log_path) logPath = data.log_path;
 
       if (data.status === "running") {
         if (data.phase) phase = data.phase;
@@ -215,6 +225,21 @@
     <div class="text-amber-500 text-[10px] font-semibold uppercase tracking-widest mb-1">Syncing</div>
     <h2 class="text-white text-2xl font-bold tracking-tight">{playlistName}</h2>
   </div>
+
+  {#if logPath}
+    <div class="mb-4 flex items-center justify-between gap-3 rounded-xl border border-[#1a1a1a] bg-[#111] px-3 py-2">
+      <div class="min-w-0">
+        <div class="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold">Session log</div>
+        <div class="truncate font-mono text-[11px] text-zinc-400" title={logPath}>{logPath}</div>
+      </div>
+      <button
+        onclick={copyLogPath}
+        class="shrink-0 text-[10px] px-2 py-1 rounded bg-[#1a1a1a] text-zinc-500 hover:text-white transition-colors uppercase tracking-widest font-semibold"
+      >
+        {copiedLogPath ? "Copied" : "Copy Path"}
+      </button>
+    </div>
+  {/if}
 
   <!-- Phase timeline -->
   <div class="flex items-center gap-0 mb-7">

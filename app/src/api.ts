@@ -4,7 +4,13 @@ let _port: number | null = null;
 
 async function getPort(): Promise<number> {
   if (_port !== null) return _port;
+  const cached = sessionStorage.getItem("api_port");
+  if (cached) {
+    _port = parseInt(cached, 10);
+    return _port;
+  }
   _port = await invoke<number>("get_api_port");
+  sessionStorage.setItem("api_port", String(_port));
   return _port;
 }
 
@@ -16,6 +22,7 @@ export interface Playlist {
   name: string;
   url: string;
   last_synced: string | null;
+  paused: boolean;
 }
 
 export interface Track {
@@ -29,11 +36,25 @@ export interface Track {
 
 export interface SyncEvent {
   status: "running" | "done" | "error";
-  new_so_far?: number;
+  phase?: string;
+  message?: string;
   new?: number;
   skipped?: number;
   errors?: number;
-  message?: string;
+  log_path?: string;
+}
+
+export interface DiagnosticCheck {
+  label: string;
+  ok: boolean;
+  detail?: string;
+}
+
+export interface Stats {
+  playlist_count: number;
+  total_tracks: number;
+  last_sync: string | null;
+  playlists: { name: string; track_count: number; last_synced: string | null }[];
 }
 
 export const api = {
@@ -58,17 +79,39 @@ export const api = {
     });
   },
 
+  async patchPlaylist(name: string, patch: { name?: string; paused?: boolean }): Promise<Playlist> {
+    const r = await fetch(`${await base()}/playlists/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
   async library(): Promise<Record<string, Track[]>> {
     const r = await fetch(`${await base()}/library`);
     return r.json();
   },
 
-  async trackArtUrl(localPath: string): Promise<string> {
-    return `${await base()}/track-art?path=${encodeURIComponent(localPath)}`;
+  trackArtUrl(localPath: string): string {
+    if (_port === null) return "";
+    return `http://127.0.0.1:${_port}/track-art?path=${encodeURIComponent(localPath)}`;
   },
 
-  async syncUrl(name: string): Promise<string> {
-    return `${await base()}/sync/${encodeURIComponent(name)}`;
+  syncUrl(name: string): string {
+    if (_port === null) throw new Error("Port not yet known");
+    return `http://127.0.0.1:${_port}/sync/${encodeURIComponent(name)}`;
+  },
+
+  async stats(): Promise<Stats> {
+    const r = await fetch(`${await base()}/stats`);
+    return r.json();
+  },
+
+  async diagnostics(): Promise<DiagnosticCheck[]> {
+    const r = await fetch(`${await base()}/diagnostics`);
+    return r.json();
   },
 
   async config(): Promise<Record<string, string>> {

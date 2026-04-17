@@ -1,9 +1,14 @@
 import asyncio
 import json
+import queue
+import re
+import shutil
 import socket
 import sqlite3
+import subprocess
 import threading
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -47,23 +52,80 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/diagnostics")
+def get_diagnostics():
+    def check(label: str, ok: bool, detail: str = "") -> dict:
+        return {"label": label, "ok": ok, "detail": detail}
+
+    results: list[dict] = []
+
+    # System tools
+    ffmpeg = shutil.which("ffmpeg")
+    results.append(check("ffmpeg", ffmpeg is not None, ffmpeg or "not found in PATH"))
+
+    podman = shutil.which("podman")
+    results.append(check("Podman", podman is not None, podman or "not found in PATH"))
+
+    git = shutil.which("git")
+    results.append(check("Git", git is not None, git or "not found in PATH"))
+
+    # Config file
+    config_exists = DEFAULT_CONFIG_PATH.exists()
+    results.append(check("Config file", config_exists, str(DEFAULT_CONFIG_PATH)))
+
+    # Config-dependent checks
+    if cfg is not None:
+        dl_ok = cfg.downloader_repo.exists()
+        results.append(check("Downloader repo", dl_ok, str(cfg.downloader_repo)))
+
+        wr_ok = cfg.wrapper_bin.exists()
+        results.append(check("Wrapper binary", wr_ok, str(cfg.wrapper_bin)))
+
+        token_ok = bool(cfg.media_user_token and cfg.media_user_token not in ("", "YOUR_TOKEN_HERE"))
+        results.append(check("Media user token", token_ok))
+
+        email_ok = bool(cfg.apple_id_email and "@" in cfg.apple_id_email
+                        and cfg.apple_id_email != "YOUR_APPLE_ID@email.com")
+        results.append(check("Apple ID email", email_ok))
+
+        pw_ok = bool(cfg.apple_id_password and cfg.apple_id_password not in ("", "xxxx-xxxx-xxxx-xxxx"))
+        results.append(check("Apple ID password", pw_ok))
+    else:
+        for label in ("Downloader repo", "Wrapper binary", "Media user token", "Apple ID email", "Apple ID password"):
+            results.append(check(label, False, "Config not loaded"))
+
+    # Systemd timer
+    try:
+        proc = subprocess.run(
+            ["systemctl", "--user", "is-active", "pies-alac-rip.timer"],
+            capture_output=True, text=True, timeout=5,
+        )
+        timer_active = proc.stdout.strip() == "active"
+        results.append(check("Systemd timer", timer_active, proc.stdout.strip() or "inactive"))
+    except Exception as exc:
+        results.append(check("Systemd timer", False, str(exc)))
+
+    return results
+
+
 class PlaylistIn(BaseModel):
     name: str
     url: str
 
 
+def _playlist_dict(p) -> dict:
+    return {"name": p.name, "url": p.url, "last_synced": p.last_synced, "paused": p.paused}
+
+
 @app.get("/playlists")
 def get_playlists():
-    return [
-        {"name": p.name, "url": p.url, "last_synced": p.last_synced}
-        for p in state.get_playlists()
-    ]
+    return [_playlist_dict(p) for p in state.get_playlists()]
 
 
 @app.post("/playlists", status_code=201)
 def add_playlist(body: PlaylistIn):
     state.add_playlist(body.name, body.url)
-    return {"name": body.name, "url": body.url, "last_synced": None}
+    return {"name": body.name, "url": body.url, "last_synced": None, "paused": False}
 
 
 @app.delete("/playlists/{name}", status_code=204)
@@ -74,8 +136,34 @@ def delete_playlist(name: str):
     return None
 
 
+class PlaylistPatch(BaseModel):
+    name: Optional[str] = None
+    paused: Optional[bool] = None
+
+
+@app.patch("/playlists/{name}")
+def patch_playlist(name: str, body: PlaylistPatch):
+    playlists = {p.name: p for p in state.get_playlists()}
+    if name not in playlists:
+        raise HTTPException(404, f"Playlist '{name}' not found")
+    if body.name is not None and body.name != name:
+        if body.name in playlists:
+            raise HTTPException(409, f"Playlist '{body.name}' already exists")
+        state.rename_playlist(name, body.name)
+        name = body.name
+    if body.paused is not None:
+        state.set_playlist_paused(name, body.paused)
+    updated = {p.name: p for p in state.get_playlists()}[name]
+    return _playlist_dict(updated)
+
+
 _active_syncs: set[str] = set()
 _active_syncs_lock = threading.Lock()
+
+
+def _log_slug(name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-")
+    return slug or "playlist"
 
 
 @app.get("/sync/{name}")
@@ -83,6 +171,8 @@ async def sync_playlist(name: str):
     playlists = {p.name: p for p in state.get_playlists()}
     if name not in playlists:
         raise HTTPException(404, f"Playlist '{name}' not found")
+    if playlists[name].paused:
+        raise HTTPException(409, f"Playlist '{name}' is paused")
 
     with _active_syncs_lock:
         if name in _active_syncs:
@@ -90,11 +180,24 @@ async def sync_playlist(name: str):
         _active_syncs.add(name)
 
     playlist = playlists[name]
-    pre_count = state.get_downloaded_count()
-    result_holder: dict = {}
-    error_holder: dict = {}
+    log_q: queue.Queue = queue.Queue()
+    logs_dir = cfg.state_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    started_at = datetime.now()
+    log_path = logs_dir / f"{started_at.strftime('%Y%m%d-%H%M%S')}-{_log_slug(name)}.log"
 
     def run_sync():
+        def write_log_line(line: str) -> None:
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(f"{datetime.now().isoformat()} {line}\n")
+
+        write_log_line(f"[session] playlist={name}")
+        write_log_line(f"[session] url={playlist.url}")
+
+        def on_log(msg: str, phase: str) -> None:
+            write_log_line(f"[{phase}] {msg}")
+            log_q.put({"type": "log", "phase": phase, "message": msg, "log_path": str(log_path)})
+
         try:
             downloader = Downloader(
                 downloader_repo=cfg.downloader_repo,
@@ -102,17 +205,30 @@ async def sync_playlist(name: str):
                 media_user_token=cfg.media_user_token,
                 apple_id_email=cfg.apple_id_email,
                 apple_id_password=cfg.apple_id_password,
+                on_log=on_log,
             )
             engine = SyncEngine(
                 downloader=downloader,
                 state=state,
                 music_dir=cfg.music_dir,
                 playlist_name=name,
+                on_log=on_log,
             )
-            result_holder["result"] = engine.sync(playlist.url)
+            result = engine.sync(playlist.url)
             state.update_playlist_synced(name)
+            write_log_line(
+                f"[done] Sync complete: {result.new_count} new, {result.skipped_count} skipped, {result.error_count} errors"
+            )
+            log_q.put({
+                "type": "done",
+                "new": result.new_count,
+                "skipped": result.skipped_count,
+                "errors": result.error_count,
+                "log_path": str(log_path),
+            })
         except Exception as exc:
-            error_holder["error"] = str(exc)
+            write_log_line(f"[error] {exc}")
+            log_q.put({"type": "error", "message": str(exc), "log_path": str(log_path)})
         finally:
             with _active_syncs_lock:
                 _active_syncs.discard(name)
@@ -121,25 +237,57 @@ async def sync_playlist(name: str):
     thread.start()
 
     async def event_stream():
-        while thread.is_alive():
-            current = max(state.get_downloaded_count() - pre_count, 0)
-            yield f"data: {json.dumps({'status': 'running', 'new_so_far': current})}\n\n"
-            await asyncio.sleep(1)
+        while True:
+            # Drain any queued events first
+            try:
+                event = log_q.get_nowait()
+            except queue.Empty:
+                if not thread.is_alive():
+                    # Thread exited without sending done/error — shouldn't happen
+                    yield f"data: {json.dumps({'status': 'error', 'message': 'Sync thread exited unexpectedly', 'log_path': str(log_path)})}\n\n"
+                    break
+                await asyncio.sleep(0.05)
+                continue
 
-        if "error" in error_holder:
-            yield f"data: {json.dumps({'status': 'error', 'message': error_holder['error']})}\n\n"
-        else:
-            r = result_holder.get("result")
-            if r is None:
-                yield f"data: {json.dumps({'status': 'error', 'message': 'sync thread terminated unexpectedly'})}\n\n"
-            else:
-                yield f"data: {json.dumps({'status': 'done', 'new': r.new_count, 'skipped': r.skipped_count, 'errors': r.error_count})}\n\n"
+            if event["type"] == "log":
+                yield f"data: {json.dumps({'status': 'running', 'phase': event['phase'], 'message': event['message'], 'log_path': event['log_path']})}\n\n"
+            elif event["type"] == "done":
+                yield f"data: {json.dumps({'status': 'done', 'new': event['new'], 'skipped': event['skipped'], 'errors': event['errors'], 'log_path': event['log_path']})}\n\n"
+                break
+            elif event["type"] == "error":
+                yield f"data: {json.dumps({'status': 'error', 'message': event['message'], 'log_path': event['log_path']})}\n\n"
+                break
 
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/stats")
+def get_stats():
+    playlists = state.get_playlists()
+    total_tracks = 0
+    playlist_stats = []
+    for pl in playlists:
+        tracks = state.get_playlist_tracks(pl.name)
+        count = len(tracks)
+        total_tracks += count
+        playlist_stats.append({
+            "name": pl.name,
+            "track_count": count,
+            "last_synced": pl.last_synced,
+        })
+    # Most recently synced playlist
+    synced = [p for p in playlist_stats if p["last_synced"]]
+    last_sync = max((p["last_synced"] for p in synced), default=None)
+    return {
+        "playlist_count": len(playlists),
+        "total_tracks": total_tracks,
+        "last_sync": last_sync,
+        "playlists": playlist_stats,
+    }
 
 
 @app.get("/library")
