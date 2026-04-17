@@ -10,10 +10,17 @@
 
   type Status = "running" | "done" | "error";
   type Phase = "wrapper_starting" | "downloading" | "processing" | "done" | string;
+  type LogLine = {
+    id: number;
+    text: string;
+    kind: "info" | "add" | "skip" | "err" | "done";
+  };
+  const MAX_RENDERED_LOGS = 800;
+  const LOG_FLUSH_MS = 60;
 
   let status = $state<Status>("running");
   let phase = $state<Phase>("wrapper_starting");
-  let logs = $state<{ text: string; kind: "info" | "add" | "skip" | "err" | "done" }[]>([]);
+  let logs = $state<LogLine[]>([]);
   let result = $state<{ new: number; skipped: number; errors: number } | null>(null);
   let errorMessage = $state<string | null>(null);
   let logEl = $state<HTMLElement | null>(null);
@@ -29,6 +36,12 @@
   let progressCurrent = $state(0);
   let progressTotal = $state(0);
   let downloadPercent = $state<number | null>(null);
+  let totalLogCount = $state(0);
+
+  let nextLogId = 0;
+  let allLogText = "";
+  let pendingLogs: LogLine[] = [];
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Phase timeline
   const PHASES = [
@@ -106,6 +119,32 @@
     if (logEl && autoFollow) logEl.scrollTop = logEl.scrollHeight;
   }
 
+  async function flushPendingLogs() {
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    if (pendingLogs.length === 0) return;
+    logs = [...logs, ...pendingLogs].slice(-MAX_RENDERED_LOGS);
+    pendingLogs = [];
+    await scrollToBottom();
+  }
+
+  function scheduleLogFlush() {
+    if (flushTimer !== null) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      void flushPendingLogs();
+    }, LOG_FLUSH_MS);
+  }
+
+  function appendLog(text: string, kind: LogLine["kind"]) {
+    pendingLogs.push({ id: nextLogId++, text, kind });
+    totalLogCount += 1;
+    allLogText = allLogText ? `${allLogText}\n${text}` : text;
+    scheduleLogFlush();
+  }
+
   function handleLogScroll() {
     if (!logEl) return;
     const distanceFromBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight;
@@ -113,7 +152,7 @@
   }
 
   async function copyLog() {
-    const text = logs.map(l => l.text).join("\n");
+    const text = allLogText || logs.map(l => l.text).join("\n");
     await navigator.clipboard.writeText(text);
     copied = true;
     setTimeout(() => (copied = false), 2000);
@@ -132,21 +171,22 @@
           latestMessage = data.message;
           if (data.phase === "downloading") parseDownloadProgress(data.message);
           const kind = classifyLine(data.message);
-          logs = [...logs, { text: data.message, kind }];
+          appendLog(data.message, kind);
           if (data.phase === "processing") {
             parseProgress(data.message);
             if (kind === "add") liveNew++;
             else if (kind === "skip") liveSkipped++;
             else if (kind === "err") liveErrors++;
           }
-          await scrollToBottom();
         }
       } else if (data.status === "done") {
+        await flushPendingLogs();
         phase = "done";
         latestMessage = `Sync complete: ${data.new ?? 0} new, ${data.skipped ?? 0} skipped, ${data.errors ?? 0} errors`;
         result = { new: data.new ?? 0, skipped: data.skipped ?? 0, errors: data.errors ?? 0 };
         source?.close();
       } else if (data.status === "error") {
+        await flushPendingLogs();
         errorMessage = data.message ?? "Unknown error";
         latestMessage = errorMessage;
         source?.close();
@@ -162,7 +202,10 @@
     };
   });
 
-  onDestroy(() => source?.close());
+  onDestroy(() => {
+    if (flushTimer !== null) clearTimeout(flushTimer);
+    source?.close();
+  });
 </script>
 
 <div class="flex flex-col h-full p-8 max-w-2xl">
@@ -258,7 +301,7 @@
       onscroll={handleLogScroll}
       class="flex-1 min-h-0 bg-[#080808] border border-[#1a1a1a] rounded-xl p-3 overflow-y-auto font-mono text-xs leading-relaxed"
     >
-      {#each logs as line}
+      {#each logs as line (line.id)}
         <div class="
           {line.kind === 'add'  ? 'text-green-400' :
            line.kind === 'skip' ? 'text-zinc-600' :
@@ -272,6 +315,12 @@
         <div class="text-zinc-700">Waiting for output…</div>
       {/if}
     </div>
+
+    {#if totalLogCount > logs.length}
+      <div class="mt-2 text-[10px] text-zinc-700 uppercase tracking-widest">
+        Showing latest {logs.length} of {totalLogCount} lines
+      </div>
+    {/if}
 
     {#if !autoFollow}
       <div class="mt-3 flex justify-end">
@@ -313,11 +362,11 @@
       <details class="mb-4 group">
         <summary class="text-zinc-600 text-xs cursor-pointer hover:text-zinc-400 flex items-center gap-1.5 select-none">
           <span class="group-open:rotate-90 transition-transform inline-block">▶</span>
-          Log ({logs.length} lines)
+          Log ({totalLogCount} lines)
         </summary>
         <div class="mt-2 relative">
           <div class="bg-[#080808] border border-[#1a1a1a] rounded-xl p-3 font-mono text-xs text-zinc-600 max-h-48 overflow-y-auto leading-relaxed">
-            {#each logs as line}
+            {#each logs as line (line.id)}
               <div class="{line.kind === 'add' ? 'text-green-500/70' : line.kind === 'err' ? 'text-red-400/70' : ''}">{line.text}</div>
             {/each}
           </div>
@@ -345,11 +394,11 @@
       <details open class="mb-4 group">
         <summary class="text-zinc-600 text-xs cursor-pointer hover:text-zinc-400 flex items-center gap-1.5 select-none">
           <span class="group-open:rotate-90 transition-transform inline-block">▶</span>
-          Log ({logs.length} lines)
+          Log ({totalLogCount} lines)
         </summary>
         <div class="mt-2 relative">
           <div class="bg-[#080808] border border-[#1a1a1a] rounded-xl p-3 font-mono text-xs max-h-64 overflow-y-auto leading-relaxed">
-            {#each logs as line}
+            {#each logs as line (line.id)}
               <div class="
                 {line.kind === 'err' ? 'text-red-400' :
                  line.kind === 'add' ? 'text-green-400/70' :
