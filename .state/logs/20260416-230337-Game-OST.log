@@ -1,0 +1,7 @@
+[session] playlist=Game OST
+[session] url=https://music.apple.com/us/playlist/game-ost/pl.u-9N9LLyNTaNa0LA
+[error] Wrapper did not bind port 10020 within 15 seconds.
+If you have not authenticated this wrapper session yet, run 'music-sync auth' first and complete 2FA until you see '[.] response type 6'.
+Wrapper logs:
+Failed to obtain podman configuration: set sticky bit on: chmod /run/user/1000/libpod: read-only file system
+
