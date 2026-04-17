@@ -1,4 +1,5 @@
 from datetime import datetime
+import sqlite3
 from alac_rip.state import StateManager, Track, Playlist
 
 
@@ -46,6 +47,50 @@ def test_add_playlist_idempotent(state):
     state.add_playlist("My Mega Playlist", "https://music.apple.com/playlist/xyz")
     state.add_playlist("My Mega Playlist", "https://music.apple.com/playlist/xyz")
     assert len(state.get_playlists()) == 1
+
+
+def test_add_playlist_with_migrated_paused_column(tmp_path):
+    db_path = tmp_path / "downloaded.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE playlists (
+                name TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                last_synced TEXT,
+                paused INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE tracks (
+                track_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                artist TEXT NOT NULL,
+                album TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                downloaded_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE playlist_tracks (
+                playlist_name TEXT NOT NULL,
+                track_id TEXT NOT NULL,
+                PRIMARY KEY (playlist_name, track_id)
+            )
+            """
+        )
+
+    state = StateManager(db_path)
+    state.add_playlist("Classic Rock", "https://music.apple.com/playlist/test")
+
+    playlists = state.get_playlists()
+    assert len(playlists) == 1
+    assert playlists[0].name == "Classic Rock"
+    assert playlists[0].paused is False
 
 
 def test_update_playlist_synced(state):

@@ -20,6 +20,7 @@ class Playlist:
     name: str
     url: str
     last_synced: Optional[str]
+    paused: bool = False
 
 
 class StateManager:
@@ -56,6 +57,10 @@ class StateManager:
                     PRIMARY KEY (playlist_name, track_id)
                 )
             """)
+            # Migration: add paused column if missing
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(playlists)")}
+            if "paused" not in cols:
+                conn.execute("ALTER TABLE playlists ADD COLUMN paused INTEGER NOT NULL DEFAULT 0")
 
     def is_downloaded(self, track_id: str) -> bool:
         with self._conn() as conn:
@@ -97,16 +102,25 @@ class StateManager:
     def add_playlist(self, name: str, url: str) -> None:
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO playlists VALUES (?, ?, NULL)",
+                "INSERT OR IGNORE INTO playlists (name, url, last_synced) VALUES (?, ?, NULL)",
                 (name, url),
             )
 
     def get_playlists(self) -> list[Playlist]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT name, url, last_synced FROM playlists"
+                "SELECT name, url, last_synced, paused FROM playlists"
             ).fetchall()
-            return [Playlist(name=r[0], url=r[1], last_synced=r[2]) for r in rows]
+            return [Playlist(name=r[0], url=r[1], last_synced=r[2], paused=bool(r[3])) for r in rows]
+
+    def rename_playlist(self, old_name: str, new_name: str) -> None:
+        with self._conn() as conn:
+            conn.execute("UPDATE playlist_tracks SET playlist_name = ? WHERE playlist_name = ?", (new_name, old_name))
+            conn.execute("UPDATE playlists SET name = ? WHERE name = ?", (new_name, old_name))
+
+    def set_playlist_paused(self, name: str, paused: bool) -> None:
+        with self._conn() as conn:
+            conn.execute("UPDATE playlists SET paused = ? WHERE name = ?", (int(paused), name))
 
     def update_playlist_synced(self, name: str) -> None:
         with self._conn() as conn:
