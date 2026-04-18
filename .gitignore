@@ -26,3 +26,4 @@ config.yaml
 app/node_modules/
 app/dist/
 app/src-tauri/target/
+app/.codex/

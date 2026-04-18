@@ -9,7 +9,7 @@
   let { playlistName, ondone }: Props = $props();
 
   type Status = "running" | "done" | "error";
-  type Phase = "wrapper_starting" | "downloading" | "processing" | "done" | string;
+  type Phase = "processing" | "done" | string;
   type LogLine = {
     id: number;
     text: string;
@@ -19,7 +19,7 @@
   const LOG_FLUSH_MS = 60;
 
   let status = $state<Status>("running");
-  let phase = $state<Phase>("wrapper_starting");
+  let phase = $state<Phase>("processing");
   let logs = $state<LogLine[]>([]);
   let result = $state<{ new: number; skipped: number; errors: number } | null>(null);
   let errorMessage = $state<string | null>(null);
@@ -37,7 +37,6 @@
   let liveErrors = $state(0);
   let progressCurrent = $state(0);
   let progressTotal = $state(0);
-  let downloadPercent = $state<number | null>(null);
   let totalLogCount = $state(0);
 
   let nextLogId = 0;
@@ -47,14 +46,12 @@
 
   // Phase timeline
   const PHASES = [
-    { key: "wrapper_starting", label: "Wrapper" },
-    { key: "downloading",      label: "Download" },
-    { key: "processing",       label: "Process" },
-    { key: "done",             label: "Complete" },
+    { key: "processing", label: "Processing" },
+    { key: "done",       label: "Complete" },
   ] as const;
 
   const PHASE_ORDER: Record<string, number> = {
-    wrapper_starting: 0, downloading: 1, processing: 2, done: 3,
+    processing: 0, done: 1,
   };
 
   let phaseIndex = $derived(PHASE_ORDER[phase] ?? 0);
@@ -75,40 +72,17 @@
     }
   }
 
-  function parseDownloadProgress(text: string) {
-    const m = text.match(/Downloading\.\.\.\s+(\d+)%/i);
-    if (m) downloadPercent = parseInt(m[1]);
-  }
-
   let progressPct = $derived(
     progressTotal > 0 ? Math.round((progressCurrent / progressTotal) * 100) : 0
   );
 
   function classifyError(msg: string): { headline: string; detail: string } {
     const m = msg.toLowerCase();
-    if (m.includes("decryptfragment") || m.includes("connection reset") || m.includes("failed to run v2") || m.includes("stale")) {
-      return {
-        headline: "Wrapper session expired",
-        detail: "The Apple FairPlay wrapper lost its session. Re-authenticate by running the wrapper manually, or wait and try again.",
-      };
-    }
-    if (m.includes("unauthorized") || m.includes("403") || m.includes("media-user-token") || m.includes("token")) {
-      return {
-        headline: "Authentication failed",
-        detail: "Your media-user-token may have expired. Refresh it from Apple Music in a browser (DevTools → Application → Cookies) and update it in Settings.",
-      };
+    if (m.includes("no .m4a files")) {
+      return { headline: "No files to process", detail: msg };
     }
     if (m.includes("timed out") || m.includes("timeout")) {
-      return {
-        headline: "Connection timed out",
-        detail: "The download server didn't respond in time. Check your network connection and try again.",
-      };
-    }
-    if (m.includes("not found") || m.includes("404")) {
-      return {
-        headline: "Playlist not found",
-        detail: "Apple Music returned a 404. The playlist URL may be invalid or the playlist may have been made private.",
-      };
+      return { headline: "Connection timed out", detail: "Check your network and try again." };
     }
     if (m.includes("paused")) {
       return { headline: "Playlist is paused", detail: "Resume the playlist before syncing." };
@@ -179,15 +153,12 @@
         if (data.phase) phase = data.phase;
         if (data.message) {
           latestMessage = data.message;
-          if (data.phase === "downloading") parseDownloadProgress(data.message);
           const kind = classifyLine(data.message);
           appendLog(data.message, kind);
-          if (data.phase === "processing") {
-            parseProgress(data.message);
-            if (kind === "add") liveNew++;
-            else if (kind === "skip") liveSkipped++;
-            else if (kind === "err") liveErrors++;
-          }
+          parseProgress(data.message);
+          if (kind === "add") liveNew++;
+          else if (kind === "skip") liveSkipped++;
+          else if (kind === "err") liveErrors++;
         }
       } else if (data.status === "done") {
         await flushPendingLogs();
@@ -291,33 +262,27 @@
     <div class="mb-3">
       <div class="flex justify-between text-xs text-zinc-600 mb-1.5">
         <span>
-          {#if phase === "processing" && progressTotal > 0}
+          {#if progressTotal > 0}
             {progressCurrent} / {progressTotal} tracks
-          {:else if phase === "downloading" && downloadPercent !== null}
-            Downloading…
           {:else}
             Working…
           {/if}
         </span>
-        {#if phase === "processing" && progressTotal > 0}
+        {#if progressTotal > 0}
           <span>{progressPct}%</span>
-        {:else if phase === "downloading" && downloadPercent !== null}
-          <span>{downloadPercent}%</span>
         {/if}
       </div>
       <div class="h-1 bg-[#1a1a1a] rounded-full overflow-hidden">
-        {#if phase === "processing" && progressTotal > 0}
+        {#if progressTotal > 0}
           <div class="h-full bg-[#1db954] rounded-full transition-all duration-300" style="width: {progressPct}%"></div>
-        {:else if phase === "downloading" && downloadPercent !== null}
-          <div class="h-full bg-amber-600 rounded-full transition-all duration-300" style="width: {downloadPercent}%"></div>
         {:else}
           <div class="h-full bg-amber-700 rounded-full w-full animate-pulse"></div>
         {/if}
       </div>
     </div>
 
-    <div class="mb-3 text-xs text-zinc-500 truncate" title={latestMessage}>
-      {latestMessage}
+    <div class="mb-3">
+      <div class="text-xs text-zinc-500 truncate" title={latestMessage}>{latestMessage}</div>
     </div>
 
     <!-- Log -->

@@ -1,63 +1,83 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { api, type Playlist } from "../api";
+  import { type Playlist } from "../api";
 
   interface Props {
-    selectedPlaylist: string | null;
+    playlists: Playlist[];
+    selectedName: string | null;
     syncingPlaylist: string | null;
     onselectPlaylist: (name: string) => void;
     onstartSync: (name: string) => void;
     onopenSettings: () => void;
+    onopenSetup: () => void;
+    onopenDiagnostics: () => void;
+    onopenDashboard: () => void;
+    onplaylistAdded: (pl: Playlist) => void;
   }
 
-  let { selectedPlaylist, syncingPlaylist, onselectPlaylist, onstartSync, onopenSettings }: Props = $props();
+  let {
+    playlists, selectedName, syncingPlaylist,
+    onselectPlaylist, onstartSync,
+    onopenSettings, onopenSetup, onopenDiagnostics, onopenDashboard,
+    onplaylistAdded,
+  }: Props = $props();
 
-  let playlists = $state<Playlist[]>([]);
   let showAddForm = $state(false);
   let newName = $state("");
   let newUrl = $state("");
   let adding = $state(false);
-
-  onMount(async () => {
-    playlists = await api.playlists();
-    if (playlists.length > 0 && !selectedPlaylist) {
-      onselectPlaylist(playlists[0].name);
-    }
-  });
+  let addError = $state<string | null>(null);
 
   async function addPlaylist() {
     if (!newName.trim() || !newUrl.trim()) return;
     adding = true;
+    addError = null;
     try {
       const pl = await api.addPlaylist(newName.trim(), newUrl.trim());
-      playlists = [...playlists, pl];
+      onplaylistAdded(pl);
       newName = "";
       newUrl = "";
       showAddForm = false;
+      onselectPlaylist(pl.name);
+    } catch (e) {
+      addError = String(e);
     } finally {
       adding = false;
     }
   }
 
-  async function removePlaylist(name: string, e: MouseEvent) {
-    e.stopPropagation();
-    await api.deletePlaylist(name);
-    playlists = playlists.filter((p) => p.name !== name);
-  }
+
 </script>
 
 <aside class="w-[180px] min-w-[180px] bg-[#111] flex flex-col border-r border-[#1e1e1e]">
   <div class="p-4 border-b border-[#1e1e1e]">
     <div class="text-white font-bold text-[15px] tracking-tight">pies</div>
-    <div class="text-[#555] text-[10px] mt-0.5">Apple Music ↓</div>
+    <div class="text-[#555] text-[10px] mt-0.5">music sync</div>
   </div>
 
-  <nav class="p-2 border-b border-[#1e1e1e]">
+  <nav class="p-2 border-b border-[#1e1e1e] flex flex-col gap-0.5">
+    <button
+      class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
+      onclick={onopenDashboard}
+    >
+      ▦ Dashboard
+    </button>
+    <button
+      class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
+      onclick={onopenDiagnostics}
+    >
+      ⊕ Diagnostics
+    </button>
     <button
       class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
       onclick={onopenSettings}
     >
       ⚙ Settings
+    </button>
+    <button
+      class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
+      onclick={onopenSetup}
+    >
+      ◆ Setup
     </button>
   </nav>
 
@@ -65,35 +85,34 @@
 
   <div class="flex-1 overflow-y-auto px-2 flex flex-col gap-0.5">
     {#each playlists as pl}
-      <div class="group flex items-center rounded-md transition-colors
-        {selectedPlaylist === pl.name ? 'bg-[#1a1a1a]' : 'hover:bg-[#1a1a1a]'}">
-        <button
-          class="flex-1 text-left px-3 py-2 text-sm truncate transition-colors
-            {selectedPlaylist === pl.name ? 'text-white' : 'text-[#888] group-hover:text-white'}"
-          onclick={() => onselectPlaylist(pl.name)}
-          type="button"
-        >{pl.name}</button>
-        <button
-          class="hidden group-hover:flex pr-2 text-[#555] hover:text-red-400 text-xs"
-          onclick={(e) => removePlaylist(pl.name, e)}
-          type="button"
-          aria-label="Remove {pl.name}"
-        >✕</button>
-      </div>
+      <button
+        class="w-full text-left px-3 py-2 rounded-md text-sm truncate transition-colors flex items-center gap-1.5
+          {selectedName === pl.name ? 'bg-[#1a1a1a] text-white' : 'text-[#888] hover:text-white hover:bg-[#1a1a1a]'}"
+        onclick={() => onselectPlaylist(pl.name)}
+        type="button"
+      >
+        {#if pl.paused}
+          <span class="text-amber-600 text-[9px] flex-shrink-0">⏸</span>
+        {/if}
+        <span class="truncate">{pl.name}</span>
+      </button>
     {/each}
 
     {#if showAddForm}
       <div class="px-1 py-2 flex flex-col gap-1">
         <input bind:value={newName} placeholder="Name"
           class="bg-[#1a1a1a] border border-[#333] rounded px-2 py-1 text-xs text-white w-full outline-none focus:border-[#1db954]" />
-        <input bind:value={newUrl} placeholder="Apple Music URL"
+        <input bind:value={newUrl} placeholder="Playlist URL"
           class="bg-[#1a1a1a] border border-[#333] rounded px-2 py-1 text-xs text-white w-full outline-none focus:border-[#1db954]" />
+        {#if addError}
+          <div class="text-red-400 text-[10px] bg-red-950 border border-red-800 rounded px-2 py-1 break-all">{addError}</div>
+        {/if}
         <div class="flex gap-1">
           <button onclick={addPlaylist} disabled={adding}
             class="flex-1 bg-[#1db954] text-black text-xs rounded py-1 font-semibold disabled:opacity-50">
             {adding ? "…" : "Add"}
           </button>
-          <button onclick={() => (showAddForm = false)}
+          <button onclick={() => { showAddForm = false; addError = null; }}
             class="flex-1 text-[#888] text-xs rounded py-1 bg-[#1a1a1a]">Cancel</button>
         </div>
       </div>
@@ -117,8 +136,8 @@
 
   <div class="p-2 border-t border-[#1e1e1e]">
     <button
-      onclick={() => { for (const pl of playlists) onstartSync(pl.name); }}
-      disabled={!!syncingPlaylist}
+      onclick={() => { const first = playlists.find(p => !p.paused); if (first) onstartSync(first.name); }}
+      disabled={!!syncingPlaylist || playlists.every(p => p.paused)}
       class="w-full bg-[#1db954] text-black text-sm font-bold rounded-lg py-2 hover:bg-[#1ed760] transition-colors disabled:opacity-50"
     >
       ↻ Sync All

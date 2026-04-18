@@ -112,3 +112,41 @@ def test_downloaded_count(state):
             downloaded_at=datetime.now().isoformat(),
         ))
     assert state.get_downloaded_count() == 3
+
+
+def test_rename_playlist(state):
+    state.add_playlist("Old Name", "https://music.apple.com/playlist/abc")
+    state.add_track(Track(
+        track_id="track-x1",
+        title="Song",
+        artist="Artist",
+        album="Album",
+        local_path="/Music/song.m4a",
+        downloaded_at=datetime.now().isoformat(),
+    ))
+    state.add_track_to_playlist("Old Name", "track-x1")
+
+    state.rename_playlist("Old Name", "New Name")
+
+    playlists = state.get_playlists()
+    names = [p.name for p in playlists]
+    assert "New Name" in names
+    assert "Old Name" not in names
+
+    tracks = state.get_playlist_tracks("New Name")
+    assert any(t.track_id == "track-x1" for t in tracks)
+
+
+def test_set_playlist_paused(state):
+    state.add_playlist("Toggle PL", "https://music.apple.com/playlist/toggle")
+
+    playlists = state.get_playlists()
+    assert playlists[0].paused is False
+
+    state.set_playlist_paused("Toggle PL", True)
+    playlists = state.get_playlists()
+    assert playlists[0].paused is True
+
+    state.set_playlist_paused("Toggle PL", False)
+    playlists = state.get_playlists()
+    assert playlists[0].paused is False

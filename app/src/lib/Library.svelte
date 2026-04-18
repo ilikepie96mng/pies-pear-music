@@ -14,11 +14,14 @@
     artUrls = {};
     const lib = await api.library();
     tracks = lib[name] ?? [];
-    loading = false;
-    // Preload art for first 60 tracks
-    for (const t of tracks.slice(0, 60)) {
-      artUrls[t.track_id] = await api.trackArtUrl(t.local_path);
+    // Port is cached after api.library() resolves — build all URLs synchronously
+    const newUrls: Record<string, string> = {};
+    for (const t of tracks) {
+      const url = api.trackArtUrl(t.local_path);
+      if (url) newUrls[t.track_id] = url;
     }
+    artUrls = newUrls;
+    loading = false;
   }
 
   // $effect runs on mount and whenever playlistName changes

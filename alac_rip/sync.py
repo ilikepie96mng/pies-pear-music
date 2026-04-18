@@ -2,11 +2,13 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Callable, Optional
 
-from alac_rip.downloader import Downloader
 from alac_rip.metadata import read_tags, write_tags
 from alac_rip.organizer import ensure_album_dir, sanitize, track_path
 from alac_rip.state import StateManager, Track
+
+LogCallback = Callable[[str, str], None]  # (message, phase)
 
 
 @dataclass
@@ -19,27 +21,28 @@ class SyncResult:
 class SyncEngine:
     def __init__(
         self,
-        downloader: Downloader,
         state: StateManager,
         music_dir: Path,
         playlist_name: str,
+        on_log: Optional[LogCallback] = None,
     ):
-        self.downloader = downloader
         self.state = state
         self.music_dir = music_dir
         self.playlist_name = playlist_name
+        self._on_log: LogCallback = on_log or (lambda msg, phase: None)
+
+    def _log(self, msg: str, phase: str = "processing") -> None:
+        self._on_log(msg, phase)
 
     def _track_id(self, relative_path: str) -> str:
-        """Derive a stable track ID from its relative path in the downloads dir."""
         return relative_path
 
     def _write_m3u8(self) -> None:
-        """Write/update the M3U8 playlist file for all tracks in this playlist."""
         tracks = self.state.get_playlist_tracks(self.playlist_name)
         if not tracks:
             return
 
-        playlists_dir = self.music_dir / "Playlists"
+        playlists_dir = self.music_dir / "playlists"
         playlists_dir.mkdir(exist_ok=True)
 
         m3u8_path = playlists_dir / f"{sanitize(self.playlist_name)}.m3u8"
@@ -51,36 +54,30 @@ class SyncEngine:
 
         m3u8_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def sync(self, playlist_url: str) -> SyncResult:
+    def sync(self, staging_dir: Path) -> SyncResult:
         """
-        Run a full sync for one playlist URL.
+        Process .m4a files from staging_dir into music_dir.
 
-        1. Invoke downloader → get downloads_dir
-        2. Walk downloads_dir for .m4a files
-        3. For each file: move to music_dir + tag + record (new), or skip (seen)
-        4. Record playlist membership for every track encountered
-        5. Write/update the M3U8 playlist file
-        6. Return SyncResult
+        Moves each file to its canonical artists/Artist/Album path, tags it,
+        records it in state, and updates the M3U8 playlist file.
         """
-        self.downloader.start_wrapper()
-        try:
-            downloads_dir = self.downloader.download_playlist(playlist_url)
-        finally:
-            self.downloader.stop_wrapper()
+        m4a_files = list(staging_dir.rglob("*.m4a"))
+        total = len(m4a_files)
+        self._log(f"Processing {total} file(s) from staging...", "processing")
 
         new_count = 0
         skipped_count = 0
         error_count = 0
 
-        for src in downloads_dir.rglob("*.m4a"):
-            relative = str(src.relative_to(downloads_dir))
+        for i, src in enumerate(m4a_files, 1):
+            relative = str(src.relative_to(staging_dir))
             track_id = self._track_id(relative)
 
             if self.state.is_downloaded(track_id):
                 skipped_count += 1
-                src.unlink()  # discard staging copy
-                # Still record that this track belongs to this playlist
+                src.unlink()
                 self.state.add_track_to_playlist(self.playlist_name, track_id)
+                self._log(f"[{i}/{total}] skipped (already downloaded): {src.name}", "processing")
                 continue
 
             try:
@@ -107,10 +104,16 @@ class SyncEngine:
                 ))
                 self.state.add_track_to_playlist(self.playlist_name, track_id)
                 new_count += 1
+                self._log(f"[{i}/{total}] added: {artist} — {title}", "processing")
 
-            except Exception:
+            except Exception as exc:
                 error_count += 1
+                self._log(f"[{i}/{total}] error processing {src.name}: {exc}", "processing")
 
         self._write_m3u8()
+        self._log(
+            f"Sync complete: {new_count} new, {skipped_count} skipped, {error_count} errors",
+            "done",
+        )
 
         return SyncResult(new_count=new_count, skipped_count=skipped_count, error_count=error_count)
