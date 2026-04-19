@@ -760,6 +760,8 @@ async def download_one_off(url: str = "", format: str = "ALAC"):
         raise HTTPException(400, "No URL provided")
     if cfg is None or not cfg.alac_rip_dir or not cfg.alac_rip_dir.exists():
         raise HTTPException(503, "alac_rip_dir not configured")
+    if not cfg.music_dir or not cfg.music_dir.is_absolute():
+        raise HTTPException(503, "music_dir not configured")
 
     amd_dir = cfg.alac_rip_dir / "apple-music-downloader"
     save_folder_key = {"ATMOS": "atmos-save-folder", "AAC": "aac-save-folder"}.get(format, "alac-save-folder")
