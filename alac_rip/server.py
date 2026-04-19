@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import os
 import queue
 import re
 import shutil
@@ -696,8 +697,7 @@ def start_download(body: DownloadRequest):
     downloader_logs = []
 
     linuxbrew_bin = "/var/home/linuxbrew/.linuxbrew/bin"
-    import os as _os
-    env = _os.environ.copy()
+    env = os.environ.copy()
     env["PATH"] = f"{linuxbrew_bin}:{env.get('PATH', '')}"
 
     go_bin = shutil.which("go", path=env["PATH"]) or f"{linuxbrew_bin}/go"
@@ -748,6 +748,12 @@ def get_download_logs():
 async def download_one_off(url: str = "", format: str = "ALAC"):
     if not wrapper_running:
         raise HTTPException(409, "Wrapper not running — log in to Apple Music first")
+
+    # Auto-reset stuck state if process already exited
+    global download_running, download_process
+    if download_running and download_process is not None and download_process.poll() is not None:
+        download_running = False
+
     if download_running:
         raise HTTPException(409, "Download already in progress")
     if not url:
@@ -766,9 +772,8 @@ async def download_one_off(url: str = "", format: str = "ALAC"):
     if not save_folder or not save_folder.is_absolute():
         raise HTTPException(503, f"Downloader save folder not configured ({save_folder_key})")
 
-    import os as _os
     linuxbrew_bin = "/var/home/linuxbrew/.linuxbrew/bin"
-    env = _os.environ.copy()
+    env = os.environ.copy()
     env["PATH"] = f"{linuxbrew_bin}:{env.get('PATH', '')}"
     go_bin = shutil.which("go", path=env["PATH"]) or f"{linuxbrew_bin}/go"
 
@@ -781,97 +786,106 @@ async def download_one_off(url: str = "", format: str = "ALAC"):
 
     async def event_stream():
         global download_running, download_process
-
-        # ── Phase 1: download ──────────────────────────────────────────────
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                bufsize=1,
-                universal_newlines=True,
-                cwd=str(amd_dir),
-                env=env,
-            )
-        except Exception as exc:
-            yield f"data: {json.dumps({'status': 'error', 'message': str(exc)})}\n\n"
-            return
-
-        download_running = True
-        download_process = proc
-        dl_q: queue.Queue = queue.Queue()
-
-        def _read_dl():
+            # ── Phase 1: download ──────────────────────────────────────────────
             try:
-                for line in iter(proc.stdout.readline, ""):
-                    line = line.strip()
-                    if line:
-                        dl_q.put(line)
-            except Exception:
-                pass
-            finally:
-                dl_q.put(None)
-
-        threading.Thread(target=_read_dl, daemon=True).start()
-
-        while True:
-            try:
-                item = dl_q.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.05)
-                continue
-            if item is None:
-                break
-            yield f"data: {json.dumps({'status': 'running', 'phase': 'downloading', 'message': item})}\n\n"
-
-        exit_code = proc.wait()
-        download_running = False
-        download_process = None
-
-        if exit_code != 0:
-            yield f"data: {json.dumps({'status': 'error', 'message': f'Download failed (exit code {exit_code})'})}\n\n"
-            return
-
-        # ── Phase 2: organize ──────────────────────────────────────────────
-        org_q: queue.Queue = queue.Queue()
-
-        def on_log(msg: str, _phase: str) -> None:
-            org_q.put(msg)
-
-        org_result = None
-        org_error = None
-
-        def _run_organize():
-            nonlocal org_result, org_error
-            try:
-                engine = SyncEngine(
-                    state=state,
-                    music_dir=cfg.music_dir,
-                    playlist_name=None,
-                    on_log=on_log,
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    bufsize=1,
+                    universal_newlines=True,
+                    cwd=str(amd_dir),
+                    env=env,
                 )
-                org_result = engine.sync(save_folder)
             except Exception as exc:
-                org_error = str(exc)
-            finally:
-                org_q.put(None)
+                yield f"data: {json.dumps({'status': 'error', 'message': str(exc)})}\n\n"
+                return
 
-        threading.Thread(target=_run_organize, daemon=True).start()
+            download_running = True
+            download_process = proc
+            dl_q: queue.Queue = queue.Queue()
 
-        while True:
-            try:
-                item = org_q.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.05)
-                continue
-            if item is None:
-                break
-            yield f"data: {json.dumps({'status': 'running', 'phase': 'organizing', 'message': item})}\n\n"
+            def _read_dl():
+                try:
+                    for line in iter(proc.stdout.readline, ""):
+                        line = line.strip()
+                        if line:
+                            dl_q.put(line)
+                except Exception:
+                    pass
+                finally:
+                    dl_q.put(None)
 
-        if org_error:
-            yield f"data: {json.dumps({'status': 'error', 'message': org_error})}\n\n"
-        else:
-            yield f"data: {json.dumps({'status': 'done', 'new': org_result.new_count, 'skipped': org_result.skipped_count, 'errors': org_result.error_count})}\n\n"
+            threading.Thread(target=_read_dl, daemon=True).start()
+
+            while True:
+                try:
+                    item = dl_q.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.05)
+                    continue
+                if item is None:
+                    break
+                yield f"data: {json.dumps({'status': 'running', 'phase': 'downloading', 'message': item})}\n\n"
+
+            exit_code = proc.wait()
+            download_running = False
+            download_process = None
+
+            if exit_code != 0:
+                yield f"data: {json.dumps({'status': 'error', 'message': f'Download failed (exit code {exit_code})'})}\n\n"
+                return
+
+            # ── Phase 2: organize ──────────────────────────────────────────────
+            org_q: queue.Queue = queue.Queue()
+
+            def on_log(msg: str, _phase: str) -> None:
+                org_q.put(msg)
+
+            org_result = None
+            org_error = None
+
+            def _run_organize():
+                nonlocal org_result, org_error
+                try:
+                    engine = SyncEngine(
+                        state=state,
+                        music_dir=cfg.music_dir,
+                        playlist_name=None,
+                        on_log=on_log,
+                    )
+                    org_result = engine.sync(save_folder)
+                except Exception as exc:
+                    org_error = str(exc)
+                finally:
+                    org_q.put(None)
+
+            threading.Thread(target=_run_organize, daemon=True).start()
+
+            while True:
+                try:
+                    item = org_q.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.05)
+                    continue
+                if item is None:
+                    break
+                yield f"data: {json.dumps({'status': 'running', 'phase': 'organizing', 'message': item})}\n\n"
+
+            if org_error:
+                yield f"data: {json.dumps({'status': 'error', 'message': org_error})}\n\n"
+            else:
+                yield f"data: {json.dumps({'status': 'done', 'new': org_result.new_count, 'skipped': org_result.skipped_count, 'errors': org_result.error_count})}\n\n"
+
+        finally:
+            download_running = False
+            if download_process is not None:
+                try:
+                    download_process.kill()
+                except Exception:
+                    pass
+            download_process = None
 
     return StreamingResponse(
         event_stream(),
