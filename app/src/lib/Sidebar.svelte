@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { type Playlist } from "../api";
+  import { api, type Playlist } from "../api";
 
   interface Props {
     playlists: Playlist[];
@@ -11,13 +11,14 @@
     onopenSetup: () => void;
     onopenDiagnostics: () => void;
     onopenDashboard: () => void;
+    onopenDownload: () => void;
     onplaylistAdded: (pl: Playlist) => void;
   }
 
   let {
     playlists, selectedName, syncingPlaylist,
     onselectPlaylist, onstartSync,
-    onopenSettings, onopenSetup, onopenDiagnostics, onopenDashboard,
+    onopenSettings, onopenSetup, onopenDiagnostics, onopenDashboard, onopenDownload,
     onplaylistAdded,
   }: Props = $props();
 
@@ -78,6 +79,12 @@
       onclick={onopenSetup}
     >
       ◆ Setup
+    </button>
+    <button
+      class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
+      onclick={onopenDownload}
+    >
+      ↓ Download
     </button>
   </nav>
 

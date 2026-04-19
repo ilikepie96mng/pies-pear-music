@@ -7,14 +7,16 @@
   import Diagnostics from "$lib/Diagnostics.svelte";
   import Dashboard from "$lib/Dashboard.svelte";
   import PlaylistDetail from "$lib/PlaylistDetail.svelte";
+  import Download from "$lib/Download.svelte";
   import { api, type Playlist } from "../api";
 
-  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard";
+  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download";
 
   let view = $state<View>("dashboard");
   let playlists = $state<Playlist[]>([]);
   let selectedName = $state<string | null>(null);
   let syncingPlaylist = $state<string | null>(null);
+  let dashboardKey = $state(0);
 
   let selectedPlaylist = $derived(playlists.find(p => p.name === selectedName) ?? null);
 
@@ -35,8 +37,8 @@
 
   async function onSyncDone() {
     syncingPlaylist = null;
-    // Refresh playlist list so last_synced timestamps update
     playlists = await api.playlists();
+    dashboardKey++;
     view = selectedName ? "playlist" : "dashboard";
   }
 
@@ -69,6 +71,7 @@
     onopenSetup={() => (view = "setup")}
     onopenDiagnostics={() => (view = "diagnostics")}
     onopenDashboard={() => (view = "dashboard")}
+    onopenDownload={() => (view = "download")}
     onplaylistAdded={onPlaylistAdded}
   />
   <main class="flex-1 overflow-hidden">
@@ -77,11 +80,13 @@
     {:else if view === "diagnostics"}
       <Diagnostics onopenSettings={() => (view = "settings")} />
     {:else if view === "dashboard"}
-      <Dashboard
-        onstartSync={startSync}
-        onselectPlaylist={selectPlaylist}
-        onopenDiagnostics={() => (view = "diagnostics")}
-      />
+      {#key dashboardKey}
+        <Dashboard
+          onstartSync={startSync}
+          onselectPlaylist={selectPlaylist}
+          onopenDiagnostics={() => (view = "diagnostics")}
+        />
+      {/key}
     {:else if view === "playlist" && selectedPlaylist}
       {#key selectedName}
         <PlaylistDetail
@@ -97,6 +102,8 @@
       <SyncProgress playlistName={syncingPlaylist} ondone={onSyncDone} />
     {:else if view === "settings"}
       <Settings />
+    {:else if view === "download"}
+      <Download />
     {:else}
       <div class="flex items-center justify-center h-full text-zinc-600 text-sm">
         Select a playlist from the sidebar

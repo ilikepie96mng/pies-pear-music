@@ -23,6 +23,7 @@ export interface Playlist {
   url: string;
   last_synced: string | null;
   paused: boolean;
+  staging_folder: string | null;
 }
 
 export interface Track {
@@ -57,6 +58,19 @@ export interface Stats {
   playlists: { name: string; track_count: number; last_synced: string | null }[];
 }
 
+export interface SyncRun {
+  id: number;
+  playlist_name: string;
+  started_at: string;
+  ended_at: string;
+  status: "success" | "error";
+  new_count: number;
+  skipped_count: number;
+  error_count: number;
+  log_path: string;
+  error_message: string | null;
+}
+
 export const api = {
   async playlists(): Promise<Playlist[]> {
     const r = await fetch(`${await base()}/playlists`);
@@ -79,7 +93,7 @@ export const api = {
     });
   },
 
-  async patchPlaylist(name: string, patch: { name?: string; paused?: boolean }): Promise<Playlist> {
+  async patchPlaylist(name: string, patch: { name?: string; paused?: boolean; staging_folder?: string | null }): Promise<Playlist> {
     const r = await fetch(`${await base()}/playlists/${encodeURIComponent(name)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -126,5 +140,65 @@ export const api = {
       body: JSON.stringify(updates),
     });
     if (!r.ok) throw new Error(await r.text());
+  },
+
+  async syncHistory(playlistName?: string, limit = 30): Promise<SyncRun[]> {
+    const url = playlistName
+      ? `${await base()}/sync-history/${encodeURIComponent(playlistName)}?limit=${limit}`
+      : `${await base()}/sync-history?limit=${limit}`;
+    const r = await fetch(url);
+    return r.json();
+  },
+
+  wrapper: {
+    async login(email: string, password: string): Promise<{ status: string; msg: string }> {
+      const r = await fetch(`${await base()}/wrapper/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      return r.json();
+    },
+
+    async stop(): Promise<{ status: string; msg: string }> {
+      const r = await fetch(`${await base()}/wrapper/stop`, { method: "POST" });
+      return r.json();
+    },
+
+    async submit2fa(code: string): Promise<{ status: string; msg: string }> {
+      const r = await fetch(`${await base()}/wrapper/2fa`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      return r.json();
+    },
+
+    async status(): Promise<{ running: boolean; needs_2fa: boolean; logs: string[] }> {
+      const r = await fetch(`${await base()}/wrapper/status`);
+      return r.json();
+    },
+  },
+
+  download: {
+    async start(link: string, format: string): Promise<{ status: string; msg: string }> {
+      const r = await fetch(`${await base()}/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ link, format }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+
+    async logs(): Promise<{ running: boolean; logs: string[] }> {
+      const r = await fetch(`${await base()}/download/logs`);
+      return r.json();
+    },
+
+    oneOffUrl(url: string, format: string): string {
+      if (_port === null) throw new Error("Port not yet known");
+      return `http://127.0.0.1:${_port}/download/one-off?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`;
+    },
   },
 };
