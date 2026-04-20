@@ -8,7 +8,7 @@
   }
   let { playlistName, ondone }: Props = $props();
 
-  type Status = "running" | "done" | "error";
+  type Status = "queued" | "running" | "done" | "error";
   type Phase = "processing" | "done" | string;
   type LogLine = {
     id: number;
@@ -18,7 +18,8 @@
   const MAX_RENDERED_LOGS = 800;
   const LOG_FLUSH_MS = 60;
 
-  let status = $state<Status>("running");
+  let status = $state<Status>("queued");
+  let queuePosition = $state(0);
   let phase = $state<Phase>("processing");
   let logs = $state<LogLine[]>([]);
   let result = $state<{ new: number; skipped: number; errors: number } | null>(null);
@@ -46,12 +47,13 @@
 
   // Phase timeline
   const PHASES = [
-    { key: "processing", label: "Processing" },
-    { key: "done",       label: "Complete" },
+    { key: "downloading", label: "Downloading" },
+    { key: "organizing",  label: "Organizing" },
+    { key: "done",        label: "Complete" },
   ] as const;
 
   const PHASE_ORDER: Record<string, number> = {
-    processing: 0, done: 1,
+    downloading: 0, organizing: 1, done: 2,
   };
 
   let phaseIndex = $derived(PHASE_ORDER[phase] ?? 0);
@@ -78,8 +80,8 @@
 
   function classifyError(msg: string): { headline: string; detail: string } {
     const m = msg.toLowerCase();
-    if (m.includes("no .m4a files")) {
-      return { headline: "No files to process", detail: msg };
+    if (m.includes("no audio files") || m.includes("no .m4a files")) {
+      return { headline: "No files to process", detail: "Download the playlist first, then sync." };
     }
     if (m.includes("timed out") || m.includes("timeout")) {
       return { headline: "Connection timed out", detail: "Check your network and try again." };
@@ -142,12 +144,18 @@
   }
 
   onMount(() => {
-    source = new EventSource(api.syncUrl(playlistName));
+    source = new EventSource(api.syncJobUrl(playlistName, "ALAC"));
 
     source.onmessage = async (e) => {
       const data: SyncEvent = JSON.parse(e.data);
-      status = data.status;
       if (data.log_path) logPath = data.log_path;
+
+      if (data.status === "queued") {
+        status = "queued";
+        queuePosition = (data as any).position ?? 0;
+        return;
+      }
+      status = data.status as Status;
 
       if (data.status === "running") {
         if (data.phase) phase = data.phase;
@@ -175,7 +183,7 @@
     };
 
     source.onerror = () => {
-      if (status === "running") {
+      if (status === "running" || status === "queued") {
         status = "error";
         errorMessage = "Lost connection to sync server.";
       }
@@ -216,7 +224,7 @@
   <div class="flex items-center gap-0 mb-7">
     {#each PHASES as step, i}
       {@const done = status === "done" ? true : phaseIndex > i}
-      {@const active = phaseIndex === i && status === "running"}
+      {@const active = phaseIndex === i && (status === "running" || status === "queued")}
       <div class="flex items-center gap-0">
         <div class="flex flex-col items-center gap-1">
           <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors
@@ -239,9 +247,14 @@
     {/each}
   </div>
 
-  {#if status === "running"}
+  {#if status === "queued"}
+    <div class="flex items-center gap-3 text-zinc-400 text-sm mt-4">
+      <span class="w-4 h-4 border border-zinc-600 border-t-zinc-300 rounded-full animate-spin flex-shrink-0"></span>
+      Waiting in queue{queuePosition > 0 ? ` — position ${queuePosition}` : ""}…
+    </div>
+  {:else if status === "running"}
     <!-- Live counters (visible during processing) -->
-    {#if phase === "processing" && progressTotal > 0}
+    {#if phase === "downloading" && progressTotal > 0}
       <div class="flex gap-4 mb-4">
         <div class="flex-1 bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-3">
           <div class="text-green-400 text-xl font-bold">{liveNew}</div>
