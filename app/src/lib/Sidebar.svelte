@@ -1,10 +1,10 @@
 <script lang="ts">
   import { api, type Playlist } from "../api";
+  import QueueIndicator from "./QueueIndicator.svelte";
 
   interface Props {
     playlists: Playlist[];
     selectedName: string | null;
-    syncingPlaylist: string | null;
     onselectPlaylist: (name: string) => void;
     onstartSync: (name: string) => void;
     onopenSettings: () => void;
@@ -16,7 +16,7 @@
   }
 
   let {
-    playlists, selectedName, syncingPlaylist,
+    playlists, selectedName,
     onselectPlaylist, onstartSync,
     onopenSettings, onopenSetup, onopenDiagnostics, onopenDashboard, onopenDownload,
     onplaylistAdded,
@@ -131,20 +131,12 @@
     {/if}
   </div>
 
-  {#if syncingPlaylist}
-    <div class="mx-2 mb-2 bg-[#1a1a1a] rounded-lg p-3 border border-[#222]">
-      <div class="text-[10px] text-[#555] uppercase tracking-widest mb-1">Syncing</div>
-      <div class="text-white text-xs font-medium truncate">{syncingPlaylist}</div>
-      <div class="h-1 bg-[#333] rounded-full mt-2">
-        <div class="h-full bg-[#1db954] rounded-full w-full animate-pulse"></div>
-      </div>
-    </div>
-  {/if}
+  <QueueIndicator />
 
   <div class="p-2 border-t border-[#1e1e1e]">
     <button
       onclick={() => { const first = playlists.find(p => !p.paused); if (first) onstartSync(first.name); }}
-      disabled={!!syncingPlaylist || playlists.every(p => p.paused)}
+      disabled={playlists.every(p => p.paused)}
       class="w-full bg-[#1db954] text-black text-sm font-bold rounded-lg py-2 hover:bg-[#1ed760] transition-colors disabled:opacity-50"
     >
       ↻ Sync All
