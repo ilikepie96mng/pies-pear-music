@@ -774,149 +774,24 @@ def get_wrapper_status():
 async def download_one_off(url: str = "", format: str = "ALAC"):
     if not wrapper_running:
         raise HTTPException(409, "Wrapper not running — log in to Apple Music first")
-
-    # Auto-reset stuck state if process already exited
-    global download_running, download_process
-    if download_running and download_process is not None and download_process.poll() is not None:
-        download_running = False
-
-    if download_running:
-        raise HTTPException(409, "Download already in progress")
     if not url:
         raise HTTPException(400, "No URL provided")
-    if cfg is None or not cfg.alac_rip_dir or not cfg.alac_rip_dir.exists():
-        raise HTTPException(503, "alac_rip_dir not configured")
-    if not cfg.music_dir or not cfg.music_dir.is_absolute():
-        raise HTTPException(503, "music_dir not configured")
 
-    amd_dir = cfg.alac_rip_dir / "apple-music-downloader"
-    save_folder_key = {"ATMOS": "atmos-save-folder", "AAC": "aac-save-folder"}.get(format, "alac-save-folder")
-    try:
-        with open(amd_dir / "config.yaml") as f:
-            amd_cfg = yaml.safe_load(f) or {}
-        save_folder = Path(amd_cfg.get(save_folder_key, "")).expanduser()
-    except Exception as exc:
-        raise HTTPException(503, f"Cannot read downloader config: {exc}")
-    if not save_folder or not save_folder.is_absolute():
-        raise HTTPException(503, f"Downloader save folder not configured ({save_folder_key})")
-
-    linuxbrew_bin = "/var/home/linuxbrew/.linuxbrew/bin"
-    env = os.environ.copy()
-    env["PATH"] = f"{linuxbrew_bin}:{env.get('PATH', '')}"
-    go_bin = shutil.which("go", path=env["PATH"]) or f"{linuxbrew_bin}/go"
-
-    if format == "ATMOS":
-        cmd = [go_bin, "run", "main.go", "--atmos", url]
-    elif format == "AAC":
-        cmd = [go_bin, "run", "main.go", "--aac", url]
-    else:
-        cmd = [go_bin, "run", "main.go", url]
-
-    async def event_stream():
-        global download_running, download_process
-        try:
-            # ── Phase 1: download ──────────────────────────────────────────────
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    bufsize=1,
-                    universal_newlines=True,
-                    cwd=str(amd_dir),
-                    env=env,
-                )
-            except Exception as exc:
-                yield f"data: {json.dumps({'status': 'error', 'message': str(exc)})}\n\n"
-                return
-
-            download_running = True
-            download_process = proc
-            dl_q: queue.Queue = queue.Queue()
-
-            def _read_dl():
-                try:
-                    for line in iter(proc.stdout.readline, ""):
-                        line = line.strip()
-                        if line:
-                            dl_q.put(line)
-                except Exception:
-                    pass
-                finally:
-                    dl_q.put(None)
-
-            threading.Thread(target=_read_dl, daemon=True).start()
-
-            while True:
-                try:
-                    item = dl_q.get_nowait()
-                except queue.Empty:
-                    await asyncio.sleep(0.05)
-                    continue
-                if item is None:
-                    break
-                yield f"data: {json.dumps({'status': 'running', 'phase': 'downloading', 'message': item})}\n\n"
-
-            exit_code = proc.wait()
-            download_running = False
-            download_process = None
-
-            if exit_code != 0:
-                yield f"data: {json.dumps({'status': 'error', 'message': f'Download failed (exit code {exit_code})'})}\n\n"
-                return
-
-            # ── Phase 2: organize ──────────────────────────────────────────────
-            org_q: queue.Queue = queue.Queue()
-
-            def on_log(msg: str, _phase: str) -> None:
-                org_q.put(msg)
-
-            org_result = None
-            org_error = None
-
-            def _run_organize():
-                nonlocal org_result, org_error
-                try:
-                    engine = SyncEngine(
-                        state=state,
-                        music_dir=cfg.music_dir,
-                        playlist_name=None,
-                        on_log=on_log,
-                    )
-                    org_result = engine.sync(save_folder)
-                except Exception as exc:
-                    org_error = str(exc)
-                finally:
-                    org_q.put(None)
-
-            threading.Thread(target=_run_organize, daemon=True).start()
-
-            while True:
-                try:
-                    item = org_q.get_nowait()
-                except queue.Empty:
-                    await asyncio.sleep(0.05)
-                    continue
-                if item is None:
-                    break
-                yield f"data: {json.dumps({'status': 'running', 'phase': 'organizing', 'message': item})}\n\n"
-
-            if org_error:
-                yield f"data: {json.dumps({'status': 'error', 'message': org_error})}\n\n"
-            else:
-                yield f"data: {json.dumps({'status': 'done', 'new': org_result.new_count, 'skipped': org_result.skipped_count, 'errors': org_result.error_count})}\n\n"
-
-        finally:
-            download_running = False
-            if download_process is not None:
-                try:
-                    download_process.kill()
-                except Exception:
-                    pass
-            download_process = None
+    job: dict = {
+        "id": str(uuid.uuid4()),
+        "type": "one-off",
+        "url": url,
+        "format": format,
+        "playlist_name": None,
+        "log_q": queue.Queue(),
+        "started": threading.Event(),
+    }
+    with pending_jobs_lock:
+        pending_jobs.append(job)
+    job_queue.put(job)
 
     return StreamingResponse(
-        event_stream(),
+        _job_event_stream(job),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
