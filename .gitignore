@@ -22,3 +22,8 @@ config.yaml
 # .state/ is intentionally NOT gitignored — it's committed after each sync
 # to back up playlist state to GitHub
 .worktrees/
+
+app/node_modules/
+app/dist/
+app/src-tauri/target/
+app/.codex/

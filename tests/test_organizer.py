@@ -17,7 +17,7 @@ def test_sanitize_strips_whitespace():
 
 def test_track_path_structure(tmp_path):
     path = track_path(tmp_path, "Queen", "A Night at the Opera", 1, "Bohemian Rhapsody")
-    assert path == tmp_path / "Queen" / "A Night at the Opera" / "01 - Bohemian Rhapsody.m4a"
+    assert path == tmp_path / "artists" / "Queen" / "A Night at the Opera" / "01 - Bohemian Rhapsody.m4a"
 
 
 def test_track_path_pads_track_number(tmp_path):
@@ -34,14 +34,14 @@ def test_track_path_sanitizes_artist(tmp_path):
 
 def test_cover_path_structure(tmp_path):
     path = cover_path(tmp_path, "Queen", "A Night at the Opera")
-    assert path == tmp_path / "Queen" / "A Night at the Opera" / "cover.jpg"
+    assert path == tmp_path / "artists" / "Queen" / "A Night at the Opera" / "cover.jpg"
 
 
 def test_ensure_album_dir_creates_directories(tmp_path):
     album_dir = ensure_album_dir(tmp_path, "Queen", "A Night at the Opera")
     assert album_dir.exists()
     assert album_dir.is_dir()
-    assert album_dir == tmp_path / "Queen" / "A Night at the Opera"
+    assert album_dir == tmp_path / "artists" / "Queen" / "A Night at the Opera"
 
 
 def test_ensure_album_dir_idempotent(tmp_path):

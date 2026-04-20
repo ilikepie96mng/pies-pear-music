@@ -20,6 +20,21 @@ class Playlist:
     name: str
     url: str
     last_synced: Optional[str]
+    paused: bool = False
+
+
+@dataclass
+class SyncRun:
+    id: int
+    playlist_name: str
+    started_at: str
+    ended_at: str
+    status: str  # "success" | "error"
+    new_count: int
+    skipped_count: int
+    error_count: int
+    log_path: str
+    error_message: Optional[str]
 
 
 class StateManager:
@@ -56,6 +71,26 @@ class StateManager:
                     PRIMARY KEY (playlist_name, track_id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sync_runs (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    playlist_name TEXT NOT NULL,
+                    started_at    TEXT NOT NULL,
+                    ended_at      TEXT NOT NULL,
+                    status        TEXT NOT NULL,
+                    new_count     INTEGER NOT NULL DEFAULT 0,
+                    skipped_count INTEGER NOT NULL DEFAULT 0,
+                    error_count   INTEGER NOT NULL DEFAULT 0,
+                    log_path      TEXT NOT NULL,
+                    error_message TEXT
+                )
+            """)
+            # Migrations
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(playlists)")}
+            if "paused" not in cols:
+                conn.execute("ALTER TABLE playlists ADD COLUMN paused INTEGER NOT NULL DEFAULT 0")
+            if "staging_folder" not in cols:
+                conn.execute("ALTER TABLE playlists ADD COLUMN staging_folder TEXT")
 
     def is_downloaded(self, track_id: str) -> bool:
         with self._conn() as conn:
@@ -97,16 +132,26 @@ class StateManager:
     def add_playlist(self, name: str, url: str) -> None:
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO playlists VALUES (?, ?, NULL)",
+                "INSERT OR IGNORE INTO playlists (name, url, last_synced) VALUES (?, ?, NULL)",
                 (name, url),
             )
 
     def get_playlists(self) -> list[Playlist]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT name, url, last_synced FROM playlists"
+                "SELECT name, url, last_synced, paused FROM playlists"
             ).fetchall()
-            return [Playlist(name=r[0], url=r[1], last_synced=r[2]) for r in rows]
+            return [Playlist(name=r[0], url=r[1], last_synced=r[2], paused=bool(r[3])) for r in rows]
+
+    def rename_playlist(self, old_name: str, new_name: str) -> None:
+        with self._conn() as conn:
+            conn.execute("UPDATE playlist_tracks SET playlist_name = ? WHERE playlist_name = ?", (new_name, old_name))
+            conn.execute("UPDATE sync_runs SET playlist_name = ? WHERE playlist_name = ?", (new_name, old_name))
+            conn.execute("UPDATE playlists SET name = ? WHERE name = ?", (new_name, old_name))
+
+    def set_playlist_paused(self, name: str, paused: bool) -> None:
+        with self._conn() as conn:
+            conn.execute("UPDATE playlists SET paused = ? WHERE name = ?", (int(paused), name))
 
     def update_playlist_synced(self, name: str) -> None:
         with self._conn() as conn:
@@ -118,3 +163,44 @@ class StateManager:
     def get_downloaded_count(self) -> int:
         with self._conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+
+    def record_sync_run(
+        self,
+        playlist_name: str,
+        started_at: str,
+        ended_at: str,
+        status: str,
+        new_count: int,
+        skipped_count: int,
+        error_count: int,
+        log_path: str,
+        error_message: Optional[str] = None,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO sync_runs
+                   (playlist_name, started_at, ended_at, status,
+                    new_count, skipped_count, error_count, log_path, error_message)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (playlist_name, started_at, ended_at, status,
+                 new_count, skipped_count, error_count, log_path, error_message),
+            )
+
+    def get_recent_runs(self, playlist_name: Optional[str] = None, limit: int = 20) -> list[SyncRun]:
+        with self._conn() as conn:
+            if playlist_name is not None:
+                rows = conn.execute(
+                    """SELECT id, playlist_name, started_at, ended_at, status,
+                              new_count, skipped_count, error_count, log_path, error_message
+                       FROM sync_runs WHERE playlist_name = ?
+                       ORDER BY started_at DESC LIMIT ?""",
+                    (playlist_name, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT id, playlist_name, started_at, ended_at, status,
+                              new_count, skipped_count, error_count, log_path, error_message
+                       FROM sync_runs ORDER BY started_at DESC LIMIT ?""",
+                    (limit,),
+                ).fetchall()
+            return [SyncRun(*r) for r in rows]
