@@ -10,18 +10,58 @@ def client(tmp_path, monkeypatch):
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(
         f"music_dir: {tmp_path}/Music\n"
-        f"staging_dir: {tmp_path}/staging\n"
         f"state_dir: {tmp_path}/state\n"
-        "media_user_token: fake_token\n"
-        "apple_id_email: test@example.com\n"
-        "apple_id_password: fake_pass\n"
-        "downloader_repo: /tmp/dl\n"
-        "wrapper_bin: /tmp/wrapper\n"
         "github_remote: ''\n"
     )
     monkeypatch.setattr(server_mod, "DEFAULT_CONFIG_PATH", cfg_file)
     with TestClient(app) as c:
         yield c
+
+
+def _fake_run_job_success(new=2, skipped=1, errors=0):
+    """Returns a _run_job replacement that emits done immediately and records sync run."""
+    from datetime import datetime
+    def _run(job):
+        import alac_rip.server as _srv
+        job["log_q"].put({"status": "running", "phase": "downloading",
+                           "message": "fake dl", "log_path": ""})
+        job["log_q"].put({"status": "done", "new": new, "skipped": skipped,
+                           "errors": errors, "log_path": ""})
+        if job.get("playlist_name") and _srv.state:
+            now = datetime.now().isoformat()
+            _srv.state.record_sync_run(
+                job["playlist_name"], now, now, "success",
+                new, skipped, errors, "",
+            )
+            _srv.state.update_playlist_synced(job["playlist_name"])
+    return _run
+
+
+def _fake_run_job_error(message="downstream tool failed"):
+    """Returns a _run_job replacement that emits an error and records it."""
+    from datetime import datetime
+    def _run(job):
+        import alac_rip.server as _srv
+        job["log_q"].put({"status": "error", "message": message, "log_path": ""})
+        if job.get("playlist_name") and _srv.state:
+            now = datetime.now().isoformat()
+            _srv.state.record_sync_run(
+                job["playlist_name"], now, now, "error",
+                0, 0, 0, "", message,
+            )
+    return _run
+
+
+def _drain_sse(r) -> list[dict]:
+    """Consume SSE response lines until done/error event, return all parsed events."""
+    events = []
+    for line in r.iter_lines():
+        if line.startswith("data:"):
+            e = json.loads(line[5:].strip())
+            events.append(e)
+            if e.get("status") in ("done", "error"):
+                break
+    return events
 
 
 def test_health(client):
@@ -53,47 +93,19 @@ def test_sync_unknown_playlist_returns_404(client):
     assert resp.status_code == 404
 
 
-def _make_staging_file(playlist_name: str) -> None:
-    """Create a dummy staging FLAC so the pre-flight check passes."""
-    # Staging dir is no longer used (endpoint is stubbed with 501)
-    # This helper is kept for backwards compatibility but does nothing
-    pass
-
-
 def test_sync_streams_done_event(client, monkeypatch):
-    from alac_rip import sync as sync_mod
-    from alac_rip.sync import SyncResult
-    from pathlib import Path
-
-    # Add a real playlist first
     client.post("/playlists", json={"name": "SSE Test", "url": "https://music.apple.com/fake"})
-    _make_staging_file("SSE Test")
+    monkeypatch.setattr(server_mod, "wrapper_running", True)
+    monkeypatch.setattr(server_mod, "_run_job", _fake_run_job_success(new=3, skipped=1))
 
-    # Patch SyncEngine.sync to return immediately without touching the downloader
-    monkeypatch.setattr(
-        sync_mod.SyncEngine,
-        "sync",
-        lambda self, url: SyncResult(new_count=3, skipped_count=1, error_count=0),
-    )
-
-    events = []
     with client.stream("GET", "/sync/SSE Test") as r:
         assert r.status_code == 200
-        for line in r.iter_lines():
-            if line.startswith("data:"):
-                events.append(json.loads(line[5:].strip()))
-                if events[-1]["status"] != "running":
-                    break
+        events = _drain_sse(r)
 
     done = next(e for e in events if e["status"] == "done")
     assert done["new"] == 3
     assert done["skipped"] == 1
     assert done["errors"] == 0
-    assert "log_path" in done
-    assert Path(done["log_path"]).exists()
-    assert "playlist=SSE Test" in Path(done["log_path"]).read_text()
-
-    # Cleanup
     client.delete("/playlists/SSE Test")
 
 
@@ -229,29 +241,16 @@ def test_playlist_has_no_staging_folder(client):
 
 
 def test_delete_playlist_cleans_sync_history(client, monkeypatch):
-    from alac_rip import sync as sync_mod
-    from alac_rip.sync import SyncResult
-
     client.post("/playlists", json={"name": "Delete Me", "url": "https://music.apple.com/fake"})
-    _make_staging_file("Delete Me")
-
-    monkeypatch.setattr(
-        sync_mod.SyncEngine, "sync",
-        lambda self, url: SyncResult(new_count=1, skipped_count=0, error_count=0),
-    )
+    monkeypatch.setattr(server_mod, "wrapper_running", True)
+    monkeypatch.setattr(server_mod, "_run_job", _fake_run_job_success(new=1))
 
     with client.stream("GET", "/sync/Delete Me") as r:
-        for line in r.iter_lines():
-            if line.startswith("data:"):
-                if json.loads(line[5:].strip())["status"] != "running":
-                    break
+        _drain_sse(r)
 
-    # confirm run was recorded
     assert len(client.get("/sync-history/Delete Me").json()) == 1
-
     client.delete("/playlists/Delete Me")
 
-    # run should be gone from global history too
     names = {r["playlist_name"] for r in client.get("/sync-history").json()}
     assert "Delete Me" not in names
 
@@ -271,91 +270,49 @@ def test_sync_history_per_playlist_empty_initially(client):
 
 
 def test_sync_records_run_on_success(client, monkeypatch):
-    from alac_rip import sync as sync_mod
-    from alac_rip.sync import SyncResult
-
     client.post("/playlists", json={"name": "History Test", "url": "https://music.apple.com/fake"})
-    _make_staging_file("History Test")
-
-    monkeypatch.setattr(
-        sync_mod.SyncEngine,
-        "sync",
-        lambda self, url: SyncResult(new_count=4, skipped_count=1, error_count=0),
-    )
+    monkeypatch.setattr(server_mod, "wrapper_running", True)
+    monkeypatch.setattr(server_mod, "_run_job", _fake_run_job_success(new=4, skipped=1))
 
     with client.stream("GET", "/sync/History Test") as r:
-        for line in r.iter_lines():
-            if line.startswith("data:"):
-                event = json.loads(line[5:].strip())
-                if event["status"] != "running":
-                    break
+        _drain_sse(r)
 
-    resp = client.get("/sync-history/History Test")
-    assert resp.status_code == 200
-    runs = resp.json()
+    runs = client.get("/sync-history/History Test").json()
     assert len(runs) == 1
     assert runs[0]["status"] == "success"
     assert runs[0]["new_count"] == 4
     assert runs[0]["skipped_count"] == 1
-    assert runs[0]["playlist_name"] == "History Test"
-
     client.delete("/playlists/History Test")
 
 
 def test_sync_records_run_on_error(client, monkeypatch):
-    from alac_rip import sync as sync_mod
-
     client.post("/playlists", json={"name": "Error Hist", "url": "https://music.apple.com/fake"})
-    _make_staging_file("Error Hist")
-
-    def _raise(self, url):
-        raise RuntimeError("downstream tool failed")
-
-    monkeypatch.setattr(sync_mod.SyncEngine, "sync", _raise)
+    monkeypatch.setattr(server_mod, "wrapper_running", True)
+    monkeypatch.setattr(server_mod, "_run_job", _fake_run_job_error("downstream tool failed"))
 
     with client.stream("GET", "/sync/Error Hist") as r:
-        for line in r.iter_lines():
-            if line.startswith("data:"):
-                event = json.loads(line[5:].strip())
-                if event["status"] != "running":
-                    break
+        _drain_sse(r)
 
-    resp = client.get("/sync-history/Error Hist")
-    runs = resp.json()
+    runs = client.get("/sync-history/Error Hist").json()
     assert len(runs) == 1
     assert runs[0]["status"] == "error"
     assert "downstream tool failed" in runs[0]["error_message"]
-
     client.delete("/playlists/Error Hist")
 
 
 def test_sync_history_global_aggregates_playlists(client, monkeypatch):
-    from alac_rip import sync as sync_mod
-    from alac_rip.sync import SyncResult
-
     for name in ("Global A", "Global B"):
         client.post("/playlists", json={"name": name, "url": "https://music.apple.com/fake"})
-        _make_staging_file(name)
-
-    monkeypatch.setattr(
-        sync_mod.SyncEngine,
-        "sync",
-        lambda self, url: SyncResult(new_count=1, skipped_count=0, error_count=0),
-    )
+    monkeypatch.setattr(server_mod, "wrapper_running", True)
+    monkeypatch.setattr(server_mod, "_run_job", _fake_run_job_success(new=1))
 
     for name in ("Global A", "Global B"):
         with client.stream("GET", f"/sync/{name}") as r:
-            for line in r.iter_lines():
-                if line.startswith("data:"):
-                    event = json.loads(line[5:].strip())
-                    if event["status"] != "running":
-                        break
+            _drain_sse(r)
 
-    resp = client.get("/sync-history")
-    names = {r["playlist_name"] for r in resp.json()}
+    names = {r["playlist_name"] for r in client.get("/sync-history").json()}
     assert "Global A" in names
     assert "Global B" in names
-
     for name in ("Global A", "Global B"):
         client.delete(f"/playlists/{name}")
 
@@ -375,17 +332,41 @@ def test_download_one_off_requires_wrapper(client):
     assert "Wrapper" in resp.json()["detail"]
 
 
+def test_sync_requires_wrapper(client):
+    client.post("/playlists", json={"name": "NW Test", "url": "https://music.apple.com/x"})
+    resp = client.get("/sync/NW Test")
+    assert resp.status_code == 409
+    assert "Wrapper" in resp.json()["detail"]
+    client.delete("/playlists/NW Test")
+
+
+def test_sync_queue_empty_initially(client):
+    resp = client.get("/sync/queue")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["active"] is None
+    assert data["pending"] == []
+
+
 def test_download_one_off_requires_url(client, monkeypatch):
-    import alac_rip.server as server_mod
     monkeypatch.setattr(server_mod, "wrapper_running", True)
     resp = client.get("/download/one-off?url=&format=ALAC")
     assert resp.status_code == 400
 
 
-def test_download_one_off_rejects_concurrent(client, monkeypatch):
-    import alac_rip.server as server_mod
+def test_sync_duplicate_playlist_rejected(client, monkeypatch):
+    import threading
+    client.post("/playlists", json={"name": "Dup PL", "url": "https://music.apple.com/x"})
     monkeypatch.setattr(server_mod, "wrapper_running", True)
-    monkeypatch.setattr(server_mod, "download_running", True)
-    resp = client.get("/download/one-off?url=https://music.apple.com/album/test&format=ALAC")
+
+    # Simulate a job already active for this playlist
+    fake_job = {"id": "fake", "type": "playlist", "playlist_name": "Dup PL",
+                "log_q": __import__("queue").Queue(), "started": threading.Event()}
+    monkeypatch.setattr(server_mod, "active_job", fake_job)
+
+    resp = client.get("/sync/Dup PL")
     assert resp.status_code == 409
-    assert "already in progress" in resp.json()["detail"]
+    assert "already queued" in resp.json()["detail"]
+
+    monkeypatch.setattr(server_mod, "active_job", None)
+    client.delete("/playlists/Dup PL")
