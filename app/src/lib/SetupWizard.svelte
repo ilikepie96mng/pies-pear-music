@@ -37,7 +37,7 @@
   // Group checks for display
   const GROUPS: { title: string; labels: string[] }[] = [
     { title: "System tools",  labels: ["ffmpeg", "Git"] },
-    { title: "Configuration", labels: ["Config file", "Music directory", "State directory", "Staging directory"] },
+    { title: "Configuration", labels: ["Config file", "Music directory", "State directory"] },
     { title: "Automation",    labels: ["Systemd timer"] },
   ];
 
@@ -52,10 +52,10 @@
   let saved = $state(false);
 
   const configFields = [
-    { key: "music_dir",   label: "Music directory",   hint: "Where synced ALAC files are stored" },
-    { key: "staging_dir", label: "Staging directory", hint: "Place downloaded .m4a files here before running sync" },
-    { key: "state_dir",   label: "State directory",   hint: "Where the track database and sync logs are stored" },
-    { key: "github_remote", label: "GitHub remote",   hint: "Optional — push state DB to a remote repo. Leave blank to skip." },
+    { key: "alac_rip_dir",  label: "alac-rip directory", hint: "Path to your alac-rip clone (contains wrapper/ and apple-music-downloader/)" },
+    { key: "music_dir",     label: "Music directory",    hint: "Where synced ALAC files are stored" },
+    { key: "state_dir",     label: "State directory",    hint: "Where the track database and sync logs are stored" },
+    { key: "github_remote", label: "GitHub remote",      hint: "Optional — push state DB to a remote repo. Leave blank to skip." },
   ];
 
   async function loadConfig() {

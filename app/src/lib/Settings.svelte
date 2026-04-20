@@ -22,8 +22,13 @@
       title: "Paths",
       fields: [
         { key: "music_dir",   label: "Music directory",   hint: "Where synced ALAC files are stored. Must exist or be creatable." },
-        { key: "staging_dir", label: "Staging directory", hint: "Place downloaded .m4a files here before running sync." },
         { key: "state_dir",   label: "State directory",   hint: "Where the track database (downloaded.db) and sync logs are stored." },
+      ],
+    },
+    {
+      title: "Tools",
+      fields: [
+        { key: "alac_rip_dir", label: "alac-rip directory", hint: "Absolute path to your alac-rip clone (contains wrapper/ and apple-music-downloader/)." },
       ],
     },
     {

@@ -1,17 +1,16 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { api, type Playlist, type Track } from "../api";
+  import { api, type Playlist, type Track, type SyncRun } from "../api";
 
   interface Props {
     playlist: Playlist;
-    syncing: boolean;
     onstartSync: (name: string) => void;
     onrenamed: (oldName: string, newName: string) => void;
     ondeleted: (name: string) => void;
     onupdated: (pl: Playlist) => void;
   }
 
-  let { playlist, syncing, onstartSync, onrenamed, ondeleted, onupdated }: Props = $props();
+  let { playlist, onstartSync, onrenamed, ondeleted, onupdated }: Props = $props();
 
   let tracks = $state<Track[]>([]);
   let loadingTracks = $state(true);
@@ -67,7 +66,10 @@
     }
   }
 
-  onMount(() => { loadTracks(); });
+  onMount(() => {
+    loadTracks();
+    loadHistory();
+  });
 
   async function startEditing() {
     draftName = playlist.name;
@@ -115,6 +117,22 @@
   function setSort(key: SortKey) {
     if (sortKey === key) sortAsc = !sortAsc;
     else { sortKey = key; sortAsc = true; }
+  }
+
+  // ── Sync history ────────────────────────────────────────────────────────────
+  let runHistory = $state<SyncRun[]>([]);
+
+  async function loadHistory() {
+    try {
+      runHistory = await api.syncHistory(playlist.name, 10);
+    } catch {}
+  }
+
+  function formatDuration(start: string, end: string): string {
+    const ms = new Date(end).getTime() - new Date(start).getTime();
+    if (ms < 1000) return "<1s";
+    if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+    return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
   }
 
   function formatDate(iso: string): string {
@@ -182,6 +200,7 @@
           {/if}
         </div>
         <div class="text-zinc-700 text-[10px] font-mono mt-1 truncate max-w-md" title={playlist.url}>{playlist.url}</div>
+
       </div>
 
       <!-- Actions -->
@@ -219,15 +238,36 @@
           </button>
           <button
             onclick={() => onstartSync(playlist.name)}
-            disabled={syncing || playlist.paused}
+            disabled={playlist.paused}
             class="px-4 py-1.5 rounded-lg text-xs font-bold transition-colors
               bg-[#1db954] text-black hover:bg-[#1ed760] disabled:opacity-40">
-            {syncing ? "Syncing…" : "↻ Sync"}
+            ↻ Sync
           </button>
         {/if}
       </div>
     </div>
   </div>
+
+  <!-- Sync run history -->
+  {#if runHistory.length > 0}
+    <div class="px-8 py-3 border-b border-[#1a1a1a] flex-shrink-0">
+      <div class="text-zinc-600 text-[10px] uppercase tracking-widest font-semibold mb-2">Sync History</div>
+      <div class="flex flex-col gap-1">
+        {#each runHistory as run}
+          <div class="flex items-center gap-2 text-xs">
+            <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 {run.status === 'success' ? 'bg-green-500' : 'bg-red-500'}"></span>
+            <span class="text-zinc-500 w-28 flex-shrink-0">{formatSyncDate(run.started_at)}</span>
+            {#if run.status === 'error'}
+              <span class="text-red-400 truncate">{run.error_message ?? 'Error'}</span>
+            {:else}
+              <span class="text-zinc-600">{run.new_count} new · {run.skipped_count} skipped{run.error_count > 0 ? ` · ${run.error_count} err` : ''}</span>
+            {/if}
+            <span class="text-zinc-700 ml-auto flex-shrink-0">{formatDuration(run.started_at, run.ended_at)}</span>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
 
   <!-- Track table -->
   <div class="flex-1 overflow-auto">

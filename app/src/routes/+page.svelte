@@ -30,7 +30,6 @@
   }
 
   function startSync(name: string) {
-    if (syncingPlaylist) return;
     syncingPlaylist = name;
     view = "sync";
   }
@@ -64,7 +63,6 @@
   <Sidebar
     {playlists}
     selectedName={selectedName}
-    {syncingPlaylist}
     onselectPlaylist={selectPlaylist}
     onstartSync={startSync}
     onopenSettings={() => (view = "settings")}
@@ -91,7 +89,6 @@
       {#key selectedName}
         <PlaylistDetail
           playlist={selectedPlaylist}
-          syncing={syncingPlaylist === selectedPlaylist.name}
           onstartSync={startSync}
           onrenamed={onPlaylistRenamed}
           ondeleted={onPlaylistDeleted}
