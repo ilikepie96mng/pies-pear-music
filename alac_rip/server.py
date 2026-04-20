@@ -9,6 +9,7 @@ import socket
 import sqlite3
 import subprocess
 import threading
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -40,9 +41,10 @@ wrapper_running: bool = False
 wrapper_needs_2fa: bool = False
 wrapper_logs: list[str] = []
 
-download_process: Optional[subprocess.Popen] = None
-download_running: bool = False
-downloader_logs: list[str] = []
+job_queue: queue.Queue = queue.Queue()
+active_job: Optional[dict] = None
+pending_jobs: list[dict] = []
+pending_jobs_lock: threading.Lock = threading.Lock()
 
 
 def _credentials_path() -> Path:
@@ -237,6 +239,7 @@ async def lifespan(app: FastAPI):
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     state = StateManager(cfg.state_dir / "downloaded.db")
     threading.Thread(target=attempt_auto_login, daemon=True).start()
+    threading.Thread(target=_queue_worker, daemon=True).start()
     yield
 
 
@@ -346,13 +349,183 @@ def patch_playlist(name: str, body: PlaylistPatch):
     return _playlist_dict(updated)
 
 
-_active_syncs: set[str] = set()
-_active_syncs_lock = threading.Lock()
-
-
 def _log_slug(name: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-")
     return slug or "playlist"
+
+
+def _run_job(job: dict) -> None:
+    url: str = job["url"]
+    format_: str = job["format"]
+    playlist_name: Optional[str] = job["playlist_name"]
+    log_q: queue.Queue = job["log_q"]
+    started_at = datetime.now()
+
+    def emit(event: dict) -> None:
+        log_q.put(event)
+
+    if cfg is None or not cfg.alac_rip_dir or not cfg.alac_rip_dir.exists():
+        emit({"status": "error", "message": "alac_rip_dir not configured"})
+        return
+    if not cfg.music_dir or not cfg.music_dir.is_absolute():
+        emit({"status": "error", "message": "music_dir not configured"})
+        return
+
+    amd_dir = cfg.alac_rip_dir / "apple-music-downloader"
+    logs_dir = cfg.state_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    label = _log_slug(playlist_name or "one-off")
+    log_path = logs_dir / f"{started_at.strftime('%Y%m%d-%H%M%S')}-{label}.log"
+
+    def write_log(line: str) -> None:
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat()} {line}\n")
+
+    def emit_log(phase: str, message: str) -> None:
+        write_log(f"[{phase}] {message}")
+        emit({"status": "running", "phase": phase, "message": message, "log_path": str(log_path)})
+
+    write_log(f"[session] type={job['type']} url={url}")
+
+    save_folder_key = {"ATMOS": "atmos-save-folder", "AAC": "aac-save-folder"}.get(format_, "alac-save-folder")
+    try:
+        with open(amd_dir / "config.yaml") as f:
+            amd_cfg = yaml.safe_load(f) or {}
+        save_folder = Path(amd_cfg.get(save_folder_key, "")).expanduser()
+    except Exception as exc:
+        msg = f"Cannot read downloader config: {exc}"
+        emit({"status": "error", "message": msg, "log_path": str(log_path)})
+        if playlist_name:
+            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
+                                  "error", 0, 0, 0, str(log_path), msg)
+        return
+    if not save_folder or not save_folder.is_absolute():
+        msg = f"Downloader save folder not configured ({save_folder_key})"
+        emit({"status": "error", "message": msg, "log_path": str(log_path)})
+        if playlist_name:
+            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
+                                  "error", 0, 0, 0, str(log_path), msg)
+        return
+
+    linuxbrew_bin = "/var/home/linuxbrew/.linuxbrew/bin"
+    env = os.environ.copy()
+    env["PATH"] = f"{linuxbrew_bin}:{env.get('PATH', '')}"
+    go_bin = shutil.which("go", path=env["PATH"]) or f"{linuxbrew_bin}/go"
+
+    if format_ == "ATMOS":
+        cmd = [go_bin, "run", "main.go", "--atmos", url]
+    elif format_ == "AAC":
+        cmd = [go_bin, "run", "main.go", "--aac", url]
+    else:
+        cmd = [go_bin, "run", "main.go", url]
+
+    # ── Phase 1: download ──────────────────────────────────────────────────────
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            bufsize=1, universal_newlines=True,
+            cwd=str(amd_dir), env=env,
+        )
+    except Exception as exc:
+        msg = str(exc)
+        write_log(f"[error] {msg}")
+        emit({"status": "error", "message": msg, "log_path": str(log_path)})
+        if playlist_name:
+            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
+                                  "error", 0, 0, 0, str(log_path), msg)
+        return
+
+    for line in iter(proc.stdout.readline, ""):
+        line = line.strip()
+        if line:
+            emit_log("downloading", line)
+
+    exit_code = proc.wait()
+    if exit_code != 0:
+        msg = f"Download failed (exit code {exit_code})"
+        write_log(f"[error] {msg}")
+        emit({"status": "error", "message": msg, "log_path": str(log_path)})
+        if playlist_name:
+            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
+                                  "error", 0, 0, 0, str(log_path), msg)
+        return
+
+    # ── Phase 2: organize ─────────────────────────────────────────────────────
+    def on_log(msg: str, _phase: str) -> None:
+        emit_log("organizing", msg)
+
+    try:
+        engine = SyncEngine(
+            state=state,
+            music_dir=cfg.music_dir,
+            playlist_name=playlist_name,
+            on_log=on_log,
+        )
+        result = engine.sync(save_folder)
+    except Exception as exc:
+        msg = str(exc)
+        write_log(f"[error] {msg}")
+        emit({"status": "error", "message": msg, "log_path": str(log_path)})
+        if playlist_name:
+            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
+                                  "error", 0, 0, 0, str(log_path), msg)
+        return
+
+    if playlist_name:
+        state.update_playlist_synced(playlist_name)
+        state.record_sync_run(
+            playlist_name, started_at.isoformat(), datetime.now().isoformat(), "success",
+            result.new_count, result.skipped_count, result.error_count, str(log_path),
+        )
+
+    write_log(f"[done] {result.new_count} new, {result.skipped_count} skipped, {result.error_count} errors")
+    emit({"status": "done", "new": result.new_count, "skipped": result.skipped_count,
+          "errors": result.error_count, "log_path": str(log_path)})
+
+
+def _queue_worker() -> None:
+    global active_job
+    while True:
+        job = job_queue.get()
+        with pending_jobs_lock:
+            try:
+                pending_jobs.remove(job)
+            except ValueError:
+                pass
+        active_job = job
+        job["started"].set()
+        try:
+            _run_job(job)
+        except Exception as exc:
+            job["log_q"].put({"status": "error", "message": f"Internal error: {exc}"})
+        finally:
+            job["log_q"].put(None)  # sentinel: tells _job_event_stream to stop
+            active_job = None
+            job_queue.task_done()
+
+
+async def _job_event_stream(job: dict):
+    # Phase 0: queued — send position updates until worker picks this job up
+    while not job["started"].is_set():
+        with pending_jobs_lock:
+            try:
+                position = pending_jobs.index(job) + 1
+            except ValueError:
+                position = 0
+        yield f"data: {json.dumps({'status': 'queued', 'position': position})}\n\n"
+        await asyncio.sleep(0.5)
+
+    # Phase 1+2: drain log_q until sentinel (None)
+    while True:
+        try:
+            event = job["log_q"].get_nowait()
+        except queue.Empty:
+            await asyncio.sleep(0.05)
+            continue
+        if event is None:
+            break
+        yield f"data: {json.dumps(event)}\n\n"
 
 
 @app.get("/sync/{name}")
