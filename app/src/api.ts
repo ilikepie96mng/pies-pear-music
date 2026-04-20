@@ -23,7 +23,6 @@ export interface Playlist {
   url: string;
   last_synced: string | null;
   paused: boolean;
-  staging_folder: string | null;
 }
 
 export interface Track {
@@ -36,13 +35,26 @@ export interface Track {
 }
 
 export interface SyncEvent {
-  status: "running" | "done" | "error";
+  status: "queued" | "running" | "done" | "error";
+  position?: number;
   phase?: string;
   message?: string;
   new?: number;
   skipped?: number;
   errors?: number;
   log_path?: string;
+}
+
+export interface QueueJob {
+  id: string;
+  type: "playlist" | "one-off";
+  playlist_name: string | null;
+  url: string | null;
+}
+
+export interface QueueStatus {
+  active: QueueJob | null;
+  pending: QueueJob[];
 }
 
 export interface DiagnosticCheck {
@@ -93,7 +105,7 @@ export const api = {
     });
   },
 
-  async patchPlaylist(name: string, patch: { name?: string; paused?: boolean; staging_folder?: string | null }): Promise<Playlist> {
+  async patchPlaylist(name: string, patch: { name?: string; paused?: boolean }): Promise<Playlist> {
     const r = await fetch(`${await base()}/playlists/${encodeURIComponent(name)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -113,9 +125,9 @@ export const api = {
     return `http://127.0.0.1:${_port}/track-art?path=${encodeURIComponent(localPath)}`;
   },
 
-  syncUrl(name: string): string {
+  syncJobUrl(name: string, format: string = "ALAC"): string {
     if (_port === null) throw new Error("Port not yet known");
-    return `http://127.0.0.1:${_port}/sync/${encodeURIComponent(name)}`;
+    return `http://127.0.0.1:${_port}/sync/${encodeURIComponent(name)}?format=${encodeURIComponent(format)}`;
   },
 
   async stats(): Promise<Stats> {
@@ -125,6 +137,11 @@ export const api = {
 
   async diagnostics(): Promise<DiagnosticCheck[]> {
     const r = await fetch(`${await base()}/diagnostics`);
+    return r.json();
+  },
+
+  async queue(): Promise<QueueStatus> {
+    const r = await fetch(`${await base()}/sync/queue`);
     return r.json();
   },
 
@@ -181,21 +198,6 @@ export const api = {
   },
 
   download: {
-    async start(link: string, format: string): Promise<{ status: string; msg: string }> {
-      const r = await fetch(`${await base()}/download`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ link, format }),
-      });
-      if (!r.ok) throw new Error(await r.text());
-      return r.json();
-    },
-
-    async logs(): Promise<{ running: boolean; logs: string[] }> {
-      const r = await fetch(`${await base()}/download/logs`);
-      return r.json();
-    },
-
     oneOffUrl(url: string, format: string): string {
       if (_port === null) throw new Error("Port not yet known");
       return `http://127.0.0.1:${_port}/download/one-off?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`;
