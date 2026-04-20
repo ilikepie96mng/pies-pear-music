@@ -142,25 +142,6 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
         pipe.close()
 
 
-def stream_download_logs(pipe, target_list):
-    global download_running, download_process
-    try:
-        for line in iter(pipe.readline, ""):
-            line = line.strip()
-            if line:
-                target_list.append(line)
-    except Exception as e:
-        target_list.append(f"Error reading download logs: {e}")
-    finally:
-        if download_process and download_process.poll() is not None:
-            exit_code = download_process.poll()
-            target_list.append(
-                "Download completed successfully." if exit_code == 0
-                else f"Download failed with exit code {exit_code}"
-            )
-            download_running = False
-        pipe.close()
-
 
 def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> bool:
     global wrapper_process, wrapper_running, wrapper_logs
@@ -528,91 +509,62 @@ async def _job_event_stream(job: dict):
         yield f"data: {json.dumps(event)}\n\n"
 
 
+@app.get("/sync/queue")
+def get_queue():
+    with pending_jobs_lock:
+        pending = [
+            {
+                "id": j["id"],
+                "type": j["type"],
+                "playlist_name": j.get("playlist_name"),
+                "url": j.get("url") if j["type"] == "one-off" else None,
+            }
+            for j in list(pending_jobs)
+        ]
+    active = None
+    if active_job:
+        active = {
+            "id": active_job["id"],
+            "type": active_job["type"],
+            "playlist_name": active_job.get("playlist_name"),
+            "url": active_job.get("url") if active_job["type"] == "one-off" else None,
+        }
+    return {"active": active, "pending": pending}
+
+
 @app.get("/sync/{name}")
-async def sync_playlist(name: str):
+async def sync_playlist(name: str, format: str = "ALAC"):
     playlists = {p.name: p for p in state.get_playlists()}
     if name not in playlists:
         raise HTTPException(404, f"Playlist '{name}' not found")
     if playlists[name].paused:
         raise HTTPException(409, f"Playlist '{name}' is paused")
+    if not wrapper_running:
+        raise HTTPException(409, "Wrapper not running — log in to Apple Music first")
 
-    with _active_syncs_lock:
-        if name in _active_syncs:
-            raise HTTPException(409, f"Playlist '{name}' is already syncing")
-        _active_syncs.add(name)
+    with pending_jobs_lock:
+        already = any(
+            j.get("playlist_name") == name
+            for j in list(pending_jobs) + ([active_job] if active_job else [])
+        )
+    if already:
+        raise HTTPException(409, f"'{name}' is already queued or running")
 
-    log_q: queue.Queue = queue.Queue()
-    logs_dir = cfg.state_dir / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    started_at = datetime.now()
-    log_path = logs_dir / f"{started_at.strftime('%Y%m%d-%H%M%S')}-{_log_slug(name)}.log"
-
-    def run_sync():
-        def write_log_line(line: str) -> None:
-            with log_path.open("a", encoding="utf-8") as f:
-                f.write(f"{datetime.now().isoformat()} {line}\n")
-
-        write_log_line(f"[session] playlist={name}")
-
-        def on_log(msg: str, phase: str) -> None:
-            write_log_line(f"[{phase}] {msg}")
-            log_q.put({"type": "log", "phase": phase, "message": msg, "log_path": str(log_path)})
-
-        try:
-            raise HTTPException(501, "Sync endpoint being replaced — use the new pipeline")
-            state.update_playlist_synced(name)
-            ended = datetime.now().isoformat()
-            state.record_sync_run(
-                name, started_at.isoformat(), ended, "success",
-                result.new_count, result.skipped_count, result.error_count, str(log_path),
-            )
-            write_log_line(
-                f"[done] Sync complete: {result.new_count} new, "
-                f"{result.skipped_count} skipped, {result.error_count} errors"
-            )
-            log_q.put({
-                "type": "done",
-                "new": result.new_count,
-                "skipped": result.skipped_count,
-                "errors": result.error_count,
-                "log_path": str(log_path),
-            })
-        except Exception as exc:
-            state.record_sync_run(
-                name, started_at.isoformat(), datetime.now().isoformat(), "error",
-                0, 0, 0, str(log_path), str(exc),
-            )
-            write_log_line(f"[error] {exc}")
-            log_q.put({"type": "error", "message": str(exc), "log_path": str(log_path)})
-        finally:
-            with _active_syncs_lock:
-                _active_syncs.discard(name)
-
-    thread = threading.Thread(target=run_sync, daemon=True)
-    thread.start()
-
-    async def event_stream():
-        while True:
-            try:
-                event = log_q.get_nowait()
-            except queue.Empty:
-                if not thread.is_alive():
-                    yield f"data: {json.dumps({'status': 'error', 'message': 'Sync thread exited unexpectedly', 'log_path': str(log_path)})}\n\n"
-                    break
-                await asyncio.sleep(0.05)
-                continue
-
-            if event["type"] == "log":
-                yield f"data: {json.dumps({'status': 'running', 'phase': event['phase'], 'message': event['message'], 'log_path': event['log_path']})}\n\n"
-            elif event["type"] == "done":
-                yield f"data: {json.dumps({'status': 'done', 'new': event['new'], 'skipped': event['skipped'], 'errors': event['errors'], 'log_path': event['log_path']})}\n\n"
-                break
-            elif event["type"] == "error":
-                yield f"data: {json.dumps({'status': 'error', 'message': event['message'], 'log_path': event['log_path']})}\n\n"
-                break
+    job: dict = {
+        "id": str(uuid.uuid4()),
+        "type": "playlist",
+        "url": playlists[name].url,
+        "format": format,
+        "playlist_name": name,
+        "log_q": queue.Queue(),
+        "started": threading.Event(),
+    }
+    with pending_jobs_lock:
+        pending_jobs.append(job)
+    job_queue.put(job)
 
     return StreamingResponse(
-        event_stream(),
+        _job_event_stream(job),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -816,80 +768,6 @@ def get_wrapper_status():
         "logs": wrapper_logs[-200:],
     }
 
-
-# ── Download routes ───────────────────────────────────────────────────────────
-
-class DownloadRequest(BaseModel):
-    link: str
-    format: str = "ALAC"
-
-
-@app.post("/download")
-def start_download(body: DownloadRequest):
-    global download_process, download_running, downloader_logs
-
-    # Auto-reset stuck state if process already exited
-    if download_running and download_process and download_process.poll() is not None:
-        download_running = False
-
-    if not wrapper_running:
-        raise HTTPException(409, "Wrapper not running — log in to Apple Music first")
-    if download_running:
-        raise HTTPException(409, "Download already in progress")
-    if not body.link:
-        raise HTTPException(400, "No URL provided")
-    if cfg is None or not cfg.alac_rip_dir or not cfg.alac_rip_dir.exists():
-        raise HTTPException(503, "alac_rip_dir not configured")
-
-    amd_dir = cfg.alac_rip_dir / "apple-music-downloader"
-    downloader_logs = []
-
-    linuxbrew_bin = "/var/home/linuxbrew/.linuxbrew/bin"
-    env = os.environ.copy()
-    env["PATH"] = f"{linuxbrew_bin}:{env.get('PATH', '')}"
-
-    go_bin = shutil.which("go", path=env["PATH"]) or f"{linuxbrew_bin}/go"
-
-    if body.format == "ATMOS":
-        cmd = [go_bin, "run", "main.go", "--atmos", body.link]
-    elif body.format == "AAC":
-        cmd = [go_bin, "run", "main.go", "--aac", body.link]
-    else:
-        cmd = [go_bin, "run", "main.go", body.link]
-
-    downloader_logs.append(f"Starting {body.format} download: {body.link}")
-
-    try:
-        download_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-            universal_newlines=True,
-            cwd=str(amd_dir),
-            env=env,
-        )
-        download_running = True
-        threading.Thread(
-            target=stream_download_logs,
-            args=(download_process.stdout, downloader_logs),
-            daemon=True,
-        ).start()
-        return {"status": "ok", "msg": "Download started"}
-    except Exception as e:
-        downloader_logs.append(f"Error: {e}")
-        raise HTTPException(500, str(e))
-
-
-@app.get("/download/logs")
-def get_download_logs():
-    global download_running, download_process
-    if download_process and download_process.poll() is not None and download_running:
-        download_running = False
-    return {
-        "running": download_running,
-        "logs": downloader_logs[-200:],
-    }
 
 
 @app.get("/download/one-off")
