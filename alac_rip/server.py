@@ -374,8 +374,6 @@ async def sync_playlist(name: str):
     started_at = datetime.now()
     log_path = logs_dir / f"{started_at.strftime('%Y%m%d-%H%M%S')}-{_log_slug(name)}.log"
 
-    playlist_obj = playlists[name]
-
     def run_sync():
         def write_log_line(line: str) -> None:
             with log_path.open("a", encoding="utf-8") as f:

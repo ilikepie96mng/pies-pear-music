@@ -32,14 +32,7 @@ def music_add(
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config", "-c"),
 ):
     """Start tracking a new playlist."""
-    cfg = load_config(config)
-    state = _get_state(cfg)
-    state.add_playlist(name, url)
-    console.print(f"[green]Added playlist:[/green] {name}")
-    console.print(f"  URL: {url}")
-    staging = cfg.staging_dir / sanitize(name)
-    console.print(f"  Place downloaded .m4a files in: [bold]{staging}[/bold]")
-    console.print("  Then run [bold]music-sync sync[/bold] to process them.")
+    raise NotImplementedError("CLI has been superseded by the desktop app pipeline. Use the web UI instead.")
 
 
 @app.command("status")
@@ -47,28 +40,7 @@ def music_status(
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config", "-c"),
 ):
     """Show tracked playlists and library stats."""
-    cfg = load_config(config)
-    state = _get_state(cfg)
-
-    playlists = state.get_playlists()
-    total = state.get_downloaded_count()
-
-    table = Table(title="Tracked Playlists")
-    table.add_column("Name", style="cyan")
-    table.add_column("Last Synced", style="green")
-    table.add_column("URL")
-
-    for pl in playlists:
-        table.add_row(
-            pl.name,
-            pl.last_synced or "[dim]never[/dim]",
-            pl.url[:60] + "..." if len(pl.url) > 60 else pl.url,
-        )
-
-    console.print(table)
-    console.print(f"\n[bold]Total downloaded tracks:[/bold] {total}")
-    console.print(f"[bold]Music directory:[/bold] {cfg.music_dir}")
-    console.print(f"[bold]Staging directory:[/bold] {cfg.staging_dir}")
+    raise NotImplementedError("CLI has been superseded by the desktop app pipeline. Use the web UI instead.")
 
 
 @app.command("sync")
@@ -79,54 +51,4 @@ def music_sync(
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config", "-c"),
 ):
     """Process staged .m4a files into the music library."""
-    cfg = load_config(config)
-    state = _get_state(cfg)
-
-    playlists = state.get_playlists()
-    if not playlists:
-        console.print("[yellow]No playlists tracked yet. Run:[/yellow] music-sync add <url>")
-        raise typer.Exit()
-
-    if playlist_name:
-        playlists = [p for p in playlists if p.name == playlist_name]
-        if not playlists:
-            console.print(f"[red]No playlist named '{playlist_name}'.[/red]")
-            raise typer.Exit(1)
-
-    total_new = 0
-
-    for playlist in playlists:
-        console.rule(f"[bold]{playlist.name}[/bold]")
-        staging_dir = cfg.staging_dir / sanitize(playlist.name)
-
-        if not staging_dir.exists() or not any(staging_dir.rglob("*.m4a")):
-            console.print(f"[yellow]No files in {staging_dir} — skipping.[/yellow]")
-            continue
-
-        with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
-            task = progress.add_task(f"Processing {playlist.name}...", total=None)
-
-            engine = SyncEngine(
-                state=state,
-                music_dir=cfg.music_dir,
-                playlist_name=playlist.name,
-            )
-
-            try:
-                result = engine.sync(staging_dir)
-                state.update_playlist_synced(playlist.name)
-                total_new += result.new_count
-                progress.update(task, description=f"Done — {result.new_count} new, {result.skipped_count} skipped")
-            except Exception as e:
-                progress.update(task, description=f"[red]Error: {e}[/red]")
-                console.print_exception()
-
-    if cfg.github_remote:
-        try:
-            repo_root = Path(__file__).parent.parent
-            push_state(repo_root, cfg.state_dir, total_new)
-            console.print("[dim]State pushed to GitHub.[/dim]")
-        except GitSyncError as e:
-            console.print(f"[yellow]GitHub push failed (non-fatal): {e}[/yellow]")
-
-    console.print(f"\n[bold green]Done.[/bold green] {total_new} new track(s) processed.")
+    raise NotImplementedError("CLI has been superseded by the desktop app pipeline. Use the web UI instead.")

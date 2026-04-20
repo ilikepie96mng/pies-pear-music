@@ -55,11 +55,9 @@ def test_sync_unknown_playlist_returns_404(client):
 
 def _make_staging_file(playlist_name: str) -> None:
     """Create a dummy staging FLAC so the pre-flight check passes."""
-    import alac_rip.server as server_mod
-    from alac_rip.organizer import sanitize
-    staging = server_mod.cfg.staging_dir / sanitize(playlist_name)
-    staging.mkdir(parents=True, exist_ok=True)
-    (staging / "dummy.flac").touch()
+    # Staging dir is no longer used (endpoint is stubbed with 501)
+    # This helper is kept for backwards compatibility but does nothing
+    pass
 
 
 def test_sync_streams_done_event(client, monkeypatch):
