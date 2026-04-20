@@ -223,6 +223,13 @@ def test_add_playlist_response_includes_paused(client):
     client.delete("/playlists/Paused Field")
 
 
+def test_playlist_has_no_staging_folder(client):
+    resp = client.post("/playlists", json={"name": "SF Test", "url": "https://music.apple.com/x"})
+    assert resp.status_code == 201
+    assert "staging_folder" not in resp.json()
+    client.delete("/playlists/SF Test")
+
+
 def test_delete_playlist_cleans_sync_history(client, monkeypatch):
     from alac_rip import sync as sync_mod
     from alac_rip.sync import SyncResult

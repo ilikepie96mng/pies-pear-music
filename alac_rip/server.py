@@ -305,7 +305,7 @@ class PlaylistIn(BaseModel):
 
 
 def _playlist_dict(p) -> dict:
-    return {"name": p.name, "url": p.url, "last_synced": p.last_synced, "paused": p.paused, "staging_folder": p.staging_folder}
+    return {"name": p.name, "url": p.url, "last_synced": p.last_synced, "paused": p.paused}
 
 
 @app.get("/playlists")
@@ -316,7 +316,7 @@ def get_playlists():
 @app.post("/playlists", status_code=201)
 def add_playlist(body: PlaylistIn):
     state.add_playlist(body.name, body.url)
-    return {"name": body.name, "url": body.url, "last_synced": None, "paused": False, "staging_folder": None}
+    return {"name": body.name, "url": body.url, "last_synced": None, "paused": False}
 
 
 @app.delete("/playlists/{name}", status_code=204)
@@ -331,7 +331,6 @@ def delete_playlist(name: str):
 class PlaylistPatch(BaseModel):
     name: Optional[str] = None
     paused: Optional[bool] = None
-    staging_folder: Optional[str] = None
 
 
 @app.patch("/playlists/{name}")
@@ -346,9 +345,6 @@ def patch_playlist(name: str, body: PlaylistPatch):
         name = body.name
     if body.paused is not None:
         state.set_playlist_paused(name, body.paused)
-    if body.staging_folder is not None:
-        folder = body.staging_folder.strip() or None
-        state.set_playlist_staging_folder(name, folder)
     updated = {p.name: p for p in state.get_playlists()}[name]
     return _playlist_dict(updated)
 
@@ -382,8 +378,14 @@ async def sync_playlist(name: str):
     log_path = logs_dir / f"{started_at.strftime('%Y%m%d-%H%M%S')}-{_log_slug(name)}.log"
 
     playlist_obj = playlists[name]
-    folder_name = playlist_obj.staging_folder if playlist_obj.staging_folder else sanitize(name)
+    folder_name = sanitize(name)
     staging_dir = cfg.staging_dir / folder_name
+    if not staging_dir.exists() and cfg.staging_dir.exists():
+        folder_lower = folder_name.lower()
+        for candidate in cfg.staging_dir.iterdir():
+            if candidate.is_dir() and candidate.name.lower() == folder_lower:
+                staging_dir = candidate
+                break
 
     def run_sync():
         def write_log_line(line: str) -> None:
