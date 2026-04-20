@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 import typer
 from rich.console import Console
@@ -7,7 +8,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from alac_rip.config import load_config, DEFAULT_CONFIG_PATH
-from alac_rip.downloader import Downloader
+from alac_rip.downloader import Downloader, DownloadError
 from alac_rip.github_sync import push_state, GitSyncError
 from alac_rip.state import StateManager
 from alac_rip.sync import SyncEngine
@@ -23,6 +24,15 @@ console = Console()
 def _get_state(cfg) -> StateManager:
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     return StateManager(cfg.state_dir / "downloaded.db")
+
+
+def _log_path(cfg, playlist_name: str) -> Path:
+    safe_name = "".join(c if c.isalnum() else "-" for c in playlist_name).strip("-")
+    safe_name = safe_name or "playlist"
+    logs_dir = cfg.state_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return logs_dir / f"{stamp}-{safe_name}.log"
 
 
 @app.command("add")
@@ -94,12 +104,42 @@ def music_clean(
         raise typer.Exit(e.returncode)
 
 
+@app.command("auth")
+def music_auth(
+    config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config", "-c"),
+):
+    """Authenticate the wrapper interactively and persist its session."""
+    cfg = load_config(config)
+    downloader = Downloader(
+        downloader_repo=cfg.downloader_repo,
+        wrapper_bin=cfg.wrapper_bin,
+        media_user_token=cfg.media_user_token,
+        staging_dir=cfg.staging_dir,
+        apple_id_email=cfg.apple_id_email,
+        apple_id_password=cfg.apple_id_password,
+    )
+
+    console.print(
+        "[bold]Interactive wrapper auth[/bold]\n"
+        "Complete login in the terminal. If prompted, enter the 2FA code.\n"
+        "Wait until the wrapper prints [bold][.] response type 6[/bold], then press Ctrl-C."
+    )
+    try:
+        downloader.authenticate_interactive()
+    except DownloadError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+
 @app.command("sync")
 def music_sync(
     playlist_name: Optional[str] = typer.Argument(
         None, help="Sync a specific playlist by name (syncs all if omitted)"
     ),
     config: Path = typer.Option(DEFAULT_CONFIG_PATH, "--config", "-c"),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show live downloader output"
+    ),
 ):
     """Sync tracked playlists — download new tracks only."""
     cfg = load_config(config)
@@ -125,6 +165,7 @@ def music_sync(
         downloader_repo=cfg.downloader_repo,
         wrapper_bin=cfg.wrapper_bin,
         media_user_token=cfg.media_user_token,
+        staging_dir=cfg.staging_dir,
         apple_id_email=cfg.apple_id_email,
         apple_id_password=cfg.apple_id_password,
     )
@@ -133,35 +174,52 @@ def music_sync(
 
     for playlist in playlists:
         console.rule(f"[bold]{playlist.name}[/bold]")
+        log_path = _log_path(cfg, playlist.name)
+        with log_path.open("w", encoding="utf-8") as logfile:
+            logfile.write(f"[session] playlist={playlist.name}\n")
+            logfile.write(f"[session] url={playlist.url}\n")
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task(f"Downloading {playlist.name}...", total=None)
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task(f"Downloading {playlist.name}...", total=None)
 
-            engine = SyncEngine(
-                downloader=downloader,
-                state=state,
-                music_dir=cfg.music_dir,
-                playlist_name=playlist.name,
-            )
-
-            try:
-                result = engine.sync(playlist.url)
-                state.update_playlist_synced(playlist.name)
-                total_new += result.new_count
-                progress.update(
-                    task,
-                    description=(
-                        f"Done — {result.new_count} new, "
-                        f"{result.skipped_count} skipped"
-                    ),
+                engine = SyncEngine(
+                    downloader=downloader,
+                    state=state,
+                    music_dir=cfg.music_dir,
+                    playlist_name=playlist.name,
                 )
-            except Exception as e:
-                progress.update(task, description=f"[red]Error: {e}[/red]")
-                console.print_exception()
+
+                def log(line: str) -> None:
+                    logfile.write(line + "\n")
+                    logfile.flush()
+                    if verbose:
+                        console.print(f"[dim]{line}[/dim]")
+
+                try:
+                    result = engine.sync(playlist.url, log=log)
+                    state.update_playlist_synced(playlist.name)
+                    total_new += result.new_count
+                    logfile.write(
+                        f"[result] new={result.new_count} skipped={result.skipped_count} "
+                        f"errors={result.error_count}\n"
+                    )
+                    progress.update(
+                        task,
+                        description=(
+                            f"Done — {result.new_count} new, "
+                            f"{result.skipped_count} skipped"
+                        ),
+                    )
+                except Exception as e:
+                    logfile.write(f"[error] {e}\n")
+                    progress.update(task, description=f"[red]Error: {e}[/red]")
+                    console.print_exception()
+                finally:
+                    console.print(f"[dim]Log saved to {log_path}[/dim]")
 
     # Push state to GitHub
     if cfg.github_remote:

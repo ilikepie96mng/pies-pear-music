@@ -10,7 +10,7 @@ echo "==> Installing pies-alac-rip-tool"
 
 # 1. Brew dependencies
 echo "==> Installing brew dependencies..."
-brew install go gh ffmpeg gpac wget
+brew install go gh ffmpeg gpac wget node
 
 # 2. Create directories
 mkdir -p "$INSTALL_DIR" "$CONFIG_DIR" "$HOME/.local/bin"
@@ -27,41 +27,18 @@ if [ ! -f "$INSTALL_DIR/apple-music-downloader/apple-music-dl" ]; then
     cd "$SCRIPT_DIR"
 fi
 
-# 4. Locate or download wrapper binary
-# The wrapper is the FairPlay decryption service used by the Go downloader.
-# Check known local paths first (e.g. from a previous alac-rip install),
-# then fall back to downloading from GitHub releases.
+# 4. Download wrapper binary
 if [ ! -f "$INSTALL_DIR/wrapper" ]; then
-    # Check common local paths from existing alac-rip setups
-    WRAPPER_LOCAL=""
-    for candidate in \
-        "$HOME/alac-rip/wrapper/wrapper" \
-        "$HOME/apple-music-sync/wrapper" \
-        "$HOME/.local/share/alac-rip/wrapper"; do
-        if [ -f "$candidate" ] && [ -x "$candidate" ]; then
-            WRAPPER_LOCAL="$candidate"
-            break
-        fi
-    done
-
-    if [ -n "$WRAPPER_LOCAL" ]; then
-        echo "==> Copying wrapper from existing install: $WRAPPER_LOCAL"
-        cp "$WRAPPER_LOCAL" "$INSTALL_DIR/wrapper"
-        chmod +x "$INSTALL_DIR/wrapper"
-    else
-        echo "==> Downloading wrapper binary..."
-        # Update this URL if the GitHub release URL changes:
-        WRAPPER_URL="https://github.com/zhaarey/wrapper/releases/latest/download/wrapper-linux-amd64"
-        if ! wget -q -O "$INSTALL_DIR/wrapper" "$WRAPPER_URL"; then
-            echo ""
-            echo "ERROR: Could not download wrapper binary."
-            echo "  1. Check the release URL: https://github.com/zhaarey/wrapper/releases"
-            echo "  2. Download manually and place at: $INSTALL_DIR/wrapper"
-            echo "  3. Re-run install.sh"
-            exit 1
-        fi
-        chmod +x "$INSTALL_DIR/wrapper"
-    fi
+    echo "==> Downloading wrapper..."
+    WRAPPER_TGZ="/tmp/wrapper.x86_64.tar.gz"
+    wget -q -O "$WRAPPER_TGZ" \
+        "https://github.com/zhaarey/wrapper/releases/download/linux/wrapper.linux.x86_64.tar.gz"
+    mkdir -p "$INSTALL_DIR/wrapper-extract"
+    tar -xzf "$WRAPPER_TGZ" -C "$INSTALL_DIR/wrapper-extract"
+    WRAPPER_BIN="$(find "$INSTALL_DIR/wrapper-extract" -name wrapper -type f | head -1)"
+    cp "$WRAPPER_BIN" "$INSTALL_DIR/wrapper"
+    chmod +x "$INSTALL_DIR/wrapper"
+    rm -rf "$INSTALL_DIR/wrapper-extract" "$WRAPPER_TGZ"
 fi
 
 # 5. Download and set up Bento4
@@ -140,5 +117,6 @@ echo "==> Install complete."
 echo "  Next steps:"
 echo "  1. Edit $CONFIG_DIR/config.yaml — add your media-user-token"
 echo "  2. Also update $INSTALL_DIR/apple-music-downloader/config.yaml with the same token"
-echo "  3. Run: music-sync add <your-apple-music-playlist-url>"
-echo "  4. Run: music-sync sync"
+echo "  3. Run: music-sync auth"
+echo "  4. After auth succeeds, run: music-sync add <your-apple-music-playlist-url>"
+echo "  5. Run: music-sync sync"

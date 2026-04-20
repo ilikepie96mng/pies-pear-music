@@ -177,3 +177,19 @@ def test_sync_m3u8_includes_skipped_tracks(music_dir, downloads_dir, sync_state,
     engine.sync("https://music.apple.com/playlist/xyz")
     m3u8 = music_dir / "Playlists" / "Test Playlist.m3u8"
     assert "Bohemian Rhapsody" in m3u8.read_text()
+
+
+def test_sync_passes_log_callback_to_downloader(music_dir, downloads_dir, sync_state, mock_downloader):
+    engine = SyncEngine(
+        downloader=mock_downloader,
+        state=sync_state,
+        music_dir=music_dir,
+        playlist_name="Test Playlist",
+    )
+    log = MagicMock()
+
+    engine.sync("https://music.apple.com/playlist/xyz", log=log)
+
+    mock_downloader.download_playlist.assert_called_once_with(
+        "https://music.apple.com/playlist/xyz", log=log
+    )

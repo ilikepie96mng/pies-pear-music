@@ -51,7 +51,7 @@ class SyncEngine:
 
         m3u8_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    def sync(self, playlist_url: str) -> SyncResult:
+    def sync(self, playlist_url: str, log=None) -> SyncResult:
         """
         Run a full sync for one playlist URL.
 
@@ -64,7 +64,7 @@ class SyncEngine:
         """
         self.downloader.start_wrapper()
         try:
-            downloads_dir = self.downloader.download_playlist(playlist_url)
+            downloads_dir = self.downloader.download_playlist(playlist_url, log=log)
         finally:
             self.downloader.stop_wrapper()
 

@@ -27,7 +27,8 @@ state_dir: "FILLED_BY_INSTALL_SCRIPT"
 github_remote: ""
 
 # Apple ID credentials for the FairPlay decryption wrapper.
-# IMPORTANT: Use an app-specific password, not your main Apple ID password.
-# Generate one at: appleid.apple.com → Security → App-Specific Passwords
+# IMPORTANT: The known-good wrapper flow uses your normal Apple ID login,
+# not an app-specific password, because the wrapper performs an interactive
+# device login and may prompt for 2FA.
 apple_id_email: "YOUR_APPLE_ID@email.com"
-apple_id_password: "xxxx-xxxx-xxxx-xxxx"
+apple_id_password: "YOUR_APPLE_ID_PASSWORD"
