@@ -23,6 +23,7 @@
       fields: [
         { key: "music_dir",   label: "Music directory",   hint: "Where synced ALAC files are stored. Must exist or be creatable." },
         { key: "state_dir",   label: "State directory",   hint: "Where the track database (downloaded.db) and sync logs are stored." },
+        { key: "staging_dir", label: "Staging directory", hint: "Optional — override the temporary area used during downloads. Default: music_dir/.staging" },
       ],
     },
     {

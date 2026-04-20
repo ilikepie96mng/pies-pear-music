@@ -256,8 +256,8 @@
           <div class="text-zinc-500 text-[10px] uppercase tracking-widest font-semibold mb-1">Quick start</div>
           {#each [
             "Add a playlist via the sidebar (name + URL)",
-            "Place downloaded .m4a files in the staging directory",
-            "Click Sync — live progress will appear",
+            "Click Sync — the app downloads and organizes automatically",
+            "Track progress live; completed tracks appear in the library",
           ] as tip, i}
             <div class="flex items-start gap-3 text-sm text-zinc-400">
               <span class="text-amber-600 font-bold mt-0.5">{i + 1}</span>
