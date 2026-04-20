@@ -142,6 +142,7 @@ export const api = {
 
   async queue(): Promise<QueueStatus> {
     const r = await fetch(`${await base()}/sync/queue`);
+    if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
   },
 

@@ -521,14 +521,14 @@ def get_queue():
             }
             for j in list(pending_jobs)
         ]
-    active = None
-    if active_job:
-        active = {
-            "id": active_job["id"],
-            "type": active_job["type"],
-            "playlist_name": active_job.get("playlist_name"),
-            "url": active_job.get("url") if active_job["type"] == "one-off" else None,
-        }
+        active = None
+        if active_job:
+            active = {
+                "id": active_job["id"],
+                "type": active_job["type"],
+                "playlist_name": active_job.get("playlist_name"),
+                "url": active_job.get("url") if active_job["type"] == "one-off" else None,
+            }
     return {"active": active, "pending": pending}
 
 

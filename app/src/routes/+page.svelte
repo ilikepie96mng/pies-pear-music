@@ -73,38 +73,46 @@
     onplaylistAdded={onPlaylistAdded}
   />
   <main class="flex-1 overflow-hidden">
-    {#if view === "setup"}
-      <SetupWizard ondone={() => (view = "dashboard")} />
-    {:else if view === "diagnostics"}
-      <Diagnostics onopenSettings={() => (view = "settings")} />
-    {:else if view === "dashboard"}
-      {#key dashboardKey}
-        <Dashboard
-          onstartSync={startSync}
-          onselectPlaylist={selectPlaylist}
-          onopenDiagnostics={() => (view = "diagnostics")}
-        />
-      {/key}
-    {:else if view === "playlist" && selectedPlaylist}
-      {#key selectedName}
-        <PlaylistDetail
-          playlist={selectedPlaylist}
-          onstartSync={startSync}
-          onrenamed={onPlaylistRenamed}
-          ondeleted={onPlaylistDeleted}
-          onupdated={onPlaylistUpdated}
-        />
-      {/key}
-    {:else if view === "sync" && syncingPlaylist}
-      <SyncProgress playlistName={syncingPlaylist} ondone={onSyncDone} />
-    {:else if view === "settings"}
-      <Settings />
-    {:else if view === "download"}
-      <Download />
-    {:else}
-      <div class="flex items-center justify-center h-full text-zinc-600 text-sm">
-        Select a playlist from the sidebar
+    <!-- SyncProgress stays mounted while a sync is in-flight so it doesn't remount and re-queue -->
+    {#if syncingPlaylist}
+      <div class="h-full" class:hidden={view !== "sync"}>
+        {#key syncingPlaylist}
+          <SyncProgress playlistName={syncingPlaylist} ondone={onSyncDone} />
+        {/key}
       </div>
     {/if}
+    <div class="h-full" class:hidden={view === "sync"}>
+      {#if view === "setup"}
+        <SetupWizard ondone={() => (view = "dashboard")} />
+      {:else if view === "diagnostics"}
+        <Diagnostics onopenSettings={() => (view = "settings")} />
+      {:else if view === "dashboard"}
+        {#key dashboardKey}
+          <Dashboard
+            onstartSync={startSync}
+            onselectPlaylist={selectPlaylist}
+            onopenDiagnostics={() => (view = "diagnostics")}
+          />
+        {/key}
+      {:else if view === "playlist" && selectedPlaylist}
+        {#key selectedName}
+          <PlaylistDetail
+            playlist={selectedPlaylist}
+            onstartSync={startSync}
+            onrenamed={onPlaylistRenamed}
+            ondeleted={onPlaylistDeleted}
+            onupdated={onPlaylistUpdated}
+          />
+        {/key}
+      {:else if view === "settings"}
+        <Settings />
+      {:else if view === "download"}
+        <Download />
+      {:else}
+        <div class="flex items-center justify-center h-full text-zinc-600 text-sm">
+          Select a playlist from the sidebar
+        </div>
+      {/if}
+    </div>
   </main>
 </div>
