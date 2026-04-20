@@ -2,7 +2,7 @@
   import { onDestroy } from "svelte";
   import { api, type SyncEvent } from "../api";
 
-  type Status = "idle" | "running" | "done" | "error";
+  type Status = "idle" | "queued" | "running" | "done" | "error";
   type Phase = "downloading" | "organizing";
 
   let url = $state("");
@@ -12,6 +12,7 @@
   let logs = $state<{ id: number; text: string; kind: "info" | "add" | "skip" | "err" }[]>([]);
   let result = $state<{ new: number; skipped: number; errors: number } | null>(null);
   let errorMessage = $state<string | null>(null);
+  let queuePosition = $state(0);
   let logEl = $state<HTMLElement | null>(null);
   let source: EventSource | null = null;
   let nextId = 0;
@@ -33,8 +34,8 @@
   }
 
   function startDownload() {
-    if (!url.trim() || status === "running") return;
-    status = "running";
+    if (!url.trim() || status === "running" || status === "queued") return;
+    status = "queued";
     phase = "downloading";
     logs = [];
     result = null;
@@ -45,7 +46,11 @@
     source.onmessage = (e) => {
       const data: SyncEvent = JSON.parse(e.data);
 
-      if (data.status === "running") {
+      if (data.status === "queued") {
+        status = "queued";
+        queuePosition = (data as any).position ?? 0;
+      } else if (data.status === "running") {
+        status = "running";
         if (data.phase === "organizing") phase = "organizing";
         if (data.message) {
           logs = [...logs, { id: nextId++, text: data.message, kind: classifyLine(data.message) }].slice(-800);
@@ -63,7 +68,7 @@
     };
 
     source.onerror = () => {
-      if (status === "running") {
+      if (status === "running" || status === "queued") {
         status = "error";
         errorMessage = "Lost connection to server.";
       }
@@ -92,12 +97,12 @@
     <input
       bind:value={url}
       placeholder="https://music.apple.com/…"
-      disabled={status === "running"}
+      disabled={status === "running" || status === "queued"}
       class="flex-1 bg-[#111] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-700 outline-none focus:border-[#1db954] disabled:opacity-50"
     />
     <select
       bind:value={format}
-      disabled={status === "running"}
+      disabled={status === "running" || status === "queued"}
       class="bg-[#111] border border-[#2a2a2a] rounded-lg px-2 py-2 text-sm text-zinc-300 outline-none disabled:opacity-50"
     >
       <option value="ALAC">ALAC</option>
@@ -106,14 +111,19 @@
     </select>
     <button
       onclick={startDownload}
-      disabled={status === "running" || !url.trim()}
+      disabled={status === "running" || status === "queued" || !url.trim()}
       class="bg-[#1db954] text-black text-sm font-bold px-4 rounded-lg hover:bg-[#1ed760] transition-colors disabled:opacity-50"
     >
       ↓ Download
     </button>
   </div>
 
-  {#if status === "running"}
+  {#if status === "queued"}
+    <div class="flex items-center gap-3 text-zinc-400 text-sm mb-6">
+      <span class="w-4 h-4 border border-zinc-600 border-t-zinc-300 rounded-full animate-spin flex-shrink-0"></span>
+      Waiting in queue{queuePosition > 0 ? ` — position ${queuePosition}` : ""}…
+    </div>
+  {:else if status === "running"}
     <div class="flex items-center gap-0 mb-6">
       {#each PHASES as step, i}
         {@const done = phaseIndex > i}
