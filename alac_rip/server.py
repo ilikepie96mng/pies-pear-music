@@ -277,13 +277,10 @@ def get_diagnostics():
         state_ok = cfg.state_dir.exists()
         results.append(check("State directory", state_ok, str(cfg.state_dir)))
 
-        staging_ok = cfg.staging_dir.exists()
-        results.append(check("Staging directory", staging_ok, str(cfg.staging_dir)))
-
         alac_ok = bool(cfg.alac_rip_dir) and cfg.alac_rip_dir.exists()
         results.append(check("alac-rip directory", alac_ok, str(cfg.alac_rip_dir) if alac_ok else "not configured — set in Settings"))
     else:
-        for label in ("Music directory", "State directory", "Staging directory", "alac-rip directory"):
+        for label in ("Music directory", "State directory", "alac-rip directory"):
             results.append(check(label, False, "Config not loaded"))
 
     try:
@@ -378,14 +375,6 @@ async def sync_playlist(name: str):
     log_path = logs_dir / f"{started_at.strftime('%Y%m%d-%H%M%S')}-{_log_slug(name)}.log"
 
     playlist_obj = playlists[name]
-    folder_name = sanitize(name)
-    staging_dir = cfg.staging_dir / folder_name
-    if not staging_dir.exists() and cfg.staging_dir.exists():
-        folder_lower = folder_name.lower()
-        for candidate in cfg.staging_dir.iterdir():
-            if candidate.is_dir() and candidate.name.lower() == folder_lower:
-                staging_dir = candidate
-                break
 
     def run_sync():
         def write_log_line(line: str) -> None:
@@ -399,20 +388,7 @@ async def sync_playlist(name: str):
             log_q.put({"type": "log", "phase": phase, "message": msg, "log_path": str(log_path)})
 
         try:
-            audio_exts = {".flac", ".m4a"}
-            if not staging_dir.exists() or not any(f for f in staging_dir.rglob("*") if f.suffix.lower() in audio_exts):
-                raise RuntimeError(
-                    f"No audio files found in {staging_dir}. "
-                    "Place downloaded files there and try again."
-                )
-
-            engine = SyncEngine(
-                state=state,
-                music_dir=cfg.music_dir,
-                playlist_name=name,
-                on_log=on_log,
-            )
-            result = engine.sync(staging_dir)
+            raise HTTPException(501, "Sync endpoint being replaced — use the new pipeline")
             state.update_playlist_synced(name)
             ended = datetime.now().isoformat()
             state.record_sync_run(
@@ -575,7 +551,6 @@ def get_track_art(path: str):
 
 class ConfigUpdate(BaseModel):
     music_dir: Optional[str] = None
-    staging_dir: Optional[str] = None
     state_dir: Optional[str] = None
     github_remote: Optional[str] = None
     alac_rip_dir: Optional[str] = None
