@@ -1,5 +1,8 @@
-from pathlib import Path
+import os
+import time
 from datetime import datetime
+from pathlib import Path
+
 from alac_rip.config import Config, load_config
 
 
@@ -36,10 +39,6 @@ def test_load_config_defaults_log_retention_when_absent(tmp_path):
     )
     cfg = load_config(cfg_file)
     assert cfg.log_retention_days == 2
-
-
-import time
-import os
 
 
 def _make_log(logs_dir, name, age_seconds):
