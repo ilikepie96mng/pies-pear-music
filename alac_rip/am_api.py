@@ -48,16 +48,16 @@ def fetch_bearer_token() -> str:
     return _bearer_token_cache
 
 
-def fetch_playlist_track_ids(
+def fetch_playlist_tracks(
     playlist_url: str,
     media_user_token: str,
     bearer_token: str,
     storefront: str = "us",
-) -> list[str]:
-    """Return all Apple Music catalog track IDs from a playlist URL.
+) -> list[dict]:
+    """Return all tracks from a playlist as dicts with 'id', 'title', 'artist'.
 
-    Paginates automatically using the 'next' field in API responses.
-    Raises AMApiError on invalid URL, network failure, or non-200 response.
+    Paginates automatically. Raises AMApiError on invalid URL, network failure,
+    or non-200 response.
     """
     match = re.search(r"/(pl\.[A-Za-z0-9]+)", playlist_url)
     if not match:
@@ -72,7 +72,7 @@ def fetch_playlist_track_ids(
         "Music-User-Token": media_user_token,
     }
 
-    track_ids: list[str] = []
+    tracks: list[dict] = []
     url: str | None = (
         f"https://api.music.apple.com/v1/catalog/{storefront}"
         f"/playlists/{playlist_id}/tracks"
@@ -94,7 +94,12 @@ def fetch_playlist_track_ids(
 
         data = r.json()
         for item in data.get("data", []):
-            track_ids.append(item["id"])
+            attrs = item.get("attributes", {})
+            tracks.append({
+                "id": item["id"],
+                "title": attrs.get("name", ""),
+                "artist": attrs.get("artistName", ""),
+            })
 
         next_path = data.get("next")
         if next_path:
@@ -106,4 +111,4 @@ def fetch_playlist_track_ids(
         else:
             url = None
 
-    return track_ids
+    return tracks
