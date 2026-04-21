@@ -429,10 +429,11 @@ def _run_job(job: dict) -> None:
             # Retroactive: populate am_track_id for pre-1.5 tracks by title/artist match
             unmatched = state.get_playlist_tracks_without_am_id(playlist_name)
             if unmatched:
-                am_by_key = {
-                    (_normalize(t["title"]), _normalize(t["artist"])): t["id"]
-                    for t in am_tracks
-                }
+                am_by_key: dict[tuple[str, str], str] = {}
+                for t in am_tracks:
+                    k = (_normalize(t["title"]), _normalize(t["artist"]))
+                    if k not in am_by_key:
+                        am_by_key[k] = t["id"]
                 matched_count = 0
                 for db_track in unmatched:
                     key = (_normalize(db_track.title), _normalize(db_track.artist))
