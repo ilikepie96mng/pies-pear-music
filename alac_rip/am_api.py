@@ -39,7 +39,7 @@ def fetch_bearer_token() -> str:
         raise AMApiError(f"Could not fetch JS bundle: {e}") from e
 
     token_match = re.search(
-        r'"authorization"\s*:\s*"Bearer\s+([A-Za-z0-9\-_.]+)"', js_r.text
+        r'"(eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+)"', js_r.text
     )
     if not token_match:
         raise AMApiError("Could not extract bearer token from JS bundle")

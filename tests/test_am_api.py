@@ -15,7 +15,7 @@ FAKE_HTML = '''<html><head>
 <script type="module" crossorigin src="/assets/index~abc123.js"></script>
 </head></html>'''
 
-FAKE_JS = 'some js content "authorization":"Bearer eyJhbGciOiJFUzI1NiJ9.fake.token" more content'
+FAKE_JS = 'some js content const Ku="eyJhbGciOiJFUzI1NiJ9.fake.token" more content'
 
 
 def _mock_get(url, **kwargs):
