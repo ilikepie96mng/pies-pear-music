@@ -1,4 +1,3 @@
-import pytest
 from pathlib import Path
 from alac_rip.config import Config, load_config
 
@@ -9,7 +8,6 @@ def test_config_defaults_log_retention_to_2():
         state_dir=Path("/state"),
         github_remote="",
         alac_rip_dir=Path("/amd"),
-        log_retention_days=2,
     )
     assert cfg.log_retention_days == 2
 
