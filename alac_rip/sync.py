@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
 
 from alac_rip.metadata import embed_cover_art, read_tags, save_cover_file, write_tags
@@ -59,7 +60,7 @@ class SyncEngine:
 
     def _convert_m4a_to_flac(self, src: Path, dest: Path) -> None:
         result = subprocess.run(
-            ["ffmpeg", "-i", str(src), "-c:a", "flac", "-map_metadata", "-1", "-y", str(dest)],
+            ["ffmpeg", "-i", str(src), "-vn", "-c:a", "flac", "-map_metadata", "-1", "-y", str(dest)],
             capture_output=True,
         )
         if result.returncode != 0:
@@ -77,6 +78,18 @@ class SyncEngine:
                     save_cover_file(cover_jpg, cover_data)
         except Exception:
             pass  # cover art is best-effort
+
+    def _save_cover_from_flac(self, dest_flac: Path) -> None:
+        """Extract embedded cover from FLAC and save cover.jpg in album dir."""
+        cover_jpg = dest_flac.parent / "cover.jpg"
+        if cover_jpg.exists():
+            return
+        try:
+            audio = FLAC(dest_flac)
+            if audio.pictures:
+                save_cover_file(cover_jpg, audio.pictures[0].data)
+        except Exception:
+            pass
 
     def _handle_lrc(self, src_audio: Path, dest_flac: Path) -> None:
         """Move matching .lrc file from staging to album dir."""
@@ -135,6 +148,7 @@ class SyncEngine:
                     src.unlink()
                 else:
                     shutil.move(str(src), dest)
+                    self._save_cover_from_flac(dest)
 
                 write_tags(dest, title=title, artist=artist, album_artist=album_artist,
                            album=album, track_num=track_num,

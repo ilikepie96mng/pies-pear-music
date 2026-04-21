@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type Playlist } from "../api";
   import QueueIndicator from "./QueueIndicator.svelte";
+  import { onMount } from "svelte";
 
   interface Props {
     playlists: Playlist[];
@@ -27,6 +28,23 @@
   let newUrl = $state("");
   let adding = $state(false);
   let addError = $state<string | null>(null);
+
+  let wrapperRunning = $state<boolean | null>(null);
+
+  async function pollWrapperStatus() {
+    try {
+      const s = await api.wrapper.status();
+      wrapperRunning = s.running;
+    } catch {
+      wrapperRunning = false;
+    }
+  }
+
+  onMount(() => {
+    pollWrapperStatus();
+    const interval = setInterval(pollWrapperStatus, 10_000);
+    return () => clearInterval(interval);
+  });
 
   async function addPlaylist() {
     if (!newName.trim() || !newUrl.trim()) return;
@@ -132,6 +150,19 @@
   </div>
 
   <QueueIndicator />
+
+  <div class="px-3 py-2 border-t border-[#1e1e1e] flex items-center gap-2">
+    {#if wrapperRunning === null}
+      <span class="w-2 h-2 rounded-full bg-[#444] flex-shrink-0"></span>
+      <span class="text-[10px] text-[#555]">Checking…</span>
+    {:else if wrapperRunning}
+      <span class="w-2 h-2 rounded-full bg-[#1db954] flex-shrink-0"></span>
+      <span class="text-[10px] text-[#888]">Apple Music</span>
+    {:else}
+      <span class="w-2 h-2 rounded-full bg-[#555] flex-shrink-0"></span>
+      <span class="text-[10px] text-[#555]">Not signed in</span>
+    {/if}
+  </div>
 
   <div class="p-2 border-t border-[#1e1e1e]">
     <button

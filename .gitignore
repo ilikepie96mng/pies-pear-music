@@ -21,7 +21,10 @@ config.yaml
 
 # .state/ is intentionally NOT gitignored — it's committed after each sync
 # to back up playlist state to GitHub
+.state/logs/
+
 .worktrees/
+.superpowers/
 
 app/node_modules/
 app/dist/
