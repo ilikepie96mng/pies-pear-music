@@ -32,3 +32,7 @@ github_remote: ""
 # device login and may prompt for 2FA.
 apple_id_email: "YOUR_APPLE_ID@email.com"
 apple_id_password: "YOUR_APPLE_ID_PASSWORD"
+
+# Number of days to keep sync logs. Logs older than this are deleted at the
+# start of each sync. Set to 0 to disable cleanup.
+log_retention_days: 2

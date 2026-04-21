@@ -12,6 +12,7 @@ class Config:
     state_dir: Path
     github_remote: str
     alac_rip_dir: Path
+    log_retention_days: int = 2
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
@@ -27,4 +28,5 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         state_dir=p("state_dir", str(Path.home() / ".local/share/pies-alac-rip")),
         github_remote=data.get("github_remote", ""),
         alac_rip_dir=p("alac_rip_dir", ""),
+        log_retention_days=int(data.get("log_retention_days", 2)),
     )
