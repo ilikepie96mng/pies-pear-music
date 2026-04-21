@@ -31,6 +31,14 @@ from alac_rip.organizer import sanitize
 from alac_rip.state import StateManager
 from alac_rip.sync import SyncEngine
 
+
+def _normalize(s: str) -> str:
+    """Normalize title/artist for matching: lowercase, strip punctuation, collapse whitespace."""
+    s = s.lower()
+    s = re.sub(r"[^\w\s]", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
 cfg: Optional[Config] = None
 state: Optional[StateManager] = None
 
@@ -407,9 +415,26 @@ def _run_job(job: dict) -> None:
             bearer = am_api.fetch_bearer_token()
             storefront = amd_cfg.get("storefront", "us")
             media_user_token = amd_cfg.get("media-user-token", "")
-            am_ids = am_api.fetch_playlist_track_ids(url, media_user_token, bearer, storefront)
+            am_tracks = am_api.fetch_playlist_tracks(url, media_user_token, bearer, storefront)
+            am_ids_set = {t["id"] for t in am_tracks}
+
+            # Retroactive: populate am_track_id for pre-1.5 tracks by title/artist match
+            unmatched = state.get_playlist_tracks_without_am_id(playlist_name)
+            if unmatched:
+                am_by_key = {
+                    (_normalize(t["title"]), _normalize(t["artist"])): t["id"]
+                    for t in am_tracks
+                }
+                matched_count = 0
+                for db_track in unmatched:
+                    key = (_normalize(db_track.title), _normalize(db_track.artist))
+                    if key in am_by_key:
+                        state.update_track_am_id(db_track.track_id, am_by_key[key])
+                        matched_count += 1
+                if matched_count:
+                    emit_log("preflight", f"Matched {matched_count} existing tracks to AM IDs")
+
             owned = state.get_playlist_am_ids(playlist_name)
-            am_ids_set = set(am_ids)
             new_ids = am_ids_set - owned
             skip_ids = owned & am_ids_set
 
@@ -417,7 +442,7 @@ def _run_job(job: dict) -> None:
             skip_file_path.write_text(json.dumps({"skip_ids": list(skip_ids)}))
 
             emit_log("preflight",
-                f"Pre-flight: {len(am_ids)} tracks in playlist, "
+                f"Pre-flight: {len(am_tracks)} tracks in playlist, "
                 f"{len(new_ids)} new, {len(skip_ids)} already owned"
             )
         except Exception as e:

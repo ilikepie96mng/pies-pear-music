@@ -197,3 +197,67 @@ def test_get_playlist_tracks_without_am_id_empty_when_all_matched(tmp_path):
     result = state.get_playlist_tracks_without_am_id("My PL")
 
     assert result == []
+
+
+def test_retroactive_matching_populates_am_id(tmp_path):
+    """Pre-flight with an existing DB track (null AM ID) matches it by title/artist."""
+    from alac_rip.server import _normalize
+
+    state = StateManager(tmp_path / "test.db")
+    state.add_playlist("My PL", "https://example.com")
+    state.add_track(Track(
+        track_id="Artist/Album/01 - Song.flac", title="Song", artist="Artist",
+        album="Album", local_path="/music/song.flac", downloaded_at="2026-01-01",
+    ))
+    state.add_track_to_playlist("My PL", "Artist/Album/01 - Song.flac")
+
+    am_tracks = [{"id": "am-999", "title": "Song", "artist": "Artist"}]
+    unmatched = state.get_playlist_tracks_without_am_id("My PL")
+    am_by_key = {
+        (_normalize(t["title"]), _normalize(t["artist"])): t["id"]
+        for t in am_tracks
+    }
+    matched_count = 0
+    for db_track in unmatched:
+        key = (_normalize(db_track.title), _normalize(db_track.artist))
+        if key in am_by_key:
+            state.update_track_am_id(db_track.track_id, am_by_key[key])
+            matched_count += 1
+
+    owned = state.get_playlist_am_ids("My PL")
+    assert "am-999" in owned
+    assert matched_count == 1
+
+
+def test_normalize_strips_punctuation_and_lowercases():
+    from alac_rip.server import _normalize
+    assert _normalize("Don't Stop Me Now!") == "dont stop me now"
+    assert _normalize("  Bohemian  Rhapsody  ") == "bohemian rhapsody"
+    assert _normalize("SONG (feat. Artist)") == "song feat artist"
+
+
+def test_retroactive_matching_no_false_positives(tmp_path):
+    """A track with a different artist should not match."""
+    from alac_rip.server import _normalize
+
+    state = StateManager(tmp_path / "test.db")
+    state.add_playlist("My PL", "https://example.com")
+    state.add_track(Track(
+        track_id="Artist/Album/01 - Song.flac", title="Song", artist="Artist A",
+        album="Album", local_path="/music/song.flac", downloaded_at="2026-01-01",
+    ))
+    state.add_track_to_playlist("My PL", "Artist/Album/01 - Song.flac")
+
+    am_tracks = [{"id": "am-999", "title": "Song", "artist": "Artist B"}]
+    unmatched = state.get_playlist_tracks_without_am_id("My PL")
+    am_by_key = {
+        (_normalize(t["title"]), _normalize(t["artist"])): t["id"]
+        for t in am_tracks
+    }
+    for db_track in unmatched:
+        key = (_normalize(db_track.title), _normalize(db_track.artist))
+        if key in am_by_key:
+            state.update_track_am_id(db_track.track_id, am_by_key[key])
+
+    owned = state.get_playlist_am_ids("My PL")
+    assert "am-999" not in owned

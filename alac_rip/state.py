@@ -194,6 +194,7 @@ class StateManager:
                 FROM tracks t
                 JOIN playlist_tracks pt ON t.track_id = pt.track_id
                 WHERE pt.playlist_name = ? AND t.am_track_id IS NULL
+                ORDER BY t.artist, t.album, t.title
                 """,
                 (playlist_name,),
             ).fetchall()
