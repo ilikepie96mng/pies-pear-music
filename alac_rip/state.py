@@ -91,6 +91,10 @@ class StateManager:
                 conn.execute("ALTER TABLE playlists ADD COLUMN paused INTEGER NOT NULL DEFAULT 0")
             if "staging_folder" not in cols:
                 conn.execute("ALTER TABLE playlists ADD COLUMN staging_folder TEXT")
+            # am_track_id migration
+            track_cols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
+            if "am_track_id" not in track_cols:
+                conn.execute("ALTER TABLE tracks ADD COLUMN am_track_id TEXT")
 
     def is_downloaded(self, track_id: str) -> bool:
         with self._conn() as conn:
@@ -102,7 +106,7 @@ class StateManager:
     def add_track(self, track: Track) -> None:
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO tracks VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO tracks (track_id, title, artist, album, local_path, downloaded_at) VALUES (?, ?, ?, ?, ?, ?)",
                 (track.track_id, track.title, track.artist,
                  track.album, track.local_path, track.downloaded_at),
             )
@@ -158,6 +162,26 @@ class StateManager:
             conn.execute(
                 "UPDATE playlists SET last_synced = ? WHERE name = ?",
                 (datetime.now().isoformat(), name),
+            )
+
+    def get_playlist_am_ids(self, playlist_name: str) -> set[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT t.am_track_id
+                FROM tracks t
+                JOIN playlist_tracks pt ON t.track_id = pt.track_id
+                WHERE pt.playlist_name = ? AND t.am_track_id IS NOT NULL
+                """,
+                (playlist_name,),
+            ).fetchall()
+            return {r[0] for r in rows}
+
+    def update_track_am_id(self, track_id: str, am_track_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE tracks SET am_track_id = ? WHERE track_id = ?",
+                (am_track_id, track_id),
             )
 
     def get_downloaded_count(self) -> int:
