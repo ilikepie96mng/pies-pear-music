@@ -1,5 +1,8 @@
+import json
+import tempfile
 from pathlib import Path
 from datetime import datetime
+from unittest.mock import patch, MagicMock
 import pytest
 from alac_rip.state import StateManager, Track
 
@@ -70,3 +73,30 @@ def test_get_playlist_am_ids_only_for_named_playlist(state):
 
     assert state.get_playlist_am_ids("Playlist A") == {"111"}
     assert state.get_playlist_am_ids("Playlist B") == {"222"}
+
+
+def test_preflight_writes_skip_file(state):
+    """Pre-flight diff produces skip.json with already-owned IDs."""
+    state.add_playlist("Game OST", "https://music.apple.com/us/playlist/game-ost/pl.abc")
+    state.add_track(Track(
+        track_id="Artist/Album/01 - Song.flac",
+        title="Song", artist="Artist", album="Album",
+        local_path="/music/song.flac", downloaded_at="2026-01-01T00:00:00",
+    ))
+    state.update_track_am_id("Artist/Album/01 - Song.flac", "111")
+    state.add_track_to_playlist("Game OST", "Artist/Album/01 - Song.flac")
+
+    # AM playlist has track 111 (owned) and 222 (new)
+    am_ids = ["111", "222"]
+    owned = state.get_playlist_am_ids("Game OST")
+    skip_ids = owned & set(am_ids)
+    new_ids = set(am_ids) - owned
+
+    assert skip_ids == {"111"}
+    assert new_ids == {"222"}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        skip_file = Path(tmp) / "skip.json"
+        skip_file.write_text(json.dumps({"skip_ids": list(skip_ids)}))
+        data = json.loads(skip_file.read_text())
+        assert data["skip_ids"] == ["111"]

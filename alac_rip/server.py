@@ -8,6 +8,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -23,6 +24,8 @@ from fastapi.responses import Response, StreamingResponse
 from mutagen.mp4 import MP4, MP4Cover
 from pydantic import BaseModel
 
+from alac_rip import am_api
+from alac_rip.am_api import AMApiError
 from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config
 from alac_rip.organizer import sanitize
 from alac_rip.state import StateManager
@@ -392,6 +395,35 @@ def _run_job(job: dict) -> None:
     env = os.environ.copy()
     env["PATH"] = f"{linuxbrew_bin}:{env.get('PATH', '')}"
     go_bin = shutil.which("go", path=env["PATH"]) or f"{linuxbrew_bin}/go"
+    manifest_path = save_folder / "manifest.json"
+
+    # ── Pre-flight: diff AM playlist against local DB ─────────────────────────
+    skip_file_path: Optional[Path] = None
+
+    if playlist_name:
+        try:
+            emit_log("preflight", "Checking playlist for new tracks…")
+            bearer = am_api.fetch_bearer_token()
+            storefront = amd_cfg.get("storefront", "us")
+            media_user_token = amd_cfg.get("media-user-token", "")
+            am_ids = am_api.fetch_playlist_track_ids(url, media_user_token, bearer, storefront)
+            owned = state.get_playlist_am_ids(playlist_name)
+            new_ids = set(am_ids) - owned
+            skip_ids = owned & set(am_ids)
+
+            _tmp = tempfile.mkdtemp()
+            skip_file_path = Path(_tmp) / "skip.json"
+            skip_file_path.write_text(json.dumps({"skip_ids": list(skip_ids)}))
+
+            emit_log("preflight",
+                f"Pre-flight: {len(am_ids)} tracks in playlist, "
+                f"{len(new_ids)} new, {len(skip_ids)} already owned"
+            )
+        except AMApiError as e:
+            emit_log("preflight",
+                f"Pre-flight check failed ({e}), falling back to full download"
+            )
+            skip_file_path = None
 
     if format_ == "ATMOS":
         cmd = [go_bin, "run", "main.go", "--atmos", url]
@@ -399,6 +431,10 @@ def _run_job(job: dict) -> None:
         cmd = [go_bin, "run", "main.go", "--aac", url]
     else:
         cmd = [go_bin, "run", "main.go", url]
+
+    if skip_file_path:
+        cmd += ["--skip-ids-file", str(skip_file_path)]
+    cmd += ["--manifest-out", str(manifest_path)]
 
     # ── Phase 1: download ──────────────────────────────────────────────────────
     try:
