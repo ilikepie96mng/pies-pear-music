@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { api, type Stats, type DiagnosticCheck } from "../api";
+  import { onMount, onDestroy } from "svelte";
+  import { api, type Stats, type DiagnosticCheck, type SyncRun } from "../api";
 
   interface Props {
     onstartSync: (name: string) => void;
@@ -12,6 +12,7 @@
 
   let stats = $state<Stats | null>(null);
   let checks = $state<DiagnosticCheck[]>([]);
+  let recentRuns = $state<SyncRun[]>([]);
   let loading = $state(true);
   let error = $state<string | null>(null);
 
@@ -20,14 +21,74 @@
   let criticalIssues = $derived(checks.filter(c => CRITICAL.has(c.label) && !c.ok));
   let healthOk = $derived(criticalIssues.length === 0);
 
+  // ── Wrapper auth state ──────────────────────────────────────────────────────
+  let wrapperRunning = $state(false);
+  let wrapperNeeds2fa = $state(false);
+  let wrapperLogs = $state<string[]>([]);
+  let wrapperEmail = $state("");
+  let wrapperPassword = $state("");
+  let twoFaCode = $state("");
+  let wrapperBusy = $state(false);
+  let wrapperError = $state<string | null>(null);
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function pollWrapper() {
+    try {
+      const s = await api.wrapper.status();
+      wrapperRunning = s.running;
+      wrapperNeeds2fa = s.needs_2fa;
+      wrapperLogs = s.logs;
+    } catch {}
+  }
+
+  async function loginWrapper() {
+    if (!wrapperEmail || !wrapperPassword) return;
+    wrapperBusy = true;
+    wrapperError = null;
+    try {
+      const res = await api.wrapper.login(wrapperEmail, wrapperPassword);
+      if (res.status === "error") wrapperError = res.msg;
+    } catch (e) {
+      wrapperError = String(e);
+    } finally {
+      wrapperBusy = false;
+    }
+  }
+
+  async function stopWrapper() {
+    wrapperBusy = true;
+    try { await api.wrapper.stop(); } catch {}
+    wrapperBusy = false;
+  }
+
+  async function submit2fa() {
+    if (!twoFaCode) return;
+    wrapperBusy = true;
+    try {
+      await api.wrapper.submit2fa(twoFaCode);
+      twoFaCode = "";
+    } catch {}
+    wrapperBusy = false;
+  }
+
   onMount(async () => {
     try {
-      [stats, checks] = await Promise.all([api.stats(), api.diagnostics()]);
+      [stats, checks, recentRuns] = await Promise.all([
+        api.stats(),
+        api.diagnostics(),
+        api.syncHistory(undefined, 10),
+      ]);
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+    pollWrapper();
+    pollTimer = setInterval(pollWrapper, 2000);
+  });
+
+  onDestroy(() => {
+    if (pollTimer) clearInterval(pollTimer);
   });
 
   function formatDate(iso: string | null): string {
@@ -40,6 +101,13 @@
     if (diffH < 24) return `${Math.floor(diffH)}h ago`;
     if (diffH < 48) return "Yesterday";
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+
+  function formatDuration(start: string, end: string): string {
+    const ms = new Date(end).getTime() - new Date(start).getTime();
+    if (ms < 1000) return "<1s";
+    if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+    return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
   }
 </script>
 
@@ -81,6 +149,67 @@
           View details →
         </button>
       {/if}
+    </div>
+
+    <!-- Apple Music connection panel -->
+    <div class="border border-[#1e1e1e] rounded-xl overflow-hidden mb-6">
+      <div class="px-4 py-2.5 bg-[#111] border-b border-[#1e1e1e] flex items-center justify-between">
+        <span class="text-zinc-400 text-xs uppercase tracking-widest font-semibold">Apple Music</span>
+        <span class="flex items-center gap-1.5 text-xs {wrapperRunning ? 'text-green-400' : 'text-zinc-600'}">
+          <span class="w-1.5 h-1.5 rounded-full {wrapperRunning ? 'bg-green-500' : 'bg-zinc-600'}"></span>
+          {wrapperRunning ? "Connected" : "Disconnected"}
+        </span>
+      </div>
+
+      <div class="px-4 py-3">
+        {#if wrapperRunning}
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-zinc-400">Wrapper is running and ready for downloads.</span>
+            <button onclick={stopWrapper} disabled={wrapperBusy}
+              class="px-3 py-1.5 rounded-lg text-xs bg-[#1a1a1a] text-zinc-400 hover:text-red-400 hover:bg-red-950/30 transition-colors disabled:opacity-50">
+              Disconnect
+            </button>
+          </div>
+
+        {:else if wrapperNeeds2fa}
+          <div class="flex flex-col gap-2">
+            <p class="text-sm text-amber-400">Two-factor authentication required.</p>
+            <div class="flex gap-2">
+              <input bind:value={twoFaCode} type="text" placeholder="Enter 2FA code"
+                class="flex-1 bg-[#0d0d0d] border border-[#2a2a2a] focus:border-amber-700 rounded-lg px-3 py-2 text-white text-sm outline-none transition-colors" />
+              <button onclick={submit2fa} disabled={wrapperBusy || !twoFaCode}
+                class="px-4 py-2 rounded-lg text-sm font-bold bg-amber-700 hover:bg-amber-600 text-white transition-colors disabled:opacity-50">
+                Submit
+              </button>
+            </div>
+          </div>
+
+        {:else}
+          <div class="flex flex-col gap-2">
+            <div class="flex gap-2">
+              <input bind:value={wrapperEmail} type="email" placeholder="Apple ID email"
+                class="flex-1 bg-[#0d0d0d] border border-[#2a2a2a] focus:border-amber-700 rounded-lg px-3 py-2 text-white text-sm outline-none transition-colors" />
+              <input bind:value={wrapperPassword} type="password" placeholder="Password"
+                class="flex-1 bg-[#0d0d0d] border border-[#2a2a2a] focus:border-amber-700 rounded-lg px-3 py-2 text-white text-sm outline-none transition-colors" />
+              <button onclick={loginWrapper} disabled={wrapperBusy || !wrapperEmail || !wrapperPassword}
+                class="px-4 py-2 rounded-lg text-sm font-bold bg-amber-700 hover:bg-amber-600 text-white transition-colors disabled:opacity-50">
+                {wrapperBusy ? "…" : "Connect"}
+              </button>
+            </div>
+            {#if wrapperError}
+              <p class="text-red-400 text-xs">{wrapperError}</p>
+            {/if}
+          </div>
+        {/if}
+
+        {#if wrapperLogs.length > 0}
+          <div class="mt-2 bg-[#0a0a0a] border border-[#181818] rounded-lg px-3 py-2 max-h-24 overflow-y-auto">
+            {#each wrapperLogs.slice(-10) as line}
+              <div class="text-zinc-600 text-[10px] font-mono leading-relaxed">{line}</div>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </div>
 
     <!-- Stat cards -->
@@ -134,6 +263,44 @@
         <div class="text-zinc-700 text-xs mt-1">Add one from the sidebar to get started</div>
       </div>
     {/if}
+
+    <!-- Recent sync runs -->
+    <div class="border border-[#1e1e1e] rounded-xl overflow-hidden">
+      <div class="px-4 py-2.5 bg-[#111] border-b border-[#1e1e1e]">
+        <span class="text-zinc-400 text-xs uppercase tracking-widest font-semibold">Recent Activity</span>
+      </div>
+      {#if recentRuns.length === 0}
+        <div class="px-4 py-8 text-center">
+          <div class="text-zinc-600 text-sm">No sync runs yet</div>
+        </div>
+      {:else}
+        <div class="divide-y divide-[#181818]">
+          {#each recentRuns as run}
+            <div class="flex items-center gap-3 px-4 py-2.5">
+              <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 {run.status === 'success' ? 'bg-green-500' : 'bg-red-500'}"></span>
+              <div class="flex-1 min-w-0">
+                <button onclick={() => onselectPlaylist(run.playlist_name)}
+                  class="text-sm text-white font-medium hover:text-amber-400 transition-colors text-left truncate block max-w-[200px]">
+                  {run.playlist_name}
+                </button>
+                {#if run.status === 'error' && run.error_message}
+                  <div class="text-red-400 text-[10px] mt-0.5 truncate max-w-[280px]">{run.error_message}</div>
+                {:else}
+                  <div class="text-zinc-600 text-[10px] mt-0.5">
+                    {run.new_count} new · {run.skipped_count} skipped
+                    {#if run.error_count > 0}<span class="text-red-500"> · {run.error_count} errors</span>{/if}
+                  </div>
+                {/if}
+              </div>
+              <div class="text-right flex-shrink-0">
+                <div class="text-zinc-500 text-xs">{formatDate(run.started_at)}</div>
+                <div class="text-zinc-700 text-[10px] mt-0.5">{formatDuration(run.started_at, run.ended_at)}</div>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
 
   {/if}
 </div>
