@@ -31,10 +31,12 @@ def test_am_track_id_column_exists(state):
 
 
 def test_update_track_am_id_stores_value(state):
+    state.add_playlist("My Playlist", "https://music.apple.com/us/playlist/test/pl.xxx")
     _add_track(state, "Artist/Album/01 - Song.flac")
+    state.add_track_to_playlist("My Playlist", "Artist/Album/01 - Song.flac")
     state.update_track_am_id("Artist/Album/01 - Song.flac", "1234567890")
-    ids = state.get_playlist_am_ids.__func__  # just verify method exists
-    assert callable(state.update_track_am_id)
+    ids = state.get_playlist_am_ids("My Playlist")
+    assert ids == {"1234567890"}
 
 
 def test_get_playlist_am_ids_returns_owned_ids(state):
