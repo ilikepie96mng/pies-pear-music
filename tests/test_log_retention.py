@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime
 from alac_rip.config import Config, load_config
 
 
@@ -56,7 +57,7 @@ def test_cleanup_deletes_old_logs(tmp_path):
     recent = _make_log(logs_dir, "recent.log", age_seconds=1 * 86400)
 
     retention_days = 2
-    cutoff = time.time() - retention_days * 86400
+    cutoff = datetime.now().timestamp() - retention_days * 86400
     for log in logs_dir.glob("*.log"):
         try:
             if log.stat().st_mtime < cutoff:
@@ -75,7 +76,7 @@ def test_cleanup_skips_when_retention_zero(tmp_path):
 
     retention_days = 0
     if retention_days > 0:
-        cutoff = time.time() - retention_days * 86400
+        cutoff = datetime.now().timestamp() - retention_days * 86400
         for log in logs_dir.glob("*.log"):
             try:
                 if log.stat().st_mtime < cutoff:
@@ -95,7 +96,7 @@ def test_cleanup_ignores_non_log_files(tmp_path):
     os.utime(other, (old_mtime, old_mtime))
 
     retention_days = 2
-    cutoff = time.time() - retention_days * 86400
+    cutoff = datetime.now().timestamp() - retention_days * 86400
     for log in logs_dir.glob("*.log"):
         try:
             if log.stat().st_mtime < cutoff:
