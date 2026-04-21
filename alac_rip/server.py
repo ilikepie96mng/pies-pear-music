@@ -366,6 +366,14 @@ def _run_job(job: dict) -> None:
     amd_dir = cfg.alac_rip_dir / "apple-music-downloader"
     logs_dir = cfg.state_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
+    if cfg.log_retention_days > 0:
+        cutoff = datetime.now().timestamp() - cfg.log_retention_days * 86400
+        for _log in logs_dir.glob("*.log"):
+            try:
+                if _log.stat().st_mtime < cutoff:
+                    _log.unlink()
+            except OSError:
+                pass
     label = _log_slug(playlist_name or "one-off")
     log_path = logs_dir / f"{started_at.strftime('%Y%m%d-%H%M%S')}-{label}.log"
 
@@ -755,6 +763,7 @@ class ConfigUpdate(BaseModel):
     state_dir: Optional[str] = None
     github_remote: Optional[str] = None
     alac_rip_dir: Optional[str] = None
+    log_retention_days: Optional[int] = None
 
 
 _CONFIG_OMIT = {"apple_id_password", "media_user_token"}
