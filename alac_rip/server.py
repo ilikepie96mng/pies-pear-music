@@ -395,7 +395,8 @@ def _run_job(job: dict) -> None:
     env = os.environ.copy()
     env["PATH"] = f"{linuxbrew_bin}:{env.get('PATH', '')}"
     go_bin = shutil.which("go", path=env["PATH"]) or f"{linuxbrew_bin}/go"
-    manifest_path = save_folder / "manifest.json"
+    _tmp = tempfile.mkdtemp()
+    manifest_path = Path(_tmp) / "manifest.json"
 
     # ── Pre-flight: diff AM playlist against local DB ─────────────────────────
     skip_file_path: Optional[Path] = None
@@ -412,7 +413,6 @@ def _run_job(job: dict) -> None:
             new_ids = am_ids_set - owned
             skip_ids = owned & am_ids_set
 
-            _tmp = tempfile.mkdtemp()
             skip_file_path = Path(_tmp) / "skip.json"
             skip_file_path.write_text(json.dumps({"skip_ids": list(skip_ids)}))
 
@@ -460,9 +460,8 @@ def _run_job(job: dict) -> None:
             emit_log("downloading", line)
 
     exit_code = proc.wait()
-    if skip_file_path:
-        shutil.rmtree(skip_file_path.parent, ignore_errors=True)
     if exit_code != 0:
+        shutil.rmtree(_tmp, ignore_errors=True)
         msg = f"Download failed (exit code {exit_code})"
         write_log(f"[error] {msg}")
         emit({"status": "error", "message": msg, "log_path": str(log_path)})
@@ -490,6 +489,7 @@ def _run_job(job: dict) -> None:
         if playlist_name:
             state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
                                   "error", 0, 0, 0, str(log_path), msg)
+        shutil.rmtree(_tmp, ignore_errors=True)
         return
 
     # ── Process manifest: update am_track_id in DB ────────────────────────────
@@ -500,10 +500,11 @@ def _run_job(job: dict) -> None:
                 rel = Path(entry["local_path"]).relative_to(save_folder)
                 track_id = str(rel.with_suffix(".flac"))
                 state.update_track_am_id(track_id, entry["am_track_id"])
-            manifest_path.unlink()
             write_log(f"[manifest] updated AM IDs for {len(entries)} tracks")
         except Exception as exc:
             write_log(f"[manifest] warning: could not process manifest: {exc}")
+
+    shutil.rmtree(_tmp, ignore_errors=True)
 
     if playlist_name:
         state.update_playlist_synced(playlist_name)

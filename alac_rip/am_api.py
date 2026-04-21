@@ -84,6 +84,9 @@ def fetch_playlist_track_ids(
             raise AMApiError(f"Request failed: {e}") from e
 
         if r.status_code != 200:
+            if r.status_code == 401:
+                global _bearer_token_cache
+                _bearer_token_cache = None
             raise AMApiError(
                 f"Apple Music API returned {r.status_code} for {url}"
             )
