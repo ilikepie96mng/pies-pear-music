@@ -184,6 +184,21 @@ class StateManager:
                 (am_track_id, track_id),
             )
 
+    def get_playlist_tracks_without_am_id(self, playlist_name: str) -> list[Track]:
+        """Return tracks in a playlist that have no AM track ID yet."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT t.track_id, t.title, t.artist, t.album,
+                       t.local_path, t.downloaded_at
+                FROM tracks t
+                JOIN playlist_tracks pt ON t.track_id = pt.track_id
+                WHERE pt.playlist_name = ? AND t.am_track_id IS NULL
+                """,
+                (playlist_name,),
+            ).fetchall()
+            return [Track(*r) for r in rows]
+
     def get_downloaded_count(self) -> int:
         with self._conn() as conn:
             return conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]

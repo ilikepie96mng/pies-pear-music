@@ -161,3 +161,39 @@ def test_manifest_processing_handles_m4a_source(state):
             ("Artist/Album/01 - Song.flac",)
         ).fetchone()
     assert row[0] == "1111111111"
+
+
+def test_get_playlist_tracks_without_am_id_returns_only_null(tmp_path):
+    state = StateManager(tmp_path / "test.db")
+    state.add_playlist("My PL", "https://example.com")
+    state.add_track(Track(
+        track_id="a/track.flac", title="Song A", artist="Artist",
+        album="Album", local_path="/music/a.flac", downloaded_at="2026-01-01",
+    ))
+    state.add_track(Track(
+        track_id="b/track.flac", title="Song B", artist="Artist",
+        album="Album", local_path="/music/b.flac", downloaded_at="2026-01-01",
+    ))
+    state.add_track_to_playlist("My PL", "a/track.flac")
+    state.add_track_to_playlist("My PL", "b/track.flac")
+    state.update_track_am_id("a/track.flac", "am-111")  # has AM ID
+
+    result = state.get_playlist_tracks_without_am_id("My PL")
+
+    assert len(result) == 1
+    assert result[0].track_id == "b/track.flac"
+
+
+def test_get_playlist_tracks_without_am_id_empty_when_all_matched(tmp_path):
+    state = StateManager(tmp_path / "test.db")
+    state.add_playlist("My PL", "https://example.com")
+    state.add_track(Track(
+        track_id="a/track.flac", title="Song A", artist="Artist",
+        album="Album", local_path="/music/a.flac", downloaded_at="2026-01-01",
+    ))
+    state.add_track_to_playlist("My PL", "a/track.flac")
+    state.update_track_am_id("a/track.flac", "am-111")
+
+    result = state.get_playlist_tracks_without_am_id("My PL")
+
+    assert result == []
