@@ -12,7 +12,7 @@ def clear_token_cache():
 
 
 FAKE_HTML = '''<html><head>
-<script src="https://music.apple.com/assets/index-abc123.js" type="module"></script>
+<script type="module" crossorigin src="/assets/index~abc123.js"></script>
 </head></html>'''
 
 FAKE_JS = 'some js content "authorization":"Bearer eyJhbGciOiJFUzI1NiJ9.fake.token" more content'

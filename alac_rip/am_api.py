@@ -25,12 +25,13 @@ def fetch_bearer_token() -> str:
         raise AMApiError(f"Could not fetch music.apple.com: {e}") from e
 
     match = re.search(
-        r'<script[^>]+src="(https://music\.apple\.com/assets/index[^"]+\.js)"', r.text
+        r'<script[^>]+src="((?:https://music\.apple\.com)?/assets/index[^"]+\.js)"', r.text
     )
     if not match:
         raise AMApiError("Could not find Apple Music JS bundle in page HTML")
 
-    js_url = match.group(1)
+    path = match.group(1)
+    js_url = path if path.startswith("http") else f"https://music.apple.com{path}"
     try:
         js_r = requests.get(js_url, timeout=15)
         js_r.raise_for_status()
