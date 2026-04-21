@@ -47,13 +47,14 @@
 
   // Phase timeline
   const PHASES = [
+    { key: "preflight",   label: "Checking" },
     { key: "downloading", label: "Downloading" },
     { key: "organizing",  label: "Organizing" },
     { key: "done",        label: "Complete" },
   ] as const;
 
   const PHASE_ORDER: Record<string, number> = {
-    downloading: 0, organizing: 1, done: 2,
+    preflight: 0, downloading: 1, organizing: 2, done: 3,
   };
 
   let phaseIndex = $derived(PHASE_ORDER[phase] ?? 0);
@@ -254,7 +255,7 @@
     </div>
   {:else if status === "running"}
     <!-- Live counters (visible during processing) -->
-    {#if phase === "downloading" && progressTotal > 0}
+    {#if (phase === "downloading" || phase === "organizing") && progressTotal > 0}
       <div class="flex gap-4 mb-4">
         <div class="flex-1 bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-3">
           <div class="text-green-400 text-xl font-bold">{liveNew}</div>
