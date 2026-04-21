@@ -1,7 +1,7 @@
 import re
 import requests
 
-_bearer_token_cache: str | None = None
+_bearer_token_cache: str | None = None  # not thread-safe; safe for single-threaded use
 
 
 class AMApiError(Exception):
@@ -9,6 +9,11 @@ class AMApiError(Exception):
 
 
 def fetch_bearer_token() -> str:
+    """Scrape music.apple.com, extract the Bearer JWT from the JS bundle, and return it.
+
+    Result is cached in a module-level variable for the lifetime of the process.
+    Raises AMApiError on network failure or if the token cannot be found.
+    """
     global _bearer_token_cache
     if _bearer_token_cache:
         return _bearer_token_cache
@@ -48,6 +53,11 @@ def fetch_playlist_track_ids(
     bearer_token: str,
     storefront: str = "us",
 ) -> list[str]:
+    """Return all Apple Music catalog track IDs from a playlist URL.
+
+    Paginates automatically using the 'next' field in API responses.
+    Raises AMApiError on invalid URL, network failure, or non-200 response.
+    """
     match = re.search(r"/(pl\.[A-Za-z0-9]+)", playlist_url)
     if not match:
         raise AMApiError(f"Could not extract playlist ID from URL: {playlist_url}")
