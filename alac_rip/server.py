@@ -408,8 +408,9 @@ def _run_job(job: dict) -> None:
             media_user_token = amd_cfg.get("media-user-token", "")
             am_ids = am_api.fetch_playlist_track_ids(url, media_user_token, bearer, storefront)
             owned = state.get_playlist_am_ids(playlist_name)
-            new_ids = set(am_ids) - owned
-            skip_ids = owned & set(am_ids)
+            am_ids_set = set(am_ids)
+            new_ids = am_ids_set - owned
+            skip_ids = owned & am_ids_set
 
             _tmp = tempfile.mkdtemp()
             skip_file_path = Path(_tmp) / "skip.json"
@@ -419,7 +420,7 @@ def _run_job(job: dict) -> None:
                 f"Pre-flight: {len(am_ids)} tracks in playlist, "
                 f"{len(new_ids)} new, {len(skip_ids)} already owned"
             )
-        except AMApiError as e:
+        except Exception as e:
             emit_log("preflight",
                 f"Pre-flight check failed ({e}), falling back to full download"
             )
@@ -459,6 +460,8 @@ def _run_job(job: dict) -> None:
             emit_log("downloading", line)
 
     exit_code = proc.wait()
+    if skip_file_path:
+        shutil.rmtree(skip_file_path.parent, ignore_errors=True)
     if exit_code != 0:
         msg = f"Download failed (exit code {exit_code})"
         write_log(f"[error] {msg}")
