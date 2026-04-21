@@ -100,3 +100,64 @@ def test_preflight_writes_skip_file(state):
         skip_file.write_text(json.dumps({"skip_ids": list(skip_ids)}))
         data = json.loads(skip_file.read_text())
         assert data["skip_ids"] == ["111"]
+
+
+def test_manifest_processing_updates_am_ids(state):
+    """After SyncEngine runs, manifest entries update am_track_id in DB."""
+    staging_dir = Path("/tmp/fake-staging")
+
+    # Simulate state after SyncEngine has run — track exists in DB
+    state.add_track(Track(
+        track_id="Artist/Album/01 - Song.flac",
+        title="Song", artist="Artist", album="Album",
+        local_path="/music/artists/Artist/Album/01 - Song.flac",
+        downloaded_at="2026-01-01T00:00:00",
+    ))
+
+    # Manifest from Go downloader (absolute staging path)
+    manifest_entries = [
+        {
+            "am_track_id": "9876543210",
+            "local_path": str(staging_dir / "Artist" / "Album" / "01 - Song.flac"),
+        }
+    ]
+
+    # Derive track_id from manifest entry (same logic as server.py)
+    for entry in manifest_entries:
+        rel = Path(entry["local_path"]).relative_to(staging_dir)
+        track_id = str(rel.with_suffix(".flac"))
+        state.update_track_am_id(track_id, entry["am_track_id"])
+
+    import sqlite3
+    with sqlite3.connect(state.db_path) as conn:
+        row = conn.execute(
+            "SELECT am_track_id FROM tracks WHERE track_id = ?",
+            ("Artist/Album/01 - Song.flac",)
+        ).fetchone()
+    assert row[0] == "9876543210"
+
+
+def test_manifest_processing_handles_m4a_source(state):
+    """Manifest entry with .m4a extension normalises to .flac track_id."""
+    staging_dir = Path("/tmp/fake-staging2")
+
+    state.add_track(Track(
+        track_id="Artist/Album/01 - Song.flac",
+        title="Song", artist="Artist", album="Album",
+        local_path="/music/artists/Artist/Album/01 - Song.flac",
+        downloaded_at="2026-01-01T00:00:00",
+    ))
+
+    # Go downloader produces .m4a before FLAC conversion
+    entry_path = str(staging_dir / "Artist" / "Album" / "01 - Song.m4a")
+    rel = Path(entry_path).relative_to(staging_dir)
+    track_id = str(rel.with_suffix(".flac"))  # normalised to .flac
+    state.update_track_am_id(track_id, "1111111111")
+
+    import sqlite3
+    with sqlite3.connect(state.db_path) as conn:
+        row = conn.execute(
+            "SELECT am_track_id FROM tracks WHERE track_id = ?",
+            ("Artist/Album/01 - Song.flac",)
+        ).fetchone()
+    assert row[0] == "1111111111"

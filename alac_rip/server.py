@@ -492,6 +492,19 @@ def _run_job(job: dict) -> None:
                                   "error", 0, 0, 0, str(log_path), msg)
         return
 
+    # ── Process manifest: update am_track_id in DB ────────────────────────────
+    if manifest_path.exists():
+        try:
+            entries = json.loads(manifest_path.read_text())
+            for entry in entries:
+                rel = Path(entry["local_path"]).relative_to(save_folder)
+                track_id = str(rel.with_suffix(".flac"))
+                state.update_track_am_id(track_id, entry["am_track_id"])
+            manifest_path.unlink()
+            write_log(f"[manifest] updated AM IDs for {len(entries)} tracks")
+        except Exception as exc:
+            write_log(f"[manifest] warning: could not process manifest: {exc}")
+
     if playlist_name:
         state.update_playlist_synced(playlist_name)
         state.record_sync_run(
