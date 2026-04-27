@@ -181,11 +181,23 @@
 
 <div class="flex flex-col h-full">
   <!-- Header -->
-  <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);flex-shrink:0;">
-    <div style="display:flex;align-items:flex-end;gap:16px;">
+  <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);flex-shrink:0;position:relative;overflow:hidden;">
+    <!-- Blurred art backdrop -->
+    {#if mosaicArts().some(a => a)}
+      <div style="position:absolute;inset:0;display:grid;grid-template-columns:repeat(4,1fr);z-index:0;pointer-events:none;" aria-hidden="true">
+        {#each mosaicArts() as art}
+          {#if art}
+            <div style="background:url('{thumbUrl(art, '200x200bb')}') center/cover;filter:blur(24px) brightness(0.28) saturate(1.6);transform:scale(1.3);"></div>
+          {:else}
+            <div style="background:#12100e;"></div>
+          {/if}
+        {/each}
+      </div>
+    {/if}
+    <div style="display:flex;align-items:flex-end;gap:16px;position:relative;z-index:1;">
 
       <!-- 2×2 mosaic -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;width:72px;height:72px;border-radius:10px;overflow:hidden;flex-shrink:0;box-shadow:0 4px 16px rgba(0,0,0,0.4);">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;width:72px;height:72px;border-radius:10px;overflow:hidden;flex-shrink:0;box-shadow:0 4px 24px rgba(0,0,0,0.6);">
         {#each mosaicArts() as art}
           {#if art}
             <img src={thumbUrl(art, "72x72bb")} alt="" style="width:100%;height:100%;object-fit:cover;"
@@ -320,9 +332,9 @@
         </thead>
         <tbody>
           {#each sorted as track, i}
-            <tr style="border-bottom:1px solid rgba(255,255,255,0.03);"
-              onmouseenter={e => { (e.currentTarget as HTMLElement).style.background='rgba(245,158,11,0.04)'; }}
-              onmouseleave={e => { (e.currentTarget as HTMLElement).style.background='transparent'; }}>
+            <tr style="border-bottom:1px solid rgba(245,158,11,0.06);transition:background .12s;"
+              onmouseenter={e => { (e.currentTarget as HTMLElement).style.background='rgba(245,158,11,0.07)'; (e.currentTarget as HTMLElement).style.backdropFilter='blur(8px)'; }}
+              onmouseleave={e => { (e.currentTarget as HTMLElement).style.background='transparent'; (e.currentTarget as HTMLElement).style.backdropFilter=''; }}>
               <td style="padding:6px 10px;color:var(--text-muted);font-size:11px;font-variant-numeric:tabular-nums;">{i + 1}</td>
               <td style="padding:6px 4px;">
                 {#if track.artwork_url}

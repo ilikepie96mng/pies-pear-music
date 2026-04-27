@@ -72,10 +72,14 @@
 
 </script>
 
-<aside style="width:180px;min-width:180px;background:var(--bg);display:flex;flex-direction:column;border-right:1px solid var(--border);">
+<aside style="width:180px;min-width:180px;background:linear-gradient(180deg,rgba(245,158,11,0.08) 0%,#12100e 140px);display:flex;flex-direction:column;border-right:1px solid var(--border);">
   <!-- Logo -->
-  <div style="padding:16px;border-bottom:1px solid var(--border);">
-    <div style="color:var(--accent);font-weight:700;font-size:15px;letter-spacing:.02em;">pies</div>
+  <div style="padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">
+    <span style="font-size:18px;line-height:1;">◉</span>
+    <div>
+      <div style="color:var(--accent);font-weight:700;font-size:13px;letter-spacing:.02em;line-height:1.1;">Pies Pear</div>
+      <div style="color:var(--text-muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase;">Music</div>
+    </div>
   </div>
 
   <!-- Nav -->

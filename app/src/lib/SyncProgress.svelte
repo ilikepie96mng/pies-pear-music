@@ -288,7 +288,7 @@
       </div>
       <div class="h-1 bg-[#1a1a1a] rounded-full overflow-hidden">
         {#if progressTotal > 0}
-          <div class="h-full rounded-full transition-all duration-300" style="width: {progressPct}%; background:var(--accent);"></div>
+          <div class="h-full rounded-full transition-all duration-300" style="width: {progressPct}%; background:linear-gradient(90deg,#b45309,#f59e0b,#fbbf24,#f59e0b,#b45309);background-size:300% 100%;animation:shimmer 2s linear infinite;"></div>
         {:else}
           <div class="h-full bg-amber-700 rounded-full w-full animate-pulse"></div>
         {/if}

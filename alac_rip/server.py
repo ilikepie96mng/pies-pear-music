@@ -425,6 +425,7 @@ def _run_job(job: dict) -> None:
 
     # ── Pre-flight: diff AM playlist against local DB ─────────────────────────
     skip_file_path: Optional[Path] = None
+    _artwork_map: dict[str, str] = {}  # saved for post-manifest artwork backfill
 
     if playlist_name:
         try:
@@ -458,6 +459,7 @@ def _run_job(job: dict) -> None:
             }
             if artwork_map:
                 state.bulk_store_artwork(artwork_map)
+                _artwork_map = artwork_map
 
             owned = state.get_playlist_am_ids(playlist_name)
             new_ids = am_ids_set - owned
@@ -561,6 +563,10 @@ def _run_job(job: dict) -> None:
             write_log(f"[manifest] updated AM IDs for {len(entries)} tracks")
         except Exception as exc:
             write_log(f"[manifest] warning: could not process manifest: {exc}")
+
+    # Backfill artwork for tracks that just got their am_track_id set by manifest
+    if _artwork_map:
+        state.bulk_store_artwork(_artwork_map)
 
     shutil.rmtree(_tmp, ignore_errors=True)
 
