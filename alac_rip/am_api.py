@@ -59,7 +59,7 @@ def fetch_playlist_tracks(
     Paginates automatically. Raises AMApiError on invalid URL, network failure,
     or non-200 response.
     """
-    match = re.search(r"/(pl\.[A-Za-z0-9]+)", playlist_url)
+    match = re.search(r"/(pl\.[A-Za-z0-9\-]+)", playlist_url)
     if not match:
         raise AMApiError(f"Could not extract playlist ID from URL: {playlist_url}")
     playlist_id = match.group(1)
