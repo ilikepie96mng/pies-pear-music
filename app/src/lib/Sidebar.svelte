@@ -132,9 +132,9 @@
     {#if showAddForm}
       <div style="padding:4px;display:flex;flex-direction:column;gap:4px;">
         <input bind:value={newName} placeholder="Name"
-          style="background:#1a1a1a;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:11px;color:white;width:100%;outline:none;box-sizing:border-box;" />
+          style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;color:white;width:100%;outline:none;box-sizing:border-box;" />
         <input bind:value={newUrl} placeholder="Playlist URL"
-          style="background:#1a1a1a;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:11px;color:white;width:100%;outline:none;box-sizing:border-box;" />
+          style="background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:11px;color:white;width:100%;outline:none;box-sizing:border-box;" />
         {#if addError}
           <div style="color:#f87171;font-size:10px;background:rgba(127,29,29,.5);border:1px solid rgba(127,29,29,.6);border-radius:4px;padding:4px 8px;word-break:break-all;">{addError}</div>
         {/if}
@@ -144,7 +144,7 @@
             {adding ? "…" : "Add"}
           </button>
           <button onclick={() => { showAddForm = false; addError = null; }}
-            style="flex:1;background:#1a1a1a;color:var(--text-secondary);font-size:11px;border:none;border-radius:4px;padding:4px;cursor:pointer;">Cancel</button>
+            style="flex:1;background:var(--surface);color:var(--text-secondary);font-size:11px;border:none;border-radius:4px;padding:4px;cursor:pointer;">Cancel</button>
         </div>
       </div>
     {:else}

@@ -35,7 +35,7 @@
       onclick={() => (showPopover = !showPopover)}
       class="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] text-xs text-zinc-300 hover:border-[#333] transition-colors"
     >
-      <span class="w-2.5 h-2.5 border border-[#1db954] border-t-transparent rounded-full animate-spin flex-shrink-0"></span>
+      <span class="w-2.5 h-2.5 border border-[var(--accent)] border-t-transparent rounded-full animate-spin flex-shrink-0"></span>
       <span class="truncate flex-1 text-left">
         {#if status?.active}
           {jobLabel(status.active)}
@@ -52,7 +52,7 @@
       >
         {#if status?.active}
           <div class="flex items-center gap-2 px-2 py-1.5 text-xs">
-            <span class="w-2 h-2 border border-[#1db954] border-t-transparent rounded-full animate-spin flex-shrink-0"></span>
+            <span class="w-2 h-2 border border-[var(--accent)] border-t-transparent rounded-full animate-spin flex-shrink-0"></span>
             <span class="text-white truncate">{jobLabel(status.active)}</span>
             <span class="text-zinc-600 ml-auto flex-shrink-0">running</span>
           </div>
