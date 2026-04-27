@@ -23,6 +23,7 @@ export interface Playlist {
   url: string;
   last_synced: string | null;
   paused: boolean;
+  thumbnail_url: string | null;
 }
 
 export interface Track {
@@ -32,6 +33,7 @@ export interface Track {
   album: string;
   local_path: string;
   downloaded_at: string;
+  artwork_url: string | null;
 }
 
 export interface SyncEvent {
