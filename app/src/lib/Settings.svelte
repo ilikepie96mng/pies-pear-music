@@ -78,7 +78,7 @@
   {#if !loaded}
     <div class="flex flex-col gap-4">
       {#each [1,2,3] as _}
-        <div class="h-14 rounded-xl bg-[#111] animate-pulse border border-[#1e1e1e]"></div>
+        <div class="h-14 rounded-xl bg-[#12100e] animate-pulse border border-[rgba(255,255,255,0.06)]"></div>
       {/each}
     </div>
   {:else}
@@ -92,7 +92,7 @@
             {/if}
           </div>
 
-          <div class="flex flex-col gap-3 border border-[#1e1e1e] rounded-xl overflow-hidden">
+          <div class="flex flex-col gap-3 border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden">
             {#each section.fields as field, fi}
               <div class="px-4 {fi > 0 ? 'pt-3 border-t border-[#181818]' : 'pt-4'} pb-3">
                 <div class="flex items-center justify-between mb-1.5">
@@ -136,7 +136,7 @@
         disabled={saving}
         class="w-full py-2.5 rounded-xl font-bold text-sm transition-colors disabled:opacity-50
           {saved
-            ? 'bg-green-900/50 text-green-400 border border-green-800/50'
+            ? 'bg-amber-900/50 text-amber-400 border border-amber-800/50'
             : 'bg-amber-700 hover:bg-amber-600 text-white'}">
         {saving ? "Saving…" : saved ? "✓ Saved" : "Save changes"}
       </button>

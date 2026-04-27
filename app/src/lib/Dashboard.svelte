@@ -120,7 +120,7 @@
   {#if loading}
     <div class="flex flex-col gap-4">
       {#each [1,2,3] as _}
-        <div class="h-20 rounded-xl bg-[#111] animate-pulse border border-[#1e1e1e]"></div>
+        <div class="h-20 rounded-xl bg-[#12100e] animate-pulse border border-[rgba(255,255,255,0.06)]"></div>
       {/each}
     </div>
   {:else if error}
@@ -152,8 +152,8 @@
     </div>
 
     <!-- Apple Music connection panel -->
-    <div class="border border-[#1e1e1e] rounded-xl overflow-hidden mb-6">
-      <div class="px-4 py-2.5 bg-[#111] border-b border-[#1e1e1e] flex items-center justify-between">
+    <div class="border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden mb-6">
+      <div class="px-4 py-2.5 bg-[#12100e] border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
         <span class="text-zinc-400 text-xs uppercase tracking-widest font-semibold">Apple Music</span>
         <span class="flex items-center gap-1.5 text-xs {wrapperRunning ? 'text-green-400' : 'text-zinc-600'}">
           <span class="w-1.5 h-1.5 rounded-full {wrapperRunning ? 'bg-green-500' : 'bg-zinc-600'}"></span>
@@ -214,17 +214,17 @@
 
     <!-- Stat cards -->
     <div class="grid grid-cols-3 gap-3 mb-6">
-      <div class="bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-4">
+      <div class="bg-[#12100e] border border-[rgba(255,255,255,0.06)] rounded-xl px-4 py-4">
         <div class="text-zinc-500 text-[10px] uppercase tracking-widest font-semibold mb-1">Playlists</div>
         <div class="text-white text-3xl font-bold tracking-tight">{stats.playlist_count}</div>
         <div class="text-zinc-600 text-xs mt-1">tracked</div>
       </div>
-      <div class="bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-4">
+      <div class="bg-[#12100e] border border-[rgba(255,255,255,0.06)] rounded-xl px-4 py-4">
         <div class="text-zinc-500 text-[10px] uppercase tracking-widest font-semibold mb-1">Tracks</div>
         <div class="text-white text-3xl font-bold tracking-tight">{stats.total_tracks.toLocaleString()}</div>
         <div class="text-zinc-600 text-xs mt-1">downloaded</div>
       </div>
-      <div class="bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-4">
+      <div class="bg-[#12100e] border border-[rgba(255,255,255,0.06)] rounded-xl px-4 py-4">
         <div class="text-zinc-500 text-[10px] uppercase tracking-widest font-semibold mb-1">Last sync</div>
         <div class="text-white text-lg font-bold tracking-tight leading-tight mt-1">{formatDate(stats.last_sync)}</div>
       </div>
@@ -232,13 +232,13 @@
 
     <!-- Playlist table -->
     {#if stats.playlists.length > 0}
-      <div class="border border-[#1e1e1e] rounded-xl overflow-hidden mb-6">
-        <div class="px-4 py-2.5 bg-[#111] border-b border-[#1e1e1e]">
+      <div class="border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden mb-6">
+        <div class="px-4 py-2.5 bg-[#12100e] border-b border-[rgba(255,255,255,0.06)]">
           <span class="text-zinc-400 text-xs uppercase tracking-widest font-semibold">Playlists</span>
         </div>
         <div class="divide-y divide-[#181818]">
           {#each stats.playlists as pl}
-            <div class="flex items-center gap-3 px-4 py-3 hover:bg-[#111] transition-colors group">
+            <div class="flex items-center gap-3 px-4 py-3 hover:bg-[#12100e] transition-colors group">
               <div class="flex-1 min-w-0">
                 <button
                   onclick={() => onselectPlaylist(pl.name)}
@@ -258,15 +258,15 @@
         </div>
       </div>
     {:else}
-      <div class="border border-[#1e1e1e] rounded-xl px-6 py-10 text-center bg-[#111]">
+      <div class="border border-[rgba(255,255,255,0.06)] rounded-xl px-6 py-10 text-center bg-[#12100e]">
         <div class="text-zinc-600 text-sm">No playlists added yet</div>
         <div class="text-zinc-700 text-xs mt-1">Add one from the sidebar to get started</div>
       </div>
     {/if}
 
     <!-- Recent sync runs -->
-    <div class="border border-[#1e1e1e] rounded-xl overflow-hidden">
-      <div class="px-4 py-2.5 bg-[#111] border-b border-[#1e1e1e]">
+    <div class="border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden">
+      <div class="px-4 py-2.5 bg-[#12100e] border-b border-[rgba(255,255,255,0.06)]">
         <span class="text-zinc-400 text-xs uppercase tracking-widest font-semibold">Recent Activity</span>
       </div>
       {#if recentRuns.length === 0}

@@ -108,7 +108,7 @@
   {#if !loading && checks.length}
     <div class="rounded-xl px-4 py-3 mb-6 flex items-center gap-3 border
       {overallOk
-        ? 'bg-green-950/30 border-green-900/50 text-green-400'
+        ? 'bg-amber-950/30 border-amber-900/50 text-amber-400'
         : criticalCount > 0
           ? 'bg-red-950/30 border-red-900/50 text-red-400'
           : 'bg-amber-950/30 border-amber-900/50 text-amber-400'}">
@@ -135,12 +135,12 @@
     {#each GROUPS as group}
       {@const groupChecks = checksForGroup(group.labels)}
       {@const groupFailing = groupChecks.filter(c => !c.ok).length}
-      <div class="border border-[#1e1e1e] rounded-xl overflow-hidden">
-        <div class="px-4 py-2.5 bg-[#111] border-b border-[#1e1e1e] flex items-center justify-between">
+      <div class="border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden">
+        <div class="px-4 py-2.5 bg-[#12100e] border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
           <span class="text-zinc-400 text-xs uppercase tracking-widest font-semibold">{group.title}</span>
           {#if !loading}
             {#if groupFailing === 0}
-              <span class="text-green-500 text-xs">✓ all clear</span>
+              <span class="text-amber-500 text-xs">✓ all clear</span>
             {:else if group.critical}
               <span class="text-red-400 text-xs">{groupFailing} critical</span>
             {:else}
@@ -156,7 +156,7 @@
                 <div class="w-4 h-4 mt-0.5 rounded-full bg-[#222] animate-pulse flex-shrink-0"></div>
               {:else}
                 <span class="flex-shrink-0 mt-0.5 text-sm font-bold
-                  {check.ok ? 'text-green-500' : CRITICAL.has(check.label) ? 'text-red-500' : 'text-amber-500'}">
+                  {check.ok ? 'text-amber-500' : CRITICAL.has(check.label) ? 'text-red-500' : 'text-amber-500'}">
                   {check.ok ? "✓" : "✗"}
                 </span>
               {/if}

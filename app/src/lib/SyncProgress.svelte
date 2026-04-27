@@ -207,7 +207,7 @@
   </div>
 
   {#if logPath}
-    <div class="mb-4 flex items-center justify-between gap-3 rounded-xl border border-[#1a1a1a] bg-[#111] px-3 py-2">
+    <div class="mb-4 flex items-center justify-between gap-3 rounded-xl border border-[#1a1a1a] bg-[#12100e] px-3 py-2">
       <div class="min-w-0">
         <div class="text-[10px] uppercase tracking-widest text-zinc-600 font-semibold">Session log</div>
         <div class="truncate font-mono text-[11px] text-zinc-400" title={logPath}>{logPath}</div>
@@ -229,7 +229,7 @@
       <div class="flex items-center gap-0">
         <div class="flex flex-col items-center gap-1">
           <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors
-            {done   ? 'bg-green-900/60 text-green-400 border border-green-800/50' :
+            {done   ? 'bg-amber-900/60 text-amber-400 border border-amber-800/50' :
              active  ? 'bg-amber-800/60 text-amber-300 border border-amber-700/50' :
                        'bg-[#1a1a1a] text-zinc-600 border border-[#2a2a2a]'}">
             {#if done}✓{:else if active}
@@ -237,12 +237,12 @@
             {:else}{i + 1}{/if}
           </div>
           <span class="text-[9px] uppercase tracking-widest font-semibold whitespace-nowrap
-            {done ? 'text-green-500' : active ? 'text-amber-400' : 'text-zinc-700'}">
+            {done ? 'text-amber-500' : active ? 'text-amber-400' : 'text-zinc-700'}">
             {step.label}
           </span>
         </div>
         {#if i < PHASES.length - 1}
-          <div class="w-12 h-px mb-4 mx-1 transition-colors {done ? 'bg-green-900/50' : 'bg-[#222]'}"></div>
+          <div class="w-12 h-px mb-4 mx-1 transition-colors {done ? 'bg-amber-900/50' : 'bg-[#222]'}"></div>
         {/if}
       </div>
     {/each}
@@ -257,15 +257,15 @@
     <!-- Live counters (visible during processing) -->
     {#if (phase === "downloading" || phase === "organizing") && progressTotal > 0}
       <div class="flex gap-4 mb-4">
-        <div class="flex-1 bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-3">
-          <div class="text-green-400 text-xl font-bold">{liveNew}</div>
+        <div class="flex-1 bg-[#12100e] border border-[rgba(255,255,255,0.06)] rounded-xl px-4 py-3">
+          <div class="text-amber-400 text-xl font-bold">{liveNew}</div>
           <div class="text-zinc-600 text-xs mt-0.5">new</div>
         </div>
-        <div class="flex-1 bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-3">
+        <div class="flex-1 bg-[#12100e] border border-[rgba(255,255,255,0.06)] rounded-xl px-4 py-3">
           <div class="text-zinc-400 text-xl font-bold">{liveSkipped}</div>
           <div class="text-zinc-600 text-xs mt-0.5">skipped</div>
         </div>
-        <div class="flex-1 bg-[#111] border border-[#1e1e1e] rounded-xl px-4 py-3">
+        <div class="flex-1 bg-[#12100e] border border-[rgba(255,255,255,0.06)] rounded-xl px-4 py-3">
           <div class="text-xl font-bold {liveErrors > 0 ? 'text-red-400' : 'text-zinc-600'}">{liveErrors}</div>
           <div class="text-zinc-600 text-xs mt-0.5">errors</div>
         </div>
@@ -288,7 +288,7 @@
       </div>
       <div class="h-1 bg-[#1a1a1a] rounded-full overflow-hidden">
         {#if progressTotal > 0}
-          <div class="h-full bg-[#1db954] rounded-full transition-all duration-300" style="width: {progressPct}%"></div>
+          <div class="h-full rounded-full transition-all duration-300" style="width: {progressPct}%; background:var(--accent);"></div>
         {:else}
           <div class="h-full bg-amber-700 rounded-full w-full animate-pulse"></div>
         {/if}
@@ -307,7 +307,7 @@
     >
       {#each logs as line (line.id)}
         <div class="
-          {line.kind === 'add'  ? 'text-green-400' :
+          {line.kind === 'add'  ? 'text-amber-400' :
            line.kind === 'skip' ? 'text-zinc-600' :
            line.kind === 'err'  ? 'text-red-400' :
            line.kind === 'done' ? 'text-amber-400' :
@@ -342,8 +342,8 @@
 
   {:else if status === "done" && result}
     <!-- Result -->
-    <div class="bg-[#111] rounded-xl p-6 border border-[#1e1e1e] mb-4">
-      <div class="text-green-400 font-bold text-sm mb-4 flex items-center gap-2">
+    <div class="bg-[#12100e] rounded-xl p-6 border border-[rgba(255,255,255,0.06)] mb-4">
+      <div class="text-amber-400 font-bold text-sm mb-4 flex items-center gap-2">
         <span>✓</span> Sync complete
       </div>
       <div class="flex gap-6">
@@ -371,7 +371,7 @@
         <div class="mt-2 relative">
           <div class="bg-[#080808] border border-[#1a1a1a] rounded-xl p-3 font-mono text-xs text-zinc-600 max-h-48 overflow-y-auto leading-relaxed">
             {#each logs as line (line.id)}
-              <div class="{line.kind === 'add' ? 'text-green-500/70' : line.kind === 'err' ? 'text-red-400/70' : ''}">{line.text}</div>
+              <div class="{line.kind === 'add' ? 'text-amber-500/70' : line.kind === 'err' ? 'text-red-400/70' : ''}">{line.text}</div>
             {/each}
           </div>
           <button onclick={copyLog}
@@ -405,7 +405,7 @@
             {#each logs as line (line.id)}
               <div class="
                 {line.kind === 'err' ? 'text-red-400' :
-                 line.kind === 'add' ? 'text-green-400/70' :
+                 line.kind === 'add' ? 'text-amber-400/70' :
                                        'text-zinc-600'}">
                 {line.text}
               </div>

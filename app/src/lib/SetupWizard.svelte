@@ -91,7 +91,7 @@
   }
 </script>
 
-<div class="flex h-full items-center justify-center bg-[#0f0f0f] p-8">
+<div class="flex h-full items-center justify-center bg-[#0e0c0a] p-8">
   <div class="w-full max-w-xl">
 
     <!-- Step indicator -->
@@ -121,7 +121,7 @@
           </p>
         </div>
 
-        <div class="border border-[#222] rounded-xl p-4 flex flex-col gap-2 bg-[#111]">
+        <div class="border border-[rgba(255,255,255,0.06)] rounded-xl p-4 flex flex-col gap-2 bg-[#12100e]">
           <div class="text-zinc-400 text-xs font-semibold uppercase tracking-widest mb-1">What we'll check</div>
           {#each ["System tools (ffmpeg, Git)", "Configuration (directories, config file)", "Automation (systemd timer)"] as item}
             <div class="flex items-center gap-2 text-sm text-zinc-400">
@@ -154,14 +154,14 @@
         {:else if checks.length}
           <div class="flex flex-col gap-3">
             {#each GROUPS as group}
-              <div class="border border-[#1e1e1e] rounded-xl overflow-hidden">
-                <div class="px-4 py-2 bg-[#111] border-b border-[#1e1e1e]">
+              <div class="border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden">
+                <div class="px-4 py-2 bg-[#12100e] border-b border-[rgba(255,255,255,0.06)]">
                   <span class="text-zinc-500 text-[10px] uppercase tracking-widest font-semibold">{group.title}</span>
                 </div>
                 <div class="divide-y divide-[#1a1a1a]">
                   {#each checksForGroup(group.labels) as check}
                     <div class="flex items-center gap-3 px-4 py-2.5">
-                      <span class="text-base {check.ok ? 'text-green-500' : CRITICAL.has(check.label) ? 'text-red-500' : 'text-amber-500'}">
+                      <span class="text-base {check.ok ? 'text-amber-500' : CRITICAL.has(check.label) ? 'text-red-500' : 'text-amber-500'}">
                         {check.ok ? "✓" : "✗"}
                       </span>
                       <span class="text-sm text-white flex-1">{check.label}</span>
@@ -252,7 +252,7 @@
           </p>
         </div>
 
-        <div class="border border-[#1e1e1e] rounded-xl p-4 bg-[#111] text-left flex flex-col gap-2">
+        <div class="border border-[rgba(255,255,255,0.06)] rounded-xl p-4 bg-[#12100e] text-left flex flex-col gap-2">
           <div class="text-zinc-500 text-[10px] uppercase tracking-widest font-semibold mb-1">Quick start</div>
           {#each [
             "Add a playlist via the sidebar (name + URL)",

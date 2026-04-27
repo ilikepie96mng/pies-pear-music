@@ -98,12 +98,12 @@
       bind:value={url}
       placeholder="https://music.apple.com/…"
       disabled={status === "running" || status === "queued"}
-      class="flex-1 bg-[#111] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-700 outline-none focus:border-[#1db954] disabled:opacity-50"
+      class="flex-1 bg-[#12100e] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-700 outline-none focus:border-amber-500 disabled:opacity-50"
     />
     <select
       bind:value={format}
       disabled={status === "running" || status === "queued"}
-      class="bg-[#111] border border-[#2a2a2a] rounded-lg px-2 py-2 text-sm text-zinc-300 outline-none disabled:opacity-50"
+      class="bg-[#12100e] border border-[#2a2a2a] rounded-lg px-2 py-2 text-sm text-zinc-300 outline-none disabled:opacity-50"
     >
       <option value="ALAC">ALAC</option>
       <option value="AAC">AAC</option>
@@ -112,7 +112,7 @@
     <button
       onclick={startDownload}
       disabled={status === "running" || status === "queued" || !url.trim()}
-      class="bg-[#1db954] text-black text-sm font-bold px-4 rounded-lg hover:bg-[#1ed760] transition-colors disabled:opacity-50"
+      class="text-sm font-bold px-4 rounded-lg hover:bg-amber-400 transition-colors disabled:opacity-50" style="background:var(--accent);color:black;"
     >
       ↓ Download
     </button>
@@ -131,7 +131,7 @@
         <div class="flex items-center gap-0">
           <div class="flex flex-col items-center gap-1">
             <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors
-              {done   ? 'bg-green-900/60 text-green-400 border border-green-800/50' :
+              {done   ? 'bg-amber-900/60 text-amber-400 border border-amber-800/50' :
                active  ? 'bg-amber-800/60 text-amber-300 border border-amber-700/50' :
                          'bg-[#1a1a1a] text-zinc-600 border border-[#2a2a2a]'}">
               {#if done}✓{:else if active}
@@ -139,12 +139,12 @@
               {:else}{i + 1}{/if}
             </div>
             <span class="text-[9px] uppercase tracking-widest font-semibold whitespace-nowrap
-              {done ? 'text-green-500' : active ? 'text-amber-400' : 'text-zinc-700'}">
+              {done ? 'text-amber-500' : active ? 'text-amber-400' : 'text-zinc-700'}">
               {step.label}
             </span>
           </div>
           {#if i < PHASES.length - 1}
-            <div class="w-12 h-px mb-4 mx-1 transition-colors {done ? 'bg-green-900/50' : 'bg-[#222]'}"></div>
+            <div class="w-12 h-px mb-4 mx-1 transition-colors {done ? 'bg-amber-900/50' : 'bg-[#222]'}"></div>
           {/if}
         </div>
       {/each}
@@ -156,7 +156,7 @@
     >
       {#each logs as line (line.id)}
         <div class="
-          {line.kind === 'add'  ? 'text-green-400' :
+          {line.kind === 'add'  ? 'text-amber-400' :
            line.kind === 'skip' ? 'text-zinc-600' :
            line.kind === 'err'  ? 'text-red-400' :
                                   'text-zinc-500'}">
@@ -169,8 +169,8 @@
     </div>
 
   {:else if status === "done" && result}
-    <div class="bg-[#111] rounded-xl p-6 border border-[#1e1e1e]">
-      <div class="text-green-400 font-bold text-sm mb-4 flex items-center gap-2">✓ Download complete</div>
+    <div class="bg-[#12100e] rounded-xl p-6 border border-[rgba(255,255,255,0.06)]">
+      <div class="text-amber-400 font-bold text-sm mb-4 flex items-center gap-2">✓ Download complete</div>
       <div class="flex gap-6">
         <div>
           <div class="text-white text-3xl font-bold tabular-nums">{result.new}</div>
@@ -194,7 +194,7 @@
         </summary>
         <div class="mt-2 bg-[#080808] border border-[#1a1a1a] rounded-xl p-3 font-mono text-xs text-zinc-600 max-h-48 overflow-y-auto leading-relaxed">
           {#each logs as line (line.id)}
-            <div class="{line.kind === 'add' ? 'text-green-500/70' : line.kind === 'err' ? 'text-red-400/70' : ''}">{line.text}</div>
+            <div class="{line.kind === 'add' ? 'text-amber-500/70' : line.kind === 'err' ? 'text-red-400/70' : ''}">{line.text}</div>
           {/each}
         </div>
       </details>
