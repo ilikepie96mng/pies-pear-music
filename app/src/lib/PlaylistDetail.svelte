@@ -156,91 +156,106 @@
     { key: "album",        label: "Album" },
     { key: "downloaded_at", label: "Downloaded" },
   ];
+
+  function thumbUrl(url: string | null | undefined, size: string): string {
+    if (!url) return "";
+    return url.replace("{w}x{h}", size);
+  }
+
+  // First 4 distinct artwork URLs for the mosaic header
+  let mosaicArts = $derived(() => {
+    const seen = new Set<string>();
+    const result: (string | null)[] = [];
+    for (const t of tracks) {
+      if (result.length >= 4) break;
+      const key = t.artwork_url ?? "";
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(t.artwork_url ?? null);
+      }
+    }
+    while (result.length < 4) result.push(null);
+    return result;
+  });
 </script>
 
 <div class="flex flex-col h-full">
   <!-- Header -->
-  <div class="px-8 pt-8 pb-5 border-b border-[#1a1a1a] flex-shrink-0">
-    <div class="flex items-start justify-between gap-4">
-      <!-- Name + rename -->
-      <div class="flex-1 min-w-0">
+  <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);flex-shrink:0;">
+    <div style="display:flex;align-items:flex-end;gap:16px;">
+
+      <!-- 2×2 mosaic -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;width:72px;height:72px;border-radius:10px;overflow:hidden;flex-shrink:0;box-shadow:0 4px 16px rgba(0,0,0,0.4);">
+        {#each mosaicArts() as art}
+          {#if art}
+            <img src={thumbUrl(art, "72x72bb")} alt="" style="width:100%;height:100%;object-fit:cover;"
+              onerror={e => { const el = e.currentTarget as HTMLImageElement; el.style.display='none'; el.parentElement!.style.background='#1e1e1e'; }} />
+          {:else}
+            <div style="background:#1e1e1e;"></div>
+          {/if}
+        {/each}
+      </div>
+
+      <!-- Playlist info -->
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px;">Playlist</div>
+
         {#if editing}
-          <div class="flex items-center gap-2">
+          <div style="display:flex;align-items:center;gap:8px;">
             <input
               bind:this={nameInput}
               bind:value={draftName}
               onkeydown={onNameKeydown}
               onblur={commitRename}
               disabled={renaming}
-              class="bg-[#1a1a1a] border border-amber-700 rounded-lg px-3 py-1.5 text-white text-xl font-bold outline-none w-full max-w-sm"
+              style="background:#1a1a1a;border:1px solid var(--accent);border-radius:6px;padding:4px 10px;color:white;font-size:20px;font-weight:700;outline:none;width:100%;max-width:280px;"
             />
-            {#if renaming}
-              <span class="text-zinc-500 text-sm">Saving…</span>
-            {/if}
+            {#if renaming}<span style="color:var(--text-muted);font-size:12px;">Saving…</span>{/if}
           </div>
-          {#if renameError}
-            <div class="text-red-400 text-xs mt-1">{renameError}</div>
-          {/if}
+          {#if renameError}<div style="color:#f87171;font-size:11px;margin-top:2px;">{renameError}</div>{/if}
         {:else}
-          <div class="flex items-center gap-2 group">
-            <h1 class="text-white text-2xl font-bold tracking-tight truncate">{playlist.name}</h1>
-            <button
-              onclick={startEditing}
-              class="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-600 hover:text-zinc-400 text-sm"
-              title="Rename">✎</button>
+          <div style="display:flex;align-items:center;gap:6px;"
+            onmouseenter={e => { const btn = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[data-rename-btn]'); if (btn) btn.style.opacity='1'; }}
+            onmouseleave={e => { const btn = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[data-rename-btn]'); if (btn) btn.style.opacity='0'; }}>
+            <h1 style="color:var(--text-primary);font-size:22px;font-weight:700;letter-spacing:-.02em;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{playlist.name}</h1>
+            <button onclick={startEditing} data-rename-btn style="opacity:0;color:var(--text-muted);font-size:13px;background:transparent;border:none;cursor:pointer;" title="Rename">✎</button>
           </div>
         {/if}
 
-        <div class="flex items-center gap-4 mt-1.5 text-xs text-zinc-500">
+        <div style="display:flex;align-items:center;gap:10px;margin-top:4px;font-size:12px;color:var(--text-secondary);">
           <span>{tracks.length.toLocaleString()} tracks</span>
-          <span>·</span>
+          <span style="color:var(--text-muted);">·</span>
           <span>Last sync: {formatSyncDate(playlist.last_synced)}</span>
           {#if playlist.paused}
-            <span class="text-amber-500 font-semibold uppercase tracking-wider">paused</span>
+            <span style="color:var(--accent);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.05em;">paused</span>
           {/if}
         </div>
-        <div class="text-zinc-700 text-[10px] font-mono mt-1 truncate max-w-md" title={playlist.url}>{playlist.url}</div>
-
       </div>
 
       <!-- Actions -->
-      <div class="flex items-center gap-2 flex-shrink-0">
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
         {#if confirmDelete}
-          <span class="text-xs text-zinc-500 mr-1">Remove playlist?</span>
-          <button
-            onclick={deletePlaylist}
-            disabled={deleting}
-            class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40
-              bg-red-950/50 text-red-400 border border-red-900/50 hover:bg-red-950/80">
+          <span style="font-size:12px;color:var(--text-muted);">Remove playlist?</span>
+          <button onclick={deletePlaylist} disabled={deleting}
+            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(127,29,29,.4);color:#f87171;border:1px solid rgba(127,29,29,.5);cursor:pointer;opacity:{deleting?'.4':'1'}">
             {deleting ? "Removing…" : "Confirm"}
           </button>
-          <button
-            onclick={() => (confirmDelete = false)}
-            class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors
-              bg-[#1a1a1a] text-zinc-500 border border-[#2a2a2a] hover:text-white">
+          <button onclick={() => (confirmDelete = false)}
+            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:#1a1a1a;color:var(--text-secondary);border:1px solid #2a2a2a;cursor:pointer;">
             Cancel
           </button>
         {:else}
-          <button
-            onclick={() => (confirmDelete = true)}
-            class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors
-              bg-[#1a1a1a] text-zinc-600 border border-[#2a2a2a] hover:text-red-400">
-            ✕
-          </button>
-          <button
-            onclick={togglePause}
-            disabled={togglingPause}
-            class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40
+          <button onclick={() => (confirmDelete = true)}
+            style="padding:6px 10px;border-radius:6px;font-size:11px;background:#1a1a1a;color:#555;border:1px solid #2a2a2a;cursor:pointer;">✕</button>
+          <button onclick={togglePause} disabled={togglingPause}
+            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;opacity:{togglingPause?'.4':'1'};
               {playlist.paused
-                ? 'bg-amber-900/40 text-amber-400 border border-amber-800/50 hover:bg-amber-900/60'
-                : 'bg-[#1a1a1a] text-zinc-400 border border-[#2a2a2a] hover:text-white'}">
+                ? 'background:rgba(180,83,9,.3);color:#f59e0b;border:1px solid rgba(180,83,9,.4);'
+                : 'background:#1a1a1a;color:var(--text-secondary);border:1px solid #2a2a2a;'}">
             {playlist.paused ? "▶ Resume" : "⏸ Pause"}
           </button>
-          <button
-            onclick={() => onstartSync(playlist.name)}
-            disabled={playlist.paused}
-            class="px-4 py-1.5 rounded-lg text-xs font-bold transition-colors
-              bg-[#1db954] text-black hover:bg-[#1ed760] disabled:opacity-40">
+          <button onclick={() => onstartSync(playlist.name)} disabled={playlist.paused}
+            style="padding:6px 16px;border-radius:6px;font-size:11px;font-weight:700;background:var(--accent);color:black;border:none;cursor:pointer;opacity:{playlist.paused?'.4':'1'};">
             ↻ Sync
           </button>
         {/if}
@@ -248,71 +263,81 @@
     </div>
   </div>
 
-  <!-- Sync run history -->
   {#if runHistory.length > 0}
-    <div class="px-8 py-3 border-b border-[#1a1a1a] flex-shrink-0">
-      <div class="text-zinc-600 text-[10px] uppercase tracking-widest font-semibold mb-2">Sync History</div>
-      <div class="flex flex-col gap-1">
+    <div style="padding:10px 24px;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <div style="font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.1em;font-weight:600;margin-bottom:6px;">Sync History</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
         {#each runHistory as run}
-          <div class="flex items-center gap-2 text-xs">
-            <span class="w-1.5 h-1.5 rounded-full flex-shrink-0 {run.status === 'success' ? 'bg-green-500' : 'bg-red-500'}"></span>
-            <span class="text-zinc-500 w-28 flex-shrink-0">{formatSyncDate(run.started_at)}</span>
+          <div style="display:flex;align-items:center;gap:8px;font-size:11px;">
+            <span style="width:6px;height:6px;border-radius:50%;flex-shrink:0;background:{run.status === 'success' ? '#22c55e' : '#ef4444'};"></span>
+            <span style="color:var(--text-secondary);width:100px;flex-shrink:0;">{formatSyncDate(run.started_at)}</span>
             {#if run.status === 'error'}
-              <span class="text-red-400 truncate">{run.error_message ?? 'Error'}</span>
+              <span style="color:#f87171;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{run.error_message ?? 'Error'}</span>
             {:else}
-              <span class="text-zinc-600">{run.new_count} new · {run.skipped_count} skipped{run.error_count > 0 ? ` · ${run.error_count} err` : ''}</span>
+              <span style="color:var(--text-muted);">{run.new_count} new · {run.skipped_count} skipped{run.error_count > 0 ? ` · ${run.error_count} err` : ''}</span>
             {/if}
-            <span class="text-zinc-700 ml-auto flex-shrink-0">{formatDuration(run.started_at, run.ended_at)}</span>
+            <span style="color:#333;margin-left:auto;flex-shrink:0;">{formatDuration(run.started_at, run.ended_at)}</span>
           </div>
         {/each}
       </div>
     </div>
   {/if}
 
-  <!-- Track table -->
-  <div class="flex-1 overflow-auto">
+  <div style="flex:1;overflow:auto;">
     {#if loadingTracks}
-      <div class="flex items-center justify-center h-32 text-zinc-600 text-sm gap-2">
-        <span class="w-4 h-4 border border-zinc-700 border-t-zinc-400 rounded-full animate-spin"></span>
+      <div style="display:flex;align-items:center;justify-content:center;height:120px;color:var(--text-muted);font-size:13px;gap:8px;">
+        <span style="width:16px;height:16px;border:2px solid #333;border-top-color:var(--text-secondary);border-radius:50%;animation:spin 1s linear infinite;"></span>
         Loading tracks…
       </div>
     {:else if tracksError}
-      <div class="px-8 py-6 text-red-400 text-sm">{tracksError}</div>
+      <div style="padding:24px;color:#f87171;font-size:13px;">{tracksError}</div>
     {:else if tracks.length === 0}
-      <div class="flex flex-col items-center justify-center h-48 text-zinc-600">
-        <div class="text-sm">No tracks downloaded yet</div>
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:180px;color:var(--text-muted);">
+        <div style="font-size:13px;">No tracks downloaded yet</div>
         {#if !playlist.paused}
           <button onclick={() => onstartSync(playlist.name)}
-            class="mt-3 text-xs text-zinc-500 hover:text-white transition-colors">
+            style="margin-top:10px;font-size:12px;color:var(--text-secondary);background:transparent;border:none;cursor:pointer;">
             Run a sync to populate this playlist →
           </button>
         {/if}
       </div>
     {:else}
-      <table class="w-full text-sm border-collapse">
-        <thead class="sticky top-0 bg-[#0f0f0f] border-b border-[#1e1e1e]">
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead style="position:sticky;top:0;background:#0e0c0a;border-bottom:1px solid var(--border);">
           <tr>
-            <th class="w-10 px-4 py-2.5 text-left text-[10px] text-zinc-600 font-semibold uppercase tracking-widest">#</th>
+            <th style="width:36px;padding:8px 10px;text-align:left;font-size:9px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em;">#</th>
+            <th style="width:36px;padding:8px 4px;"></th>
             {#each COLS as col}
-              <th class="px-3 py-2.5 text-left">
-                <button
-                  onclick={() => setSort(col.key)}
-                  class="text-[10px] font-semibold uppercase tracking-widest transition-colors
-                    {sortKey === col.key ? 'text-amber-500' : 'text-zinc-600 hover:text-zinc-400'}">
+              <th style="padding:8px 10px;text-align:left;">
+                <button onclick={() => setSort(col.key)}
+                  style="font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;background:transparent;border:none;cursor:pointer;
+                    color:{sortKey === col.key ? 'var(--accent)' : 'var(--text-muted)'};">
                   {col.label}{sortKey === col.key ? (sortAsc ? " ↑" : " ↓") : ""}
                 </button>
               </th>
             {/each}
           </tr>
         </thead>
-        <tbody class="divide-y divide-[#141414]">
+        <tbody>
           {#each sorted as track, i}
-            <tr class="hover:bg-[#111] transition-colors group">
-              <td class="px-4 py-2.5 text-zinc-700 text-xs tabular-nums">{i + 1}</td>
-              <td class="px-3 py-2.5 text-white font-medium max-w-[200px] truncate" title={track.title}>{track.title}</td>
-              <td class="px-3 py-2.5 text-zinc-400 max-w-[160px] truncate" title={track.artist}>{track.artist}</td>
-              <td class="px-3 py-2.5 text-zinc-500 max-w-[160px] truncate" title={track.album}>{track.album}</td>
-              <td class="px-3 py-2.5 text-zinc-600 text-xs whitespace-nowrap">{formatDate(track.downloaded_at)}</td>
+            <tr style="border-bottom:1px solid rgba(255,255,255,0.03);"
+              onmouseenter={e => { (e.currentTarget as HTMLElement).style.background='rgba(245,158,11,0.04)'; }}
+              onmouseleave={e => { (e.currentTarget as HTMLElement).style.background='transparent'; }}>
+              <td style="padding:6px 10px;color:var(--text-muted);font-size:11px;font-variant-numeric:tabular-nums;">{i + 1}</td>
+              <td style="padding:6px 4px;">
+                {#if track.artwork_url}
+                  <img src={thumbUrl(track.artwork_url, "56x56bb")} alt=""
+                    style="width:28px;height:28px;border-radius:4px;object-fit:cover;display:block;"
+                    onerror={e => { const el = e.currentTarget as HTMLImageElement; el.style.display='none'; (el.nextElementSibling as HTMLElement)!.style.display='block'; }} />
+                  <div style="display:none;width:28px;height:28px;border-radius:4px;background:#1e1e1e;"></div>
+                {:else}
+                  <div style="width:28px;height:28px;border-radius:4px;background:#1e1e1e;"></div>
+                {/if}
+              </td>
+              <td style="padding:6px 10px;color:var(--text-primary);font-weight:500;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title={track.title}>{track.title}</td>
+              <td style="padding:6px 10px;color:var(--text-secondary);max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title={track.artist}>{track.artist}</td>
+              <td style="padding:6px 10px;color:var(--text-muted);max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title={track.album}>{track.album}</td>
+              <td style="padding:6px 10px;color:#333;font-size:11px;white-space:nowrap;">{formatDate(track.downloaded_at)}</td>
             </tr>
           {/each}
         </tbody>
