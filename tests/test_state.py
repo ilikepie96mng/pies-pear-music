@@ -150,3 +150,47 @@ def test_set_playlist_paused(state):
     state.set_playlist_paused("Toggle PL", False)
     playlists = state.get_playlists()
     assert playlists[0].paused is False
+
+
+def test_track_artwork_url_defaults_to_none(tmp_path):
+    sm = StateManager(tmp_path / "state.db")
+    track = Track("id1", "Title", "Artist", "Album", "/path", "2026-01-01T00:00:00", None)
+    sm.add_track(track)
+    sm.add_playlist("PL", "https://example.com")
+    sm.add_track_to_playlist("PL", "id1")
+    result = sm.get_playlist_tracks("PL")
+    assert result[0].artwork_url is None
+
+
+def test_update_track_artwork_stores_url(tmp_path):
+    sm = StateManager(tmp_path / "state.db")
+    track = Track("id1", "Title", "Artist", "Album", "/path", "2026-01-01T00:00:00", None)
+    sm.add_track(track)
+    sm.update_track_artwork("id1", "https://example.com/{w}x{h}bb.jpg")
+    sm.add_playlist("PL", "https://example.com")
+    sm.add_track_to_playlist("PL", "id1")
+    result = sm.get_playlist_tracks("PL")
+    assert result[0].artwork_url == "https://example.com/{w}x{h}bb.jpg"
+
+
+def test_get_playlist_thumbnail_returns_first_artwork(tmp_path):
+    sm = StateManager(tmp_path / "state.db")
+    sm.add_playlist("PL", "https://example.com")
+    t1 = Track("id1", "A", "Artist", "Album", "/p1", "2026-01-01T00:00:00", None)
+    t2 = Track("id2", "B", "Artist", "Album", "/p2", "2026-01-01T00:00:00", None)
+    sm.add_track(t1)
+    sm.add_track(t2)
+    sm.add_track_to_playlist("PL", "id1")
+    sm.add_track_to_playlist("PL", "id2")
+    sm.update_track_artwork("id2", "https://art.example.com/{w}x{h}bb.jpg")
+    thumb = sm.get_playlist_thumbnail("PL")
+    assert thumb == "https://art.example.com/{w}x{h}bb.jpg"
+
+
+def test_get_playlist_thumbnail_returns_none_when_no_artwork(tmp_path):
+    sm = StateManager(tmp_path / "state.db")
+    sm.add_playlist("PL", "https://example.com")
+    t = Track("id1", "A", "Artist", "Album", "/p", "2026-01-01T00:00:00", None)
+    sm.add_track(t)
+    sm.add_track_to_playlist("PL", "id1")
+    assert sm.get_playlist_thumbnail("PL") is None

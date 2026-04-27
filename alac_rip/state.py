@@ -13,6 +13,7 @@ class Track:
     album: str
     local_path: str
     downloaded_at: str
+    artwork_url: Optional[str] = None
 
 
 @dataclass
@@ -95,6 +96,8 @@ class StateManager:
             track_cols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
             if "am_track_id" not in track_cols:
                 conn.execute("ALTER TABLE tracks ADD COLUMN am_track_id TEXT")
+            if "artwork_url" not in track_cols:
+                conn.execute("ALTER TABLE tracks ADD COLUMN artwork_url TEXT")
 
     def is_downloaded(self, track_id: str) -> bool:
         with self._conn() as conn:
@@ -106,9 +109,9 @@ class StateManager:
     def add_track(self, track: Track) -> None:
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO tracks (track_id, title, artist, album, local_path, downloaded_at) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO tracks (track_id, title, artist, album, local_path, downloaded_at, artwork_url) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (track.track_id, track.title, track.artist,
-                 track.album, track.local_path, track.downloaded_at),
+                 track.album, track.local_path, track.downloaded_at, track.artwork_url),
             )
 
     def add_track_to_playlist(self, playlist_name: str, track_id: str) -> None:
@@ -123,7 +126,7 @@ class StateManager:
             rows = conn.execute(
                 """
                 SELECT t.track_id, t.title, t.artist, t.album,
-                       t.local_path, t.downloaded_at
+                       t.local_path, t.downloaded_at, t.artwork_url
                 FROM tracks t
                 JOIN playlist_tracks pt ON t.track_id = pt.track_id
                 WHERE pt.playlist_name = ?
@@ -184,13 +187,20 @@ class StateManager:
                 (am_track_id, track_id),
             )
 
+    def update_track_artwork(self, track_id: str, artwork_url: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE tracks SET artwork_url = ? WHERE track_id = ?",
+                (artwork_url, track_id),
+            )
+
     def get_playlist_tracks_without_am_id(self, playlist_name: str) -> list[Track]:
         """Return tracks in a playlist that have no AM track ID yet."""
         with self._conn() as conn:
             rows = conn.execute(
                 """
                 SELECT t.track_id, t.title, t.artist, t.album,
-                       t.local_path, t.downloaded_at
+                       t.local_path, t.downloaded_at, t.artwork_url
                 FROM tracks t
                 JOIN playlist_tracks pt ON t.track_id = pt.track_id
                 WHERE pt.playlist_name = ? AND t.am_track_id IS NULL
@@ -244,3 +254,16 @@ class StateManager:
                     (limit,),
                 ).fetchall()
             return [SyncRun(*r) for r in rows]
+
+    def get_playlist_thumbnail(self, playlist_name: str) -> Optional[str]:
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT t.artwork_url FROM tracks t
+                JOIN playlist_tracks pt ON t.track_id = pt.track_id
+                WHERE pt.playlist_name = ? AND t.artwork_url IS NOT NULL
+                LIMIT 1
+                """,
+                (playlist_name,),
+            ).fetchone()
+            return row[0] if row else None
