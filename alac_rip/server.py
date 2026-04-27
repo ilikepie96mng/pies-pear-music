@@ -455,10 +455,18 @@ def _run_job(job: dict) -> None:
                 f"{len(new_ids)} new, {len(skip_ids)} already owned"
             )
         except Exception as e:
-            emit_log("preflight",
-                f"Pre-flight check failed ({e}), falling back to full download"
-            )
-            skip_file_path = None
+            owned = state.get_playlist_am_ids(playlist_name)
+            if owned:
+                skip_file_path = Path(_tmp) / "skip.json"
+                skip_file_path.write_text(json.dumps({"skip_ids": list(owned)}))
+                emit_log("preflight",
+                    f"Pre-flight check failed ({e}), using {len(owned)} locally known IDs as skip list"
+                )
+            else:
+                skip_file_path = None
+                emit_log("preflight",
+                    f"Pre-flight check failed ({e}), falling back to full download"
+                )
 
     if format_ == "ATMOS":
         cmd = [go_bin, "run", "main.go", "--atmos", url]
