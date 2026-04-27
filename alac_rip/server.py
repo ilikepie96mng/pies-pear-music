@@ -422,8 +422,7 @@ def _run_job(job: dict) -> None:
             emit_log("preflight", "Checking playlist for new tracks…")
             bearer = am_api.fetch_bearer_token()
             storefront = amd_cfg.get("storefront", "us")
-            media_user_token = amd_cfg.get("media-user-token", "")
-            am_tracks = am_api.fetch_playlist_tracks(url, media_user_token, bearer, storefront)
+            am_tracks = am_api.fetch_public_playlist_tracks(url, bearer, storefront)
             am_ids_set = {t["id"] for t in am_tracks}
 
             # Retroactive: populate am_track_id for pre-1.5 tracks by title/artist match

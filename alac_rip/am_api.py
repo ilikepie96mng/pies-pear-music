@@ -48,6 +48,68 @@ def fetch_bearer_token() -> str:
     return _bearer_token_cache
 
 
+def fetch_public_playlist_tracks(
+    playlist_url: str,
+    bearer_token: str,
+    storefront: str = "us",
+) -> list[dict]:
+    """Return all tracks from a public playlist using only the bearer token.
+
+    Uses amp-api.music.apple.com which accepts bearer-only auth for public playlists.
+    Raises AMApiError on invalid URL, network failure, or non-200 response.
+    """
+    match = re.search(r"/(pl\.[A-Za-z0-9\-]+)", playlist_url)
+    if not match:
+        raise AMApiError(f"Could not extract playlist ID from URL: {playlist_url}")
+    playlist_id = match.group(1)
+
+    if not storefront or storefront == "enter your account storefront":
+        storefront = "us"
+
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Origin": "https://music.apple.com",
+    }
+
+    tracks: list[dict] = []
+    url: str | None = (
+        f"https://amp-api.music.apple.com/v1/catalog/{storefront}"
+        f"/playlists/{playlist_id}/tracks?limit=100"
+    )
+
+    while url:
+        try:
+            r = requests.get(url, headers=headers, timeout=15)
+        except requests.RequestException as e:
+            raise AMApiError(f"Request failed: {e}") from e
+
+        if r.status_code != 200:
+            raise AMApiError(
+                f"Apple Music API returned {r.status_code} for {url}"
+            )
+
+        data = r.json()
+        for item in data.get("data", []):
+            attrs = item.get("attributes", {})
+            tracks.append({
+                "id": item["id"],
+                "title": attrs.get("name", ""),
+                "artist": attrs.get("artistName", ""),
+            })
+
+        next_path = data.get("next")
+        if next_path:
+            url = (
+                next_path
+                if next_path.startswith("http")
+                else f"https://amp-api.music.apple.com{next_path}"
+            )
+        else:
+            url = None
+
+    return tracks
+
+
 def fetch_playlist_tracks(
     playlist_url: str,
     media_user_token: str,
