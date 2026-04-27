@@ -91,10 +91,12 @@ def fetch_public_playlist_tracks(
         data = r.json()
         for item in data.get("data", []):
             attrs = item.get("attributes", {})
+            art = attrs.get("artwork", {})
             tracks.append({
                 "id": item["id"],
                 "title": attrs.get("name", ""),
                 "artist": attrs.get("artistName", ""),
+                "artwork_url": art.get("url") or None,
             })
 
         next_path = data.get("next")

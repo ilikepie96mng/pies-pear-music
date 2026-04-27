@@ -255,6 +255,14 @@ class StateManager:
                 ).fetchall()
             return [SyncRun(*r) for r in rows]
 
+    def bulk_store_artwork(self, artwork_map: dict[str, str]) -> None:
+        """Store artwork URLs for tracks matched by am_track_id. Only fills nulls."""
+        with self._conn() as conn:
+            conn.executemany(
+                "UPDATE tracks SET artwork_url = ? WHERE am_track_id = ? AND artwork_url IS NULL",
+                [(url, am_id) for am_id, url in artwork_map.items()],
+            )
+
     def get_playlist_thumbnail(self, playlist_name: str) -> Optional[str]:
         with self._conn() as conn:
             row = conn.execute(

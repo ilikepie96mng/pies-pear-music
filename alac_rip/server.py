@@ -297,7 +297,13 @@ class PlaylistIn(BaseModel):
 
 
 def _playlist_dict(p) -> dict:
-    return {"name": p.name, "url": p.url, "last_synced": p.last_synced, "paused": p.paused}
+    return {
+        "name": p.name,
+        "url": p.url,
+        "last_synced": p.last_synced,
+        "paused": p.paused,
+        "thumbnail_url": state.get_playlist_thumbnail(p.name),
+    }
 
 
 @app.get("/playlists")
@@ -308,7 +314,10 @@ def get_playlists():
 @app.post("/playlists", status_code=201)
 def add_playlist(body: PlaylistIn):
     state.add_playlist(body.name, body.url)
-    return {"name": body.name, "url": body.url, "last_synced": None, "paused": False}
+    # Fetch the newly added playlist and return via _playlist_dict for consistency
+    from alac_rip.state import Playlist
+    playlist = Playlist(name=body.name, url=body.url, last_synced=None, paused=False)
+    return _playlist_dict(playlist)
 
 
 @app.delete("/playlists/{name}", status_code=204)
@@ -441,6 +450,14 @@ def _run_job(job: dict) -> None:
                         matched_count += 1
                 if matched_count:
                     emit_log("preflight", f"Matched {matched_count} existing tracks to AM IDs")
+
+            artwork_map = {
+                t["id"]: t["artwork_url"]
+                for t in am_tracks
+                if t.get("artwork_url") and t.get("id")
+            }
+            if artwork_map:
+                state.bulk_store_artwork(artwork_map)
 
             owned = state.get_playlist_am_ids(playlist_name)
             new_ids = am_ids_set - owned
@@ -741,6 +758,7 @@ def get_library():
                 "album": t.album,
                 "local_path": t.local_path,
                 "downloaded_at": t.downloaded_at,
+                "artwork_url": t.artwork_url,
             }
             for t in tracks
         ]

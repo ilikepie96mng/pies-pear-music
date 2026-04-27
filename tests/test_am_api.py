@@ -165,8 +165,8 @@ def test_fetch_public_playlist_tracks_returns_dicts():
             bearer_token="fake-bearer",
         )
     assert tracks == [
-        {"id": "111", "title": "Song A", "artist": "Artist A"},
-        {"id": "222", "title": "Song B", "artist": "Artist B"},
+        {"id": "111", "title": "Song A", "artist": "Artist A", "artwork_url": None},
+        {"id": "222", "title": "Song B", "artist": "Artist B", "artwork_url": None},
     ]
 
 
@@ -231,3 +231,40 @@ def test_fetch_public_playlist_tracks_raises_on_api_error():
                 "https://music.apple.com/us/playlist/test/pl.abc123",
                 bearer_token="fake-bearer",
             )
+
+
+def _make_tracks_response_with_art(ids_titles_artists_arts, next_url=None):
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.status_code = 200
+    body = {
+        "data": [
+            {
+                "id": id_,
+                "attributes": {
+                    "name": title,
+                    "artistName": artist,
+                    "artwork": {"url": art, "width": 3000, "height": 3000} if art else {},
+                }
+            }
+            for id_, title, artist, art in ids_titles_artists_arts
+        ]
+    }
+    if next_url:
+        body["next"] = next_url
+    resp.json.return_value = body
+    return resp
+
+
+def test_fetch_public_playlist_tracks_includes_artwork_url():
+    resp = _make_tracks_response_with_art([
+        ("111", "Song A", "Artist A", "https://example.com/{w}x{h}bb.jpg"),
+        ("222", "Song B", "Artist B", None),
+    ])
+    with patch("alac_rip.am_api.requests.get", return_value=resp):
+        tracks = fetch_public_playlist_tracks(
+            "https://music.apple.com/us/playlist/test/pl.abc123",
+            bearer_token="fake-bearer",
+        )
+    assert tracks[0]["artwork_url"] == "https://example.com/{w}x{h}bb.jpg"
+    assert tracks[1]["artwork_url"] is None
