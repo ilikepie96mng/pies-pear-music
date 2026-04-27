@@ -46,6 +46,11 @@
     return () => clearInterval(interval);
   });
 
+  function thumbUrl(url: string | null | undefined, size: string): string {
+    if (!url) return "";
+    return url.replace("{w}x{h}", size);
+  }
+
   async function addPlaylist() {
     if (!newName.trim() || !newUrl.trim()) return;
     adding = true;
@@ -67,110 +72,114 @@
 
 </script>
 
-<aside class="w-[180px] min-w-[180px] bg-[#111] flex flex-col border-r border-[#1e1e1e]">
-  <div class="p-4 border-b border-[#1e1e1e]">
-    <div class="text-white font-bold text-[15px] tracking-tight">pies</div>
-    <div class="text-[#555] text-[10px] mt-0.5">music sync</div>
+<aside style="width:180px;min-width:180px;background:var(--bg);display:flex;flex-direction:column;border-right:1px solid var(--border);">
+  <!-- Logo -->
+  <div style="padding:16px;border-bottom:1px solid var(--border);">
+    <div style="color:var(--accent);font-weight:700;font-size:15px;letter-spacing:.02em;">pies</div>
   </div>
 
-  <nav class="p-2 border-b border-[#1e1e1e] flex flex-col gap-0.5">
-    <button
-      class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
-      onclick={onopenDashboard}
-    >
-      ▦ Dashboard
-    </button>
-    <button
-      class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
-      onclick={onopenDiagnostics}
-    >
-      ⊕ Diagnostics
-    </button>
-    <button
-      class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
-      onclick={onopenSettings}
-    >
-      ⚙ Settings
-    </button>
-    <button
-      class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
-      onclick={onopenSetup}
-    >
-      ◆ Setup
-    </button>
-    <button
-      class="w-full text-left px-3 py-1.5 rounded-md text-sm text-[#888] hover:text-white hover:bg-[#1a1a1a] transition-colors"
-      onclick={onopenDownload}
-    >
-      ↓ Download
-    </button>
+  <!-- Nav -->
+  <nav style="padding:8px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:2px;">
+    {#each [
+      { label: "▦ Dashboard", action: onopenDashboard },
+      { label: "⊕ Diagnostics", action: onopenDiagnostics },
+      { label: "⚙ Settings", action: onopenSettings },
+      { label: "◆ Setup", action: onopenSetup },
+      { label: "↓ Download", action: onopenDownload },
+    ] as item}
+      <button
+        onclick={item.action}
+        style="width:100%;text-align:left;padding:6px 10px;border-radius:6px;font-size:13px;color:var(--text-secondary);background:transparent;border:none;cursor:pointer;transition:color .15s,background .15s;"
+        onmouseenter={e => { (e.currentTarget as HTMLElement).style.color='var(--text-primary)'; (e.currentTarget as HTMLElement).style.background='var(--surface)'; }}
+        onmouseleave={e => { (e.currentTarget as HTMLElement).style.color='var(--text-secondary)'; (e.currentTarget as HTMLElement).style.background='transparent'; }}
+      >{item.label}</button>
+    {/each}
   </nav>
 
-  <div class="px-3 pt-3 pb-1 text-[10px] text-[#555] uppercase tracking-widest">Playlists</div>
+  <!-- Playlists label -->
+  <div style="padding:10px 12px 4px;font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.1em;">Playlists</div>
 
-  <div class="flex-1 overflow-y-auto px-2 flex flex-col gap-0.5">
+  <!-- Playlist list -->
+  <div style="flex:1;overflow-y:auto;padding:0 8px;display:flex;flex-direction:column;gap:2px;">
     {#each playlists as pl}
       <button
-        class="w-full text-left px-3 py-2 rounded-md text-sm truncate transition-colors flex items-center gap-1.5
-          {selectedName === pl.name ? 'bg-[#1a1a1a] text-white' : 'text-[#888] hover:text-white hover:bg-[#1a1a1a]'}"
         onclick={() => onselectPlaylist(pl.name)}
         type="button"
+        style="width:100%;text-align:left;padding:4px 6px;border-radius:6px;font-size:13px;display:flex;align-items:center;gap:6px;border:none;cursor:pointer;transition:color .15s,background .15s;
+          {selectedName === pl.name
+            ? 'background:var(--accent-dim);color:var(--accent);border-left:2px solid var(--accent);padding-left:4px;'
+            : 'background:transparent;color:var(--text-secondary);'}"
+        onmouseenter={e => { if (selectedName !== pl.name) { (e.currentTarget as HTMLElement).style.color='var(--text-primary)'; (e.currentTarget as HTMLElement).style.background='var(--surface)'; } }}
+        onmouseleave={e => { if (selectedName !== pl.name) { (e.currentTarget as HTMLElement).style.color='var(--text-secondary)'; (e.currentTarget as HTMLElement).style.background='transparent'; } }}
       >
-        {#if pl.paused}
-          <span class="text-amber-600 text-[9px] flex-shrink-0">⏸</span>
+        {#if pl.thumbnail_url}
+          <img
+            src={thumbUrl(pl.thumbnail_url, "36x36bb")}
+            alt=""
+            style="width:18px;height:18px;border-radius:3px;flex-shrink:0;object-fit:cover;"
+            onerror={e => { (e.currentTarget as HTMLImageElement).style.display='none'; }}
+          />
+        {:else}
+          <div style="width:18px;height:18px;border-radius:3px;flex-shrink:0;background:#1e1e1e;"></div>
         {/if}
-        <span class="truncate">{pl.name}</span>
+        {#if pl.paused}
+          <span style="color:#b45309;font-size:9px;flex-shrink:0;">⏸</span>
+        {/if}
+        <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{pl.name}</span>
       </button>
     {/each}
 
     {#if showAddForm}
-      <div class="px-1 py-2 flex flex-col gap-1">
+      <div style="padding:4px;display:flex;flex-direction:column;gap:4px;">
         <input bind:value={newName} placeholder="Name"
-          class="bg-[#1a1a1a] border border-[#333] rounded px-2 py-1 text-xs text-white w-full outline-none focus:border-[#1db954]" />
+          style="background:#1a1a1a;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:11px;color:white;width:100%;outline:none;box-sizing:border-box;" />
         <input bind:value={newUrl} placeholder="Playlist URL"
-          class="bg-[#1a1a1a] border border-[#333] rounded px-2 py-1 text-xs text-white w-full outline-none focus:border-[#1db954]" />
+          style="background:#1a1a1a;border:1px solid #333;border-radius:4px;padding:4px 8px;font-size:11px;color:white;width:100%;outline:none;box-sizing:border-box;" />
         {#if addError}
-          <div class="text-red-400 text-[10px] bg-red-950 border border-red-800 rounded px-2 py-1 break-all">{addError}</div>
+          <div style="color:#f87171;font-size:10px;background:rgba(127,29,29,.5);border:1px solid rgba(127,29,29,.6);border-radius:4px;padding:4px 8px;word-break:break-all;">{addError}</div>
         {/if}
-        <div class="flex gap-1">
+        <div style="display:flex;gap:4px;">
           <button onclick={addPlaylist} disabled={adding}
-            class="flex-1 bg-[#1db954] text-black text-xs rounded py-1 font-semibold disabled:opacity-50">
+            style="flex:1;background:var(--accent);color:black;font-size:11px;font-weight:700;border:none;border-radius:4px;padding:4px;cursor:pointer;opacity:{adding?'.5':'1'}">
             {adding ? "…" : "Add"}
           </button>
           <button onclick={() => { showAddForm = false; addError = null; }}
-            class="flex-1 text-[#888] text-xs rounded py-1 bg-[#1a1a1a]">Cancel</button>
+            style="flex:1;background:#1a1a1a;color:var(--text-secondary);font-size:11px;border:none;border-radius:4px;padding:4px;cursor:pointer;">Cancel</button>
         </div>
       </div>
     {:else}
       <button onclick={() => (showAddForm = true)}
-        class="w-full text-left px-3 py-2 text-[#555] hover:text-white text-sm transition-colors">
-        + Add playlist
-      </button>
+        style="width:100%;text-align:left;padding:6px 10px;font-size:13px;color:var(--text-muted);background:transparent;border:none;cursor:pointer;transition:color .15s;"
+        onmouseenter={e => { (e.currentTarget as HTMLElement).style.color='var(--text-primary)'; }}
+        onmouseleave={e => { (e.currentTarget as HTMLElement).style.color='var(--text-muted)'; }}
+        >+ Add playlist</button>
     {/if}
   </div>
 
   <QueueIndicator />
 
-  <div class="px-3 py-2 border-t border-[#1e1e1e] flex items-center gap-2">
+  <!-- Connection status -->
+  <div style="padding:8px 12px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;">
     {#if wrapperRunning === null}
-      <span class="w-2 h-2 rounded-full bg-[#444] flex-shrink-0"></span>
-      <span class="text-[10px] text-[#555]">Checking…</span>
+      <span style="width:8px;height:8px;border-radius:50%;background:#444;flex-shrink:0;"></span>
+      <span style="font-size:10px;color:var(--text-muted);">Checking…</span>
     {:else if wrapperRunning}
-      <span class="w-2 h-2 rounded-full bg-[#1db954] flex-shrink-0"></span>
-      <span class="text-[10px] text-[#888]">Apple Music</span>
+      <span style="width:8px;height:8px;border-radius:50%;background:#22c55e;flex-shrink:0;"></span>
+      <span style="font-size:10px;color:var(--text-secondary);">Apple Music</span>
     {:else}
-      <span class="w-2 h-2 rounded-full bg-[#555] flex-shrink-0"></span>
-      <span class="text-[10px] text-[#555]">Not signed in</span>
+      <span style="width:8px;height:8px;border-radius:50%;background:#444;flex-shrink:0;"></span>
+      <span style="font-size:10px;color:var(--text-muted);">Not signed in</span>
     {/if}
   </div>
 
-  <div class="p-2 border-t border-[#1e1e1e]">
+  <!-- Sync All -->
+  <div style="padding:8px;border-top:1px solid var(--border);">
     <button
       onclick={() => { const first = playlists.find(p => !p.paused); if (first) onstartSync(first.name); }}
       disabled={playlists.every(p => p.paused)}
-      class="w-full bg-[#1db954] text-black text-sm font-bold rounded-lg py-2 hover:bg-[#1ed760] transition-colors disabled:opacity-50"
-    >
-      ↻ Sync All
-    </button>
+      style="width:100%;background:var(--accent);color:black;font-size:13px;font-weight:700;border:none;border-radius:8px;padding:8px;cursor:pointer;transition:background .15s;opacity:{playlists.every(p=>p.paused)?'.5':'1'};"
+      onmouseenter={e => { (e.currentTarget as HTMLElement).style.background='var(--accent-hover)'; }}
+      onmouseleave={e => { (e.currentTarget as HTMLElement).style.background='var(--accent)'; }}
+    >↻ Sync All</button>
   </div>
 </aside>
