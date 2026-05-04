@@ -85,6 +85,29 @@ export interface SyncRun {
   error_message: string | null;
 }
 
+export interface RecentTrack {
+  title: string;
+  artist: string;
+  album: string;
+  local_path: string;
+  artwork_url: string | null;
+  downloaded_at: string;
+}
+
+export interface Recommendation {
+  artist: string;
+  similar_to: string;
+  match: number;
+  lastfm_url: string;
+}
+
+export interface HomeData {
+  recent_tracks: RecentTrack[];
+  recommendations: Recommendation[];
+  recommendations_available: boolean;
+  last_sync: { playlist_name: string; synced_at: string; new_tracks: number } | null;
+}
+
 export const api = {
   async playlists(): Promise<Playlist[]> {
     const r = await fetch(`${await base()}/playlists`);
@@ -160,6 +183,12 @@ export const api = {
       body: JSON.stringify(updates),
     });
     if (!r.ok) throw new Error(await r.text());
+  },
+
+  async home(): Promise<HomeData> {
+    const r = await fetch(`${await base()}/home`);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
   },
 
   async syncHistory(playlistName?: string, limit = 30): Promise<SyncRun[]> {

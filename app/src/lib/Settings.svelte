@@ -38,6 +38,12 @@
         { key: "github_remote", label: "GitHub remote", hint: "Optional — used to push state DB changes. Leave blank to disable." },
       ],
     },
+    {
+      title: "Integrations",
+      fields: [
+        { key: "lastfm_api_key", label: "Last.fm API Key", hint: "Get a free key at last.fm/api — used for artist recommendations on the Home screen.", type: "password" },
+      ],
+    },
   ];
 
   function isEmpty(key: string): boolean {
@@ -55,7 +61,10 @@
       const updates: Record<string, string> = {};
       for (const section of SECTIONS) {
         for (const f of section.fields) {
-          updates[f.key] = cfg[f.key] ?? "";
+          const val = cfg[f.key] ?? "";
+          // Don't send empty API keys — GET /config omits them so blank means "unchanged"
+          if (f.key === "lastfm_api_key" && !val) continue;
+          updates[f.key] = val;
         }
       }
       await api.updateConfig(updates);

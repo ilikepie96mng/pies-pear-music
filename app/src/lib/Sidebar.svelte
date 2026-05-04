@@ -11,6 +11,7 @@
     onopenSettings: () => void;
     onopenSetup: () => void;
     onopenDiagnostics: () => void;
+    onopenHome: () => void;
     onopenDashboard: () => void;
     onopenDownload: () => void;
     onplaylistAdded: (pl: Playlist) => void;
@@ -19,7 +20,7 @@
   let {
     playlists, selectedName,
     onselectPlaylist, onstartSync,
-    onopenSettings, onopenSetup, onopenDiagnostics, onopenDashboard, onopenDownload,
+    onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenDashboard, onopenDownload,
     onplaylistAdded,
   }: Props = $props();
 
@@ -85,6 +86,7 @@
   <!-- Nav -->
   <nav style="padding:8px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:2px;">
     {#each [
+      { label: "⌂ Home", action: onopenHome },
       { label: "▦ Dashboard", action: onopenDashboard },
       { label: "⊕ Diagnostics", action: onopenDiagnostics },
       { label: "⚙ Settings", action: onopenSettings },

@@ -24,7 +24,7 @@ from fastapi.responses import Response, StreamingResponse
 from mutagen.mp4 import MP4, MP4Cover
 from pydantic import BaseModel
 
-from alac_rip import am_api
+from alac_rip import am_api, lastfm_api
 from alac_rip.am_api import AMApiError
 from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config
 from alac_rip.organizer import sanitize
@@ -711,6 +711,55 @@ def get_stats():
     }
 
 
+@app.get("/home")
+def get_home():
+    recent_tracks = state.get_recent_tracks(limit=5)
+    runs = state.get_recent_runs(limit=1)
+    last_sync = None
+    if runs:
+        r = runs[0]
+        last_sync = {
+            "playlist_name": r.playlist_name,
+            "synced_at": r.ended_at,
+            "new_tracks": r.new_count,
+        }
+
+    api_key = cfg.lastfm_api_key if cfg else ""
+    recommendations: list[dict] = []
+    recommendations_available = bool(api_key)
+
+    if api_key:
+        try:
+            top_artists = state.get_top_artists(limit=10)
+            library_lower = {a.lower() for a in state.get_all_artists()}
+            seen: dict[str, float] = {}
+            for artist in top_artists:
+                try:
+                    for s in lastfm_api.get_similar_artists(artist, api_key, limit=5):
+                        name_lower = s["name"].lower()
+                        if name_lower not in library_lower and name_lower not in seen:
+                            seen[name_lower] = s["match"]
+                            recommendations.append({
+                                "artist": s["name"],
+                                "similar_to": artist,
+                                "match": s["match"],
+                                "lastfm_url": s["url"],
+                            })
+                except Exception:
+                    pass
+            recommendations.sort(key=lambda x: x["match"], reverse=True)
+            recommendations = recommendations[:10]
+        except Exception:
+            pass
+
+    return {
+        "recent_tracks": recent_tracks,
+        "recommendations": recommendations,
+        "recommendations_available": recommendations_available,
+        "last_sync": last_sync,
+    }
+
+
 @app.get("/sync-history")
 def get_sync_history(limit: int = 30):
     runs = state.get_recent_runs(limit=limit)
@@ -796,9 +845,10 @@ class ConfigUpdate(BaseModel):
     github_remote: Optional[str] = None
     alac_rip_dir: Optional[str] = None
     log_retention_days: Optional[int] = None
+    lastfm_api_key: Optional[str] = None
 
 
-_CONFIG_OMIT = {"apple_id_password", "media_user_token"}
+_CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key"}
 
 
 @app.get("/config")

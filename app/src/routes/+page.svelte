@@ -6,13 +6,14 @@
   import SetupWizard from "$lib/SetupWizard.svelte";
   import Diagnostics from "$lib/Diagnostics.svelte";
   import Dashboard from "$lib/Dashboard.svelte";
+  import Home from "$lib/Home.svelte";
   import PlaylistDetail from "$lib/PlaylistDetail.svelte";
   import Download from "$lib/Download.svelte";
   import { api, type Playlist } from "../api";
 
-  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download";
+  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home";
 
-  let view = $state<View>("dashboard");
+  let view = $state<View>("home");
   let playlists = $state<Playlist[]>([]);
   let selectedName = $state<string | null>(null);
   let syncingPlaylist = $state<string | null>(null);
@@ -68,6 +69,7 @@
     onopenSettings={() => (view = "settings")}
     onopenSetup={() => (view = "setup")}
     onopenDiagnostics={() => (view = "diagnostics")}
+    onopenHome={() => (view = "home")}
     onopenDashboard={() => (view = "dashboard")}
     onopenDownload={() => (view = "download")}
     onplaylistAdded={onPlaylistAdded}
@@ -86,6 +88,8 @@
         <SetupWizard ondone={() => (view = "dashboard")} />
       {:else if view === "diagnostics"}
         <Diagnostics onopenSettings={() => (view = "settings")} />
+      {:else if view === "home"}
+        <Home onopenSettings={() => (view = "settings")} />
       {:else if view === "dashboard"}
         {#key dashboardKey}
           <Dashboard

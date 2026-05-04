@@ -263,6 +263,34 @@ class StateManager:
                 [(url, am_id) for am_id, url in artwork_map.items()],
             )
 
+    def get_recent_tracks(self, limit: int = 5) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT title, artist, album, local_path, artwork_url, downloaded_at
+                   FROM tracks ORDER BY downloaded_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "title": r[0], "artist": r[1], "album": r[2],
+                "local_path": r[3], "artwork_url": r[4], "downloaded_at": r[5],
+            }
+            for r in rows
+        ]
+
+    def get_top_artists(self, limit: int = 10) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT artist, COUNT(*) AS cnt FROM tracks GROUP BY artist ORDER BY cnt DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_all_artists(self) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT DISTINCT artist FROM tracks").fetchall()
+        return [r[0] for r in rows]
+
     def get_playlist_thumbnail(self, playlist_name: str) -> Optional[str]:
         with self._conn() as conn:
             row = conn.execute(
