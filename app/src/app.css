@@ -5,15 +5,17 @@
 * { box-sizing: border-box; }
 
 :root {
-  --bg:           #12100e;
-  --surface:      rgba(255,255,255,0.03);
-  --border:       rgba(255,255,255,0.06);
-  --accent:       #f59e0b;
-  --accent-hover: #fbbf24;
-  --accent-dim:   rgba(245,158,11,0.12);
+  --bg:           #0f0d12;
+  --surface:      rgba(255,255,255,0.04);
+  --border:       rgba(255,255,255,0.07);
+  --accent:       #fcd34d;
+  --accent-hover: #fde68a;
+  --accent-dim:   rgba(252,211,77,0.14);
+  --accent-2:     #c4b5fd;
+  --accent-3:     #5eead4;
   --text-primary: #ffffff;
-  --text-secondary: rgba(255,255,255,0.5);
-  --text-muted:   rgba(255,255,255,0.25);
+  --text-secondary: rgba(255,255,255,0.55);
+  --text-muted:   rgba(255,255,255,0.28);
 }
 
 body {

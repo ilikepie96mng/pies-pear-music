@@ -65,18 +65,18 @@
 </script>
 
 <div class="relative">
-  <!-- Hero gradient backdrop -->
-  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-72"
-    style="background:radial-gradient(ellipse at 20% 0%,rgba(245,158,11,0.35) 0%,rgba(190,30,90,0.22) 35%,rgba(76,29,149,0.12) 65%,transparent 100%);"></div>
-  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-72"
-    style="background:linear-gradient(180deg,transparent 60%,#12100e 100%);"></div>
+  <!-- Hero gradient backdrop (brighter, pastel) -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-60"
+    style="background:radial-gradient(ellipse at 20% 0%,rgba(252,211,77,0.32) 0%,rgba(196,181,253,0.28) 38%,rgba(94,234,212,0.18) 70%,transparent 100%);"></div>
+  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-60"
+    style="background:linear-gradient(180deg,transparent 55%,var(--bg) 100%);"></div>
 
-  <div class="relative p-8 max-w-3xl">
-    <div class="mb-10 pt-4">
-      <div class="text-amber-500/70 text-[11px] font-bold tracking-[0.18em] uppercase mb-2">Welcome back</div>
-      <h1 class="text-white text-5xl font-black tracking-tight leading-none"
-        style="background:linear-gradient(135deg,#fff 0%,#fbbf24 60%,#f59e0b 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Home</h1>
-      <p class="text-zinc-400 text-sm mt-3">Your library at a glance</p>
+  <div class="relative p-6 pt-5 max-w-3xl">
+    <div class="mb-6">
+      <div class="text-[#fde68a] text-[10px] font-bold tracking-[0.18em] uppercase mb-1.5">Welcome back</div>
+      <h1 class="text-white text-3xl font-extrabold tracking-tight leading-none"
+        style="background:linear-gradient(135deg,#fff 0%,#fde68a 50%,#c4b5fd 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Home</h1>
+      <p class="text-zinc-400 text-xs mt-2">Your library at a glance</p>
     </div>
 
   {#if loading}

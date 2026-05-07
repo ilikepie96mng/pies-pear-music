@@ -73,7 +73,7 @@
 
 </script>
 
-<aside style="width:180px;min-width:180px;background:linear-gradient(180deg,rgba(245,158,11,0.08) 0%,#12100e 140px);display:flex;flex-direction:column;border-right:1px solid var(--border);">
+<aside style="width:180px;min-width:180px;background:linear-gradient(180deg,rgba(196,181,253,0.09) 0%,rgba(252,211,77,0.05) 70px,var(--bg) 160px);display:flex;flex-direction:column;border-right:1px solid var(--border);">
   <!-- Logo -->
   <div style="padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">
     <span style="font-size:18px;line-height:1;">◉</span>

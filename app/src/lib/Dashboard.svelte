@@ -112,16 +112,16 @@
 </script>
 
 <div class="relative">
-  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-64"
-    style="background:radial-gradient(ellipse at 80% 0%,rgba(16,185,129,0.18) 0%,rgba(245,158,11,0.18) 40%,transparent 80%);"></div>
-  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-64"
-    style="background:linear-gradient(180deg,transparent 65%,#12100e 100%);"></div>
-  <div class="relative p-8 max-w-3xl">
-    <div class="mb-10 pt-4">
-      <div class="text-amber-500/70 text-[11px] font-bold tracking-[0.18em] uppercase mb-2">Overview</div>
-      <h1 class="text-white text-5xl font-black tracking-tight leading-none"
-        style="background:linear-gradient(135deg,#fff 0%,#a7f3d0 50%,#fbbf24 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Dashboard</h1>
-      <p class="text-zinc-400 text-sm mt-3">Your local archive at a glance</p>
+  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-52"
+    style="background:radial-gradient(ellipse at 80% 0%,rgba(94,234,212,0.22) 0%,rgba(252,211,77,0.22) 45%,transparent 85%);"></div>
+  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-52"
+    style="background:linear-gradient(180deg,transparent 60%,var(--bg) 100%);"></div>
+  <div class="relative p-6 pt-5 max-w-3xl">
+    <div class="mb-6">
+      <div class="text-[#5eead4] text-[10px] font-bold tracking-[0.18em] uppercase mb-1.5">Overview</div>
+      <h1 class="text-white text-3xl font-extrabold tracking-tight leading-none"
+        style="background:linear-gradient(135deg,#fff 0%,#a7f3d0 50%,#fde68a 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Dashboard</h1>
+      <p class="text-zinc-400 text-xs mt-2">Your local archive at a glance</p>
     </div>
 
   {#if loading}
