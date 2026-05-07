@@ -72,6 +72,7 @@
     onopenHome={() => (view = "home")}
     onopenDashboard={() => (view = "dashboard")}
     onopenDownload={() => (view = "download")}
+    onopenSync={syncingPlaylist ? () => (view = "sync") : undefined}
     onplaylistAdded={onPlaylistAdded}
   />
   <main class="flex-1 overflow-hidden">

@@ -39,6 +39,7 @@
   let progressCurrent = $state(0);
   let progressTotal = $state(0);
   let totalLogCount = $state(0);
+  let libraryCount = $state<number | null>(null); // tracks already in library before this sync
 
   let nextLogId = 0;
   let allLogText = "";
@@ -145,6 +146,11 @@
   }
 
   onMount(() => {
+    // Fetch existing track count for this playlist before the sync adds new ones
+    api.library().then(lib => {
+      libraryCount = lib[playlistName]?.length ?? 0;
+    }).catch(() => {});
+
     source = new EventSource(api.syncJobUrl(playlistName, "ALAC"));
 
     source.onmessage = async (e) => {
@@ -277,7 +283,10 @@
       <div class="flex justify-between text-xs text-zinc-600 mb-1.5">
         <span>
           {#if progressTotal > 0}
-            {progressCurrent} / {progressTotal} tracks
+            {progressCurrent} / {progressTotal} new
+            {#if libraryCount !== null}
+              <span class="text-zinc-700 ml-1">· {(libraryCount + progressCurrent).toLocaleString()} / {(libraryCount + progressTotal).toLocaleString()} in playlist</span>
+            {/if}
           {:else}
             Working…
           {/if}

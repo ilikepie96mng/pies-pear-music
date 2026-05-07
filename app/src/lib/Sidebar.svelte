@@ -14,6 +14,7 @@
     onopenHome: () => void;
     onopenDashboard: () => void;
     onopenDownload: () => void;
+    onopenSync?: () => void;
     onplaylistAdded: (pl: Playlist) => void;
   }
 
@@ -21,7 +22,7 @@
     playlists, selectedName,
     onselectPlaylist, onstartSync,
     onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenDashboard, onopenDownload,
-    onplaylistAdded,
+    onplaylistAdded, onopenSync,
   }: Props = $props();
 
   let showAddForm = $state(false);
@@ -162,7 +163,7 @@
     {/if}
   </div>
 
-  <QueueIndicator />
+  <QueueIndicator onopenSync={onopenSync} />
 
   <!-- Connection status -->
   <div style="padding:8px 12px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;">

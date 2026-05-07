@@ -2,6 +2,11 @@
   import { onMount, onDestroy } from "svelte";
   import { api, type QueueStatus, type QueueJob } from "../api";
 
+  interface Props {
+    onopenSync?: () => void;
+  }
+  let { onopenSync }: Props = $props();
+
   let status = $state<QueueStatus | null>(null);
   let showPopover = $state(false);
   let interval: ReturnType<typeof setInterval> | null = null;
@@ -32,8 +37,9 @@
 {#if isActive || pendingCount > 0}
   <div class="relative mx-2 mb-2">
     <button
-      onclick={() => (showPopover = !showPopover)}
-      class="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1a1a1a] border border-[#2a2a2a] text-xs text-zinc-300 hover:border-[#333] transition-colors"
+      onclick={() => { if (onopenSync && isActive) { onopenSync(); } else { showPopover = !showPopover; } }}
+      class="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1a1a1a] border border-[var(--accent-dim)] text-xs text-zinc-300 hover:border-[var(--accent)] transition-colors"
+      title={isActive && onopenSync ? "View sync progress" : undefined}
     >
       <span class="w-2.5 h-2.5 border border-[var(--accent)] border-t-transparent rounded-full animate-spin flex-shrink-0"></span>
       <span class="truncate flex-1 text-left">
