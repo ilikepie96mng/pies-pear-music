@@ -796,27 +796,45 @@ def strawberry_export(req: StrawberryExportRequest):
 
 @app.post("/reveal-track")
 def reveal_track(req: RevealRequest):
-    """Open a track file in Strawberry music player."""
+    """Open the track in the file manager with the file selected.
+
+    Tries the standard org.freedesktop.FileManager1 D-Bus interface (Files,
+    Dolphin, Caja, etc. all implement this and will highlight the specific
+    file). Falls back to xdg-open on the parent directory if D-Bus fails.
+    """
+    from urllib.parse import quote
     p = Path(req.local_path)
     if not p.exists():
         raise HTTPException(status_code=404, detail=f"file not found: {req.local_path}")
-    try:
-        # Try flatpak first (most common on Bazzite); fall back to native binary.
-        if shutil.which("flatpak"):
+
+    file_uri = "file://" + quote(str(p.absolute()), safe="/")
+
+    if shutil.which("gdbus"):
+        try:
+            r = subprocess.run(
+                ["gdbus", "call", "--session",
+                 "--dest", "org.freedesktop.FileManager1",
+                 "--object-path", "/org/freedesktop/FileManager1",
+                 "--method", "org.freedesktop.FileManager1.ShowItems",
+                 f"['{file_uri}']", ""],
+                capture_output=True, timeout=5,
+            )
+            if r.returncode == 0:
+                return {"ok": True, "method": "filemanager-d-bus"}
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+    if shutil.which("xdg-open"):
+        try:
             subprocess.Popen(
-                ["flatpak", "run", "org.strawberrymusicplayer.strawberry", "--append", str(p)],
+                ["xdg-open", str(p.parent)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-        elif shutil.which("strawberry"):
-            subprocess.Popen(
-                ["strawberry", "--append", str(p)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-        else:
-            raise HTTPException(status_code=501, detail="Strawberry not found (install via flatpak or native)")
-        return {"ok": True}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+            return {"ok": True, "method": "xdg-open-parent"}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    raise HTTPException(status_code=501, detail="No file manager found (install xdg-utils)")
 
 
 @app.get("/sync-runs/{run_id}/tracks")

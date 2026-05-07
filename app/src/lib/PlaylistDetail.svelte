@@ -366,7 +366,7 @@
         <tbody>
           {#each sorted as track, i}
             <tr style="border-bottom:1px solid rgba(245,158,11,0.06);transition:background .12s;cursor:pointer;"
-              title="Open in Strawberry"
+              title="Show file in file manager"
               onclick={() => { api.revealTrack(track.local_path).catch(e => console.error(e)); }}
               onmouseenter={e => { (e.currentTarget as HTMLElement).style.background='rgba(245,158,11,0.07)'; (e.currentTarget as HTMLElement).style.backdropFilter='blur(8px)'; }}
               onmouseleave={e => { (e.currentTarget as HTMLElement).style.background='transparent'; (e.currentTarget as HTMLElement).style.backdropFilter=''; }}>

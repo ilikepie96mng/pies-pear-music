@@ -122,7 +122,7 @@
           {#each data.recent_tracks as track}
             <button type="button" onclick={() => reveal(track)}
               class="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-amber-500/5 transition-colors cursor-pointer"
-              title="Open in Strawberry">
+              title="Show file in file manager">
               {#if track.artwork_url}
                 <img
                   src={track.artwork_url.replace("{w}x{h}", "96x96")}
@@ -219,7 +219,7 @@
             {#each runTracks as track}
               <button type="button" onclick={() => reveal(track)}
                 class="w-full text-left flex items-center gap-3 px-5 py-2.5 hover:bg-amber-500/5 transition-colors cursor-pointer"
-                title="Open in Strawberry">
+                title="Show file in file manager">
                 {#if track.artwork_url}
                   <img src={track.artwork_url.replace("{w}x{h}", "96x96")} alt=""
                     class="w-9 h-9 rounded flex-shrink-0 object-cover"
