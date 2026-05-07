@@ -97,6 +97,7 @@ pub fn run() {
                 }
             }
         })
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![get_api_port])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
