@@ -113,7 +113,7 @@
 
 <div class="relative">
   <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-52"
-    style="background:radial-gradient(ellipse at 80% 0%,rgba(94,234,212,0.22) 0%,rgba(252,211,77,0.22) 45%,transparent 85%);"></div>
+    style="background:radial-gradient(ellipse at 80% 0%,rgba(94,234,212,0.36) 0%,rgba(252,211,77,0.34) 45%,transparent 85%);"></div>
   <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-52"
     style="background:linear-gradient(180deg,transparent 60%,var(--bg) 100%);"></div>
   <div class="relative p-6 pt-5 max-w-3xl">

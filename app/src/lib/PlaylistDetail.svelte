@@ -187,14 +187,14 @@
       <div style="position:absolute;inset:0;display:grid;grid-template-columns:repeat(4,1fr);z-index:0;pointer-events:none;" aria-hidden="true">
         {#each mosaicArts() as art}
           {#if art}
-            <div style="background:url('{thumbUrl(art, '400x400')}') center/cover;filter:blur(48px) brightness(0.45) saturate(0.85);transform:scale(1.4);"></div>
+            <div style="background:url('{thumbUrl(art, '400x400')}') center/cover;filter:blur(44px) brightness(0.7) saturate(1.0);transform:scale(1.4);"></div>
           {:else}
             <div style="background:#12100e;"></div>
           {/if}
         {/each}
       </div>
       <!-- Gradient veil for legibility -->
-      <div aria-hidden="true" style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(15,13,18,0.55) 0%,rgba(15,13,18,0.8) 60%,var(--bg) 100%);z-index:0;pointer-events:none;"></div>
+      <div aria-hidden="true" style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(21,19,28,0.3) 0%,rgba(21,19,28,0.65) 65%,var(--bg) 100%);z-index:0;pointer-events:none;"></div>
     {/if}
     <div style="display:flex;align-items:flex-end;gap:16px;position:relative;z-index:1;">
 

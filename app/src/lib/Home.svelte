@@ -67,7 +67,7 @@
 <div class="relative">
   <!-- Hero gradient backdrop (brighter, pastel) -->
   <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-60"
-    style="background:radial-gradient(ellipse at 20% 0%,rgba(252,211,77,0.32) 0%,rgba(196,181,253,0.28) 38%,rgba(94,234,212,0.18) 70%,transparent 100%);"></div>
+    style="background:radial-gradient(ellipse at 20% 0%,rgba(252,211,77,0.5) 0%,rgba(196,181,253,0.42) 38%,rgba(94,234,212,0.28) 70%,transparent 100%);"></div>
   <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-60"
     style="background:linear-gradient(180deg,transparent 55%,var(--bg) 100%);"></div>
 
