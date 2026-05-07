@@ -105,6 +105,26 @@
     if (e.key === "Escape") { editing = false; draftName = playlist.name; }
   }
 
+  // Strawberry export
+  let exporting = $state(false);
+  let exportMsg = $state<{ kind: "ok" | "err"; text: string } | null>(null);
+  let exportMsgTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function exportToStrawberry() {
+    exporting = true;
+    exportMsg = null;
+    if (exportMsgTimer) clearTimeout(exportMsgTimer);
+    try {
+      const r = await api.strawberryExport(playlist.name);
+      exportMsg = { kind: "ok", text: `Sent ${r.inserted} tracks to Strawberry` };
+    } catch (e) {
+      exportMsg = { kind: "err", text: String(e instanceof Error ? e.message : e) };
+    } finally {
+      exporting = false;
+      exportMsgTimer = setTimeout(() => (exportMsg = null), 6000);
+    }
+  }
+
   async function togglePause() {
     togglingPause = true;
     try {
@@ -268,6 +288,10 @@
                 : 'background:#1a1a1a;color:var(--text-secondary);border:1px solid #2a2a2a;'}">
             {playlist.paused ? "▶ Resume" : "⏸ Pause"}
           </button>
+          <button onclick={exportToStrawberry} disabled={exporting} title="Replace this playlist in Strawberry"
+            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(196,181,253,0.12);color:var(--accent-2);border:1px solid rgba(196,181,253,0.25);cursor:pointer;opacity:{exporting?'.5':'1'};">
+            {exporting ? "…" : "🍓 Strawberry"}
+          </button>
           <button onclick={() => onstartSync(playlist.name)} disabled={playlist.paused}
             style="padding:6px 16px;border-radius:6px;font-size:11px;font-weight:700;background:var(--accent);color:black;border:none;cursor:pointer;opacity:{playlist.paused?'.4':'1'};">
             ↻ Sync
@@ -275,6 +299,13 @@
         {/if}
       </div>
     </div>
+    {#if exportMsg}
+      <div style="position:relative;z-index:1;margin-top:10px;padding:6px 10px;border-radius:6px;font-size:11px;
+        {exportMsg.kind === 'ok' ? 'background:rgba(94,234,212,0.1);color:#5eead4;border:1px solid rgba(94,234,212,0.25);'
+          : 'background:rgba(248,113,113,0.1);color:#f87171;border:1px solid rgba(248,113,113,0.25);'}">
+        {exportMsg.text}
+      </div>
+    {/if}
   </div>
 
   {#if runHistory.length > 0}

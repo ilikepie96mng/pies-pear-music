@@ -197,6 +197,19 @@ export const api = {
     return r.json();
   },
 
+  async strawberryExport(playlistName: string): Promise<{ removed: number; inserted: number; playlist_id: number; backup: string }> {
+    const r = await fetch(`${await base()}/strawberry/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playlist_name: playlistName }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `${r.status}`);
+    }
+    return r.json();
+  },
+
   async revealTrack(localPath: string): Promise<void> {
     const r = await fetch(`${await base()}/reveal-track`, {
       method: "POST",

@@ -24,7 +24,7 @@ from fastapi.responses import Response, StreamingResponse
 from mutagen.mp4 import MP4, MP4Cover
 from pydantic import BaseModel
 
-from alac_rip import am_api, lastfm_api
+from alac_rip import am_api, lastfm_api, strawberry_sync
 from alac_rip.am_api import AMApiError
 from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config
 from alac_rip.organizer import sanitize
@@ -764,6 +764,34 @@ def get_home():
 
 class RevealRequest(BaseModel):
     local_path: str
+
+
+class StrawberryExportRequest(BaseModel):
+    playlist_name: str
+
+
+@app.post("/strawberry/export")
+def strawberry_export(req: StrawberryExportRequest):
+    """Replace (or create) the playlist of this name in Strawberry's DB."""
+    db_path = strawberry_sync.find_strawberry_db()
+    if db_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Strawberry's database wasn't found. Install Strawberry (flatpak or native) and run it once.",
+        )
+    if strawberry_sync.is_strawberry_running():
+        raise HTTPException(
+            status_code=409,
+            detail="Strawberry is open — close it first so its database can be updated.",
+        )
+    tracks = state.get_playlist_tracks(req.playlist_name)
+    if not tracks:
+        raise HTTPException(status_code=400, detail=f"playlist '{req.playlist_name}' has no tracks")
+    try:
+        result = strawberry_sync.export_playlist(db_path, req.playlist_name, tracks)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"export failed: {exc}")
+    return result
 
 
 @app.post("/reveal-track")
