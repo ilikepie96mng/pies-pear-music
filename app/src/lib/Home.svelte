@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type HomeData } from "../api";
+  import { api, type HomeData, type RecentTrack } from "../api";
 
   interface Props {
     onopenSettings: () => void;
@@ -11,6 +11,32 @@
   let data = $state<HomeData | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
+
+  // Modal state for "+N tracks" expansion
+  let runTracksOpen = $state(false);
+  let runTracksLoading = $state(false);
+  let runTracks = $state<RecentTrack[]>([]);
+  let runTracksError = $state<string | null>(null);
+
+  async function openRunTracks() {
+    if (!data?.last_sync) return;
+    runTracksOpen = true;
+    runTracksLoading = true;
+    runTracksError = null;
+    try {
+      const r = await api.syncRunTracks(data.last_sync.run_id);
+      runTracks = r.tracks;
+    } catch (e) {
+      runTracksError = String(e);
+    } finally {
+      runTracksLoading = false;
+    }
+  }
+
+  async function reveal(track: RecentTrack) {
+    try { await api.revealTrack(track.local_path); }
+    catch (e) { console.error("reveal failed:", e); }
+  }
 
   onMount(async () => {
     try {
@@ -38,11 +64,20 @@
   }
 </script>
 
-<div class="p-8 max-w-2xl">
-  <div class="mb-8">
-    <h1 class="text-white text-2xl font-bold tracking-tight">Home</h1>
-    <p class="text-zinc-500 text-sm mt-1">Your library at a glance</p>
-  </div>
+<div class="relative">
+  <!-- Hero gradient backdrop -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-72"
+    style="background:radial-gradient(ellipse at 20% 0%,rgba(245,158,11,0.35) 0%,rgba(190,30,90,0.22) 35%,rgba(76,29,149,0.12) 65%,transparent 100%);"></div>
+  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-72"
+    style="background:linear-gradient(180deg,transparent 60%,#12100e 100%);"></div>
+
+  <div class="relative p-8 max-w-3xl">
+    <div class="mb-10 pt-4">
+      <div class="text-amber-500/70 text-[11px] font-bold tracking-[0.18em] uppercase mb-2">Welcome back</div>
+      <h1 class="text-white text-5xl font-black tracking-tight leading-none"
+        style="background:linear-gradient(135deg,#fff 0%,#fbbf24 60%,#f59e0b 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Home</h1>
+      <p class="text-zinc-400 text-sm mt-3">Your library at a glance</p>
+    </div>
 
   {#if loading}
     <div class="flex flex-col gap-4">
@@ -64,7 +99,10 @@
           <span class="text-zinc-600 ml-2">{formatDate(data.last_sync.synced_at)}</span>
         </div>
         {#if data.last_sync.new_tracks > 0}
-          <span class="text-xs text-amber-500 font-semibold">+{data.last_sync.new_tracks} tracks</span>
+          <button onclick={openRunTracks}
+            class="text-xs text-amber-500 font-semibold hover:text-amber-400 hover:underline transition-colors cursor-pointer">
+            +{data.last_sync.new_tracks} tracks
+          </button>
         {/if}
       </div>
     {/if}
@@ -82,10 +120,12 @@
       {:else}
         <div class="divide-y divide-[#181818]">
           {#each data.recent_tracks as track}
-            <div class="flex items-center gap-3 px-4 py-3">
+            <button type="button" onclick={() => reveal(track)}
+              class="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-amber-500/5 transition-colors cursor-pointer"
+              title="Open in Strawberry">
               {#if track.artwork_url}
                 <img
-                  src={track.artwork_url.replace("{w}x{h}", "48x48bb")}
+                  src={track.artwork_url.replace("{w}x{h}", "96x96")}
                   alt=""
                   class="w-9 h-9 rounded flex-shrink-0 object-cover"
                   onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
@@ -98,7 +138,7 @@
                 <div class="text-zinc-500 text-xs truncate">{track.artist} — {track.album}</div>
               </div>
               <div class="text-zinc-600 text-xs flex-shrink-0">{formatDate(track.downloaded_at)}</div>
-            </div>
+            </button>
           {/each}
         </div>
       {/if}
@@ -149,4 +189,53 @@
     </div>
 
   {/if}
+  </div>
 </div>
+
+{#if runTracksOpen}
+  <div role="dialog" aria-modal="true"
+    onclick={() => (runTracksOpen = false)}
+    onkeydown={e => { if (e.key === 'Escape') runTracksOpen = false; }}
+    tabindex="-1"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div onclick={e => e.stopPropagation()} role="document"
+      class="w-[min(640px,90vw)] max-h-[80vh] flex flex-col rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0e0c0a] shadow-2xl overflow-hidden">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-[rgba(255,255,255,0.06)]">
+        <div>
+          <div class="text-amber-500 text-[10px] font-bold tracking-[0.18em] uppercase">Last Sync</div>
+          <div class="text-white font-semibold mt-0.5">{data?.last_sync?.playlist_name ?? ""} — {data?.last_sync?.new_tracks ?? 0} new tracks</div>
+        </div>
+        <button onclick={() => (runTracksOpen = false)} class="text-zinc-500 hover:text-white text-lg leading-none w-8 h-8 rounded-full hover:bg-white/5 transition-colors">×</button>
+      </div>
+      <div class="flex-1 overflow-y-auto">
+        {#if runTracksLoading}
+          <div class="px-5 py-10 text-center text-zinc-500 text-sm">Loading…</div>
+        {:else if runTracksError}
+          <div class="px-5 py-6 text-red-400 text-sm">{runTracksError}</div>
+        {:else if runTracks.length === 0}
+          <div class="px-5 py-10 text-center text-zinc-500 text-sm">No tracks in this run</div>
+        {:else}
+          <div class="divide-y divide-[#181818]">
+            {#each runTracks as track}
+              <button type="button" onclick={() => reveal(track)}
+                class="w-full text-left flex items-center gap-3 px-5 py-2.5 hover:bg-amber-500/5 transition-colors cursor-pointer"
+                title="Open in Strawberry">
+                {#if track.artwork_url}
+                  <img src={track.artwork_url.replace("{w}x{h}", "96x96")} alt=""
+                    class="w-9 h-9 rounded flex-shrink-0 object-cover"
+                    onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                {:else}
+                  <div class="w-9 h-9 rounded flex-shrink-0 bg-[#1e1e1e]"></div>
+                {/if}
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm text-white font-medium truncate">{track.title}</div>
+                  <div class="text-zinc-500 text-xs truncate">{track.artist} — {track.album}</div>
+                </div>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}

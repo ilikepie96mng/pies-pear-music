@@ -719,7 +719,9 @@ def get_home():
     if runs:
         r = runs[0]
         last_sync = {
+            "run_id": r.id,
             "playlist_name": r.playlist_name,
+            "started_at": r.started_at,
             "synced_at": r.ended_at,
             "new_tracks": r.new_count,
         }
@@ -757,6 +759,48 @@ def get_home():
         "recommendations": recommendations,
         "recommendations_available": recommendations_available,
         "last_sync": last_sync,
+    }
+
+
+class RevealRequest(BaseModel):
+    local_path: str
+
+
+@app.post("/reveal-track")
+def reveal_track(req: RevealRequest):
+    """Open a track file in Strawberry music player."""
+    p = Path(req.local_path)
+    if not p.exists():
+        raise HTTPException(status_code=404, detail=f"file not found: {req.local_path}")
+    try:
+        # Try flatpak first (most common on Bazzite); fall back to native binary.
+        if shutil.which("flatpak"):
+            subprocess.Popen(
+                ["flatpak", "run", "org.strawberrymusicplayer.strawberry", "--append", str(p)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        elif shutil.which("strawberry"):
+            subprocess.Popen(
+                ["strawberry", "--append", str(p)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        else:
+            raise HTTPException(status_code=501, detail="Strawberry not found (install via flatpak or native)")
+        return {"ok": True}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/sync-runs/{run_id}/tracks")
+def get_run_tracks(run_id: int):
+    runs = [r for r in state.get_recent_runs(limit=200) if r.id == run_id]
+    if not runs:
+        return {"tracks": []}
+    r = runs[0]
+    return {
+        "run_id": r.id,
+        "playlist_name": r.playlist_name,
+        "tracks": state.get_tracks_in_run(r.playlist_name, r.started_at, r.ended_at),
     }
 
 

@@ -111,11 +111,18 @@
   }
 </script>
 
-<div class="p-8 max-w-2xl">
-  <div class="mb-8">
-    <h1 class="text-white text-2xl font-bold tracking-tight">Dashboard</h1>
-    <p class="text-zinc-500 text-sm mt-1">Overview of your local archive</p>
-  </div>
+<div class="relative">
+  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-64"
+    style="background:radial-gradient(ellipse at 80% 0%,rgba(16,185,129,0.18) 0%,rgba(245,158,11,0.18) 40%,transparent 80%);"></div>
+  <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-64"
+    style="background:linear-gradient(180deg,transparent 65%,#12100e 100%);"></div>
+  <div class="relative p-8 max-w-3xl">
+    <div class="mb-10 pt-4">
+      <div class="text-amber-500/70 text-[11px] font-bold tracking-[0.18em] uppercase mb-2">Overview</div>
+      <h1 class="text-white text-5xl font-black tracking-tight leading-none"
+        style="background:linear-gradient(135deg,#fff 0%,#a7f3d0 50%,#fbbf24 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Dashboard</h1>
+      <p class="text-zinc-400 text-sm mt-3">Your local archive at a glance</p>
+    </div>
 
   {#if loading}
     <div class="flex flex-col gap-4">
@@ -303,4 +310,5 @@
     </div>
 
   {/if}
+  </div>
 </div>

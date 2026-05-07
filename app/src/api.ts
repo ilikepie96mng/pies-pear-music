@@ -105,7 +105,7 @@ export interface HomeData {
   recent_tracks: RecentTrack[];
   recommendations: Recommendation[];
   recommendations_available: boolean;
-  last_sync: { playlist_name: string; synced_at: string; new_tracks: number } | null;
+  last_sync: { run_id: number; playlist_name: string; started_at: string; synced_at: string; new_tracks: number } | null;
 }
 
 export const api = {
@@ -189,6 +189,21 @@ export const api = {
     const r = await fetch(`${await base()}/home`);
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
+  },
+
+  async syncRunTracks(runId: number): Promise<{ run_id: number; playlist_name: string; tracks: RecentTrack[] }> {
+    const r = await fetch(`${await base()}/sync-runs/${runId}/tracks`);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
+
+  async revealTrack(localPath: string): Promise<void> {
+    const r = await fetch(`${await base()}/reveal-track`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ local_path: localPath }),
+    });
+    if (!r.ok) throw new Error(await r.text());
   },
 
   async syncHistory(playlistName?: string, limit = 30): Promise<SyncRun[]> {

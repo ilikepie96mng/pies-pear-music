@@ -278,6 +278,27 @@ class StateManager:
             for r in rows
         ]
 
+    def get_tracks_in_run(self, playlist_name: str, started_at: str, ended_at: str) -> list[dict]:
+        """Tracks downloaded during a specific sync run window."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """SELECT t.title, t.artist, t.album, t.local_path, t.artwork_url, t.downloaded_at
+                   FROM tracks t
+                   JOIN playlist_tracks pt ON t.track_id = pt.track_id
+                   WHERE pt.playlist_name = ?
+                     AND t.downloaded_at >= ?
+                     AND t.downloaded_at <= ?
+                   ORDER BY t.downloaded_at DESC""",
+                (playlist_name, started_at, ended_at),
+            ).fetchall()
+        return [
+            {
+                "title": r[0], "artist": r[1], "album": r[2],
+                "local_path": r[3], "artwork_url": r[4], "downloaded_at": r[5],
+            }
+            for r in rows
+        ]
+
     def get_top_artists(self, limit: int = 10) -> list[str]:
         with self._conn() as conn:
             rows = conn.execute(

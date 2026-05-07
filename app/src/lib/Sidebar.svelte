@@ -120,7 +120,7 @@
       >
         {#if pl.thumbnail_url}
           <img
-            src={thumbUrl(pl.thumbnail_url, "36x36bb")}
+            src={thumbUrl(pl.thumbnail_url, "72x72")}
             alt=""
             style="width:18px;height:18px;border-radius:3px;flex-shrink:0;object-fit:cover;"
             onerror={e => { (e.currentTarget as HTMLImageElement).style.display='none'; }}

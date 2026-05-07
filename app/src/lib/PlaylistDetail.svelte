@@ -181,26 +181,28 @@
 
 <div class="flex flex-col h-full">
   <!-- Header -->
-  <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);flex-shrink:0;position:relative;overflow:hidden;">
-    <!-- Blurred art backdrop -->
+  <div style="padding:36px 32px 24px;border-bottom:1px solid var(--border);flex-shrink:0;position:relative;overflow:hidden;">
+    <!-- Blurred art backdrop (bold) -->
     {#if mosaicArts().some(a => a)}
       <div style="position:absolute;inset:0;display:grid;grid-template-columns:repeat(4,1fr);z-index:0;pointer-events:none;" aria-hidden="true">
         {#each mosaicArts() as art}
           {#if art}
-            <div style="background:url('{thumbUrl(art, '200x200bb')}') center/cover;filter:blur(24px) brightness(0.28) saturate(1.6);transform:scale(1.3);"></div>
+            <div style="background:url('{thumbUrl(art, '400x400')}') center/cover;filter:blur(40px) brightness(0.55) saturate(1.8);transform:scale(1.4);"></div>
           {:else}
             <div style="background:#12100e;"></div>
           {/if}
         {/each}
       </div>
+      <!-- Gradient veil for legibility -->
+      <div aria-hidden="true" style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(18,16,14,0.35) 0%,rgba(18,16,14,0.7) 60%,#12100e 100%);z-index:0;pointer-events:none;"></div>
     {/if}
     <div style="display:flex;align-items:flex-end;gap:16px;position:relative;z-index:1;">
 
       <!-- 2×2 mosaic -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px;width:72px;height:72px;border-radius:10px;overflow:hidden;flex-shrink:0;box-shadow:0 4px 24px rgba(0,0,0,0.6);">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px;width:140px;height:140px;border-radius:14px;overflow:hidden;flex-shrink:0;box-shadow:0 8px 32px rgba(0,0,0,0.8);">
         {#each mosaicArts() as art}
           {#if art}
-            <img src={thumbUrl(art, "72x72bb")} alt="" style="width:100%;height:100%;object-fit:cover;"
+            <img src={thumbUrl(art, "144x144")} alt="" style="width:100%;height:100%;object-fit:cover;"
               onerror={e => { const el = e.currentTarget as HTMLImageElement; el.style.display='none'; el.parentElement!.style.background='#1e1e1e'; }} />
           {:else}
             <div style="background:#1e1e1e;"></div>
@@ -229,7 +231,7 @@
           <div style="display:flex;align-items:center;gap:6px;"
             onmouseenter={e => { const btn = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[data-rename-btn]'); if (btn) btn.style.opacity='1'; }}
             onmouseleave={e => { const btn = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[data-rename-btn]'); if (btn) btn.style.opacity='0'; }}>
-            <h1 style="color:var(--text-primary);font-size:22px;font-weight:700;letter-spacing:-.02em;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{playlist.name}</h1>
+            <h1 style="color:var(--text-primary);font-size:42px;font-weight:900;letter-spacing:-.03em;margin:0;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 16px rgba(0,0,0,0.6);">{playlist.name}</h1>
             <button onclick={startEditing} data-rename-btn style="opacity:0;color:var(--text-muted);font-size:13px;background:transparent;border:none;cursor:pointer;" title="Rename">✎</button>
           </div>
         {/if}
@@ -332,13 +334,15 @@
         </thead>
         <tbody>
           {#each sorted as track, i}
-            <tr style="border-bottom:1px solid rgba(245,158,11,0.06);transition:background .12s;"
+            <tr style="border-bottom:1px solid rgba(245,158,11,0.06);transition:background .12s;cursor:pointer;"
+              title="Open in Strawberry"
+              onclick={() => { api.revealTrack(track.local_path).catch(e => console.error(e)); }}
               onmouseenter={e => { (e.currentTarget as HTMLElement).style.background='rgba(245,158,11,0.07)'; (e.currentTarget as HTMLElement).style.backdropFilter='blur(8px)'; }}
               onmouseleave={e => { (e.currentTarget as HTMLElement).style.background='transparent'; (e.currentTarget as HTMLElement).style.backdropFilter=''; }}>
               <td style="padding:6px 10px;color:var(--text-muted);font-size:11px;font-variant-numeric:tabular-nums;">{i + 1}</td>
               <td style="padding:6px 4px;">
                 {#if track.artwork_url}
-                  <img src={thumbUrl(track.artwork_url, "56x56bb")} alt=""
+                  <img src={thumbUrl(track.artwork_url, "56x56")} alt=""
                     style="width:28px;height:28px;border-radius:4px;object-fit:cover;display:block;"
                     onerror={e => { const el = e.currentTarget as HTMLImageElement; el.style.display='none'; (el.nextElementSibling as HTMLElement)!.style.display='block'; }} />
                   <div style="display:none;width:28px;height:28px;border-radius:4px;background:#1e1e1e;"></div>
