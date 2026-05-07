@@ -86,7 +86,7 @@
   onDestroy(() => source?.close());
 </script>
 
-<div class="flex flex-col h-full p-8 max-w-2xl">
+<div class="flex flex-col h-full overflow-y-auto p-8 max-w-2xl">
   <div class="mb-6">
     <div class="text-amber-500 text-[10px] font-semibold uppercase tracking-widest mb-1">Library</div>
     <h2 class="text-white text-2xl font-bold tracking-tight">Download</h2>

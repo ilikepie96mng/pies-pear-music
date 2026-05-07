@@ -111,7 +111,7 @@
   }
 </script>
 
-<div class="relative">
+<div class="relative h-full overflow-y-auto">
   <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-52"
     style="background:radial-gradient(ellipse at 80% 0%,rgba(94,234,212,0.36) 0%,rgba(252,211,77,0.34) 45%,transparent 85%);"></div>
   <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-52"

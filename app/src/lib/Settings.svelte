@@ -78,7 +78,7 @@
   }
 </script>
 
-<div class="p-8 max-w-xl">
+<div class="p-8 max-w-xl h-full overflow-y-auto">
   <div class="mb-7">
     <h1 class="text-white text-2xl font-bold tracking-tight">Settings</h1>
     <p class="text-zinc-500 text-sm mt-1">Saved to <span class="font-mono text-zinc-400 text-xs">~/.config/pies-alac-rip/config.yaml</span></p>

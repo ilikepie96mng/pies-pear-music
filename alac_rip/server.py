@@ -754,9 +754,27 @@ def get_home():
         except Exception:
             pass
 
+    # Fetch top tracks + albums for the top 3 recommended artists
+    recommended_tracks: list[dict] = []
+    recommended_albums: list[dict] = []
+    if api_key and recommendations:
+        for rec in recommendations[:3]:
+            try:
+                for t in lastfm_api.get_artist_top_tracks(rec["artist"], api_key, limit=3):
+                    recommended_tracks.append(t)
+            except Exception:
+                pass
+            try:
+                for a in lastfm_api.get_artist_top_albums(rec["artist"], api_key, limit=2):
+                    recommended_albums.append(a)
+            except Exception:
+                pass
+
     return {
         "recent_tracks": recent_tracks,
         "recommendations": recommendations,
+        "recommended_tracks": recommended_tracks,
+        "recommended_albums": recommended_albums,
         "recommendations_available": recommendations_available,
         "last_sync": last_sync,
     }

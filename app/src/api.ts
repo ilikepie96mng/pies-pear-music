@@ -101,9 +101,24 @@ export interface Recommendation {
   lastfm_url: string;
 }
 
+export interface RecommendedTrack {
+  name: string;
+  url: string;
+  artist: string;
+}
+
+export interface RecommendedAlbum {
+  name: string;
+  url: string;
+  artist: string;
+  image_url: string | null;
+}
+
 export interface HomeData {
   recent_tracks: RecentTrack[];
   recommendations: Recommendation[];
+  recommended_tracks: RecommendedTrack[];
+  recommended_albums: RecommendedAlbum[];
   recommendations_available: boolean;
   last_sync: { run_id: number; playlist_name: string; started_at: string; synced_at: string; new_tracks: number } | null;
 }

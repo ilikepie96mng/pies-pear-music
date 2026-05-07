@@ -2,6 +2,10 @@
   import { onMount } from "svelte";
   import { api, type HomeData, type RecentTrack } from "../api";
 
+  function appleMusicSearch(term: string): string {
+    return `https://music.apple.com/search?term=${encodeURIComponent(term)}`;
+  }
+
   interface Props {
     onopenSettings: () => void;
   }
@@ -64,7 +68,7 @@
   }
 </script>
 
-<div class="relative">
+<div class="relative h-full overflow-y-auto">
   <!-- Hero gradient backdrop (brighter, pastel) -->
   <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-60"
     style="background:radial-gradient(ellipse at 20% 0%,rgba(252,211,77,0.5) 0%,rgba(196,181,253,0.42) 38%,rgba(94,234,212,0.28) 70%,transparent 100%);"></div>
@@ -172,13 +176,16 @@
           {#each data.recommendations as rec}
             <div class="flex items-center gap-3 px-4 py-3">
               <div class="flex-1 min-w-0">
-                <a
-                  href={rec.lastfm_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="text-sm text-white font-medium hover:text-amber-400 transition-colors truncate block">
-                  {rec.artist}
-                </a>
+                <div class="flex items-center gap-2">
+                  <a href={rec.lastfm_url} target="_blank" rel="noopener noreferrer"
+                    class="text-sm text-white font-medium hover:text-[#c4b5fd] transition-colors truncate">
+                    {rec.artist}
+                  </a>
+                  <a href={appleMusicSearch(rec.artist)} target="_blank" rel="noopener noreferrer"
+                    class="flex-shrink-0 text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
+                    ♫ Apple Music
+                  </a>
+                </div>
                 <div class="text-zinc-600 text-xs mt-0.5">Similar to {rec.similar_to}</div>
               </div>
               <div class="text-zinc-500 text-xs flex-shrink-0">{matchPct(rec.match)} match</div>
@@ -187,6 +194,65 @@
         </div>
       {/if}
     </div>
+
+    <!-- Recommended Tracks -->
+    {#if data.recommended_tracks && data.recommended_tracks.length > 0}
+      <div class="border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden mt-4">
+        <div class="px-4 py-2.5 bg-[#12100e] border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
+          <span class="text-zinc-400 text-xs uppercase tracking-widest font-semibold">Recommended Tracks</span>
+          <span class="text-zinc-600 text-[10px]">via Last.fm</span>
+        </div>
+        <div class="divide-y divide-[#181818]">
+          {#each data.recommended_tracks as track}
+            <div class="flex items-center gap-3 px-4 py-2.5">
+              <div class="flex-1 min-w-0">
+                <a href={track.url} target="_blank" rel="noopener noreferrer"
+                  class="text-sm text-white font-medium hover:text-[#fde68a] transition-colors truncate block">
+                  {track.name}
+                </a>
+                <div class="text-zinc-600 text-xs mt-0.5">{track.artist}</div>
+              </div>
+              <a href={appleMusicSearch(`${track.name} ${track.artist}`)} target="_blank" rel="noopener noreferrer"
+                class="flex-shrink-0 text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
+                ♫ Apple Music
+              </a>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+    <!-- Recommended Albums -->
+    {#if data.recommended_albums && data.recommended_albums.length > 0}
+      <div class="border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden mt-4 mb-6">
+        <div class="px-4 py-2.5 bg-[#12100e] border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
+          <span class="text-zinc-400 text-xs uppercase tracking-widest font-semibold">Recommended Albums</span>
+          <span class="text-zinc-600 text-[10px]">via Last.fm</span>
+        </div>
+        <div class="divide-y divide-[#181818]">
+          {#each data.recommended_albums as album}
+            <div class="flex items-center gap-3 px-4 py-2.5">
+              {#if album.image_url}
+                <img src={album.image_url} alt="" class="w-9 h-9 rounded flex-shrink-0 object-cover" />
+              {:else}
+                <div class="w-9 h-9 rounded flex-shrink-0 bg-[#1e1e1e]"></div>
+              {/if}
+              <div class="flex-1 min-w-0">
+                <a href={album.url} target="_blank" rel="noopener noreferrer"
+                  class="text-sm text-white font-medium hover:text-[#fde68a] transition-colors truncate block">
+                  {album.name}
+                </a>
+                <div class="text-zinc-600 text-xs mt-0.5">{album.artist}</div>
+              </div>
+              <a href={appleMusicSearch(`${album.name} ${album.artist}`)} target="_blank" rel="noopener noreferrer"
+                class="flex-shrink-0 text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
+                ♫ Apple Music
+              </a>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
   {/if}
   </div>

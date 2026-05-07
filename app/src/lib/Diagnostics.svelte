@@ -76,7 +76,7 @@
   }
 </script>
 
-<div class="p-8 max-w-2xl">
+<div class="p-8 max-w-2xl h-full overflow-y-auto">
   <!-- Header -->
   <div class="flex items-start justify-between mb-6">
     <div>
