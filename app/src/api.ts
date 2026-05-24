@@ -266,7 +266,7 @@ export const api = {
       return r.json();
     },
 
-    async status(): Promise<{ running: boolean; needs_2fa: boolean; logs: string[] }> {
+    async status(): Promise<{ running: boolean; needs_2fa: boolean; "2fa_type": string; logs: string[] }> {
       const r = await fetch(`${await base()}/wrapper/status`);
       return r.json();
     },

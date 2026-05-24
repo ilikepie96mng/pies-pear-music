@@ -24,6 +24,7 @@
   // ── Wrapper auth state ──────────────────────────────────────────────────────
   let wrapperRunning = $state(false);
   let wrapperNeeds2fa = $state(false);
+  let wrapper2faType = $state("");
   let wrapperLogs = $state<string[]>([]);
   let wrapperEmail = $state("");
   let wrapperPassword = $state("");
@@ -37,6 +38,7 @@
       const s = await api.wrapper.status();
       wrapperRunning = s.running;
       wrapperNeeds2fa = s.needs_2fa;
+      wrapper2faType = s["2fa_type"];
       wrapperLogs = s.logs;
     } catch {}
   }
@@ -180,7 +182,11 @@
 
         {:else if wrapperNeeds2fa}
           <div class="flex flex-col gap-2">
-            <p class="text-sm text-amber-400">Two-factor authentication required.</p>
+            {#if wrapper2faType === "device"}
+              <p class="text-sm text-amber-400">Apple sent a verification code to your trusted device — enter it below.</p>
+            {:else}
+              <p class="text-sm text-amber-400">Two-factor authentication required.</p>
+            {/if}
             <div class="flex gap-2">
               <input bind:value={twoFaCode} type="text" placeholder="Enter 2FA code"
                 class="flex-1 bg-[#0d0d0d] border border-[#2a2a2a] focus:border-amber-700 rounded-lg px-3 py-2 text-white text-sm outline-none transition-colors" />

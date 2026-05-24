@@ -50,6 +50,7 @@ IMAGE_NAME = "alac-rip-wrapper"
 wrapper_process: Optional[subprocess.Popen] = None
 wrapper_running: bool = False
 wrapper_needs_2fa: bool = False
+wrapper_2fa_type: str = ""  # "device" | "sms" | ""
 wrapper_logs: list[str] = []
 
 job_queue: queue.Queue = queue.Queue()
@@ -110,7 +111,7 @@ def ensure_wrapper_image(wrapper_dir: Path) -> tuple[bool, Optional[str]]:
 
 
 def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login=False):
-    global wrapper_running, wrapper_process, wrapper_needs_2fa
+    global wrapper_running, wrapper_process, wrapper_needs_2fa, wrapper_2fa_type
     login_successful = False
     try:
         for line in iter(pipe.readline, ""):
@@ -120,10 +121,16 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
             target_list.append(line)
             if "credentialHandler:" in line and "2FA: true" in line:
                 wrapper_needs_2fa = True
+                wrapper_2fa_type = "sms"
                 target_list.append("2FA required — please enter your code")
+            if "[.] response type 4" in line:
+                wrapper_needs_2fa = True
+                wrapper_2fa_type = "device"
+                target_list.append("2FA required — Apple sent a code to your trusted device")
             if "[.] response type 6" in line:
                 wrapper_running = True
                 wrapper_needs_2fa = False
+                wrapper_2fa_type = ""
                 login_successful = True
                 if auto_login:
                     target_list.append("Auto-login successful. Ready for downloads.")
@@ -141,6 +148,7 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
                 target_list.append(f"Login failed — wrapper exited with code {exit_code}")
                 wrapper_running = False
                 wrapper_needs_2fa = False
+                wrapper_2fa_type = ""
                 if auto_login:
                     target_list.append("Auto-login failed, removing saved credentials")
                     delete_credentials()
@@ -1002,13 +1010,14 @@ def login_wrapper(body: WrapperLoginRequest):
 
 @app.post("/wrapper/stop")
 def stop_wrapper():
-    global wrapper_process, wrapper_running, wrapper_logs, wrapper_needs_2fa
+    global wrapper_process, wrapper_running, wrapper_logs, wrapper_needs_2fa, wrapper_2fa_type
     if wrapper_process and wrapper_process.poll() is None:
         subprocess.run(["podman", "stop", CONTAINER_NAME], capture_output=True)
         wrapper_process.terminate()
         wrapper_logs.append("Wrapper stopped by user")
         wrapper_running = False
         wrapper_needs_2fa = False
+        wrapper_2fa_type = ""
         return {"status": "ok", "msg": "Wrapper stopped"}
     return {"status": "error", "msg": "Wrapper not running"}
 
@@ -1019,7 +1028,7 @@ class TwoFARequest(BaseModel):
 
 @app.post("/wrapper/2fa")
 def submit_2fa(body: TwoFARequest):
-    global wrapper_needs_2fa
+    global wrapper_needs_2fa, wrapper_2fa_type
     if not wrapper_needs_2fa:
         return {"status": "error", "msg": "2FA not required"}
     if not wrapper_process or wrapper_process.poll() is not None:
@@ -1029,6 +1038,7 @@ def submit_2fa(body: TwoFARequest):
         wrapper_process.stdin.flush()
         wrapper_logs.append("2FA code submitted")
         wrapper_needs_2fa = False
+        wrapper_2fa_type = ""
         return {"status": "ok", "msg": "2FA code submitted"}
     except Exception as e:
         return {"status": "error", "msg": str(e)}
@@ -1036,12 +1046,13 @@ def submit_2fa(body: TwoFARequest):
 
 @app.get("/wrapper/status")
 def get_wrapper_status():
-    global wrapper_running, wrapper_process, wrapper_needs_2fa
+    global wrapper_running, wrapper_process, wrapper_needs_2fa, wrapper_2fa_type
     if wrapper_process and wrapper_process.poll() is not None and wrapper_running:
         wrapper_running = False
     return {
         "running": wrapper_running,
         "needs_2fa": wrapper_needs_2fa,
+        "2fa_type": wrapper_2fa_type,
         "logs": wrapper_logs[-200:],
     }
 
