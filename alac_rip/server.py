@@ -494,12 +494,18 @@ def _run_job(job: dict) -> None:
                     f"Pre-flight check failed ({e}), falling back to full download"
                 )
 
-    if format_ == "ATMOS":
-        cmd = [go_bin, "run", "main.go", "--atmos", url]
-    elif format_ == "AAC":
-        cmd = [go_bin, "run", "main.go", "--aac", url]
+    patched_bin = Path.home() / ".local" / "share" / "pies-alac-rip" / "amd-main"
+    if patched_bin.exists() and os.access(patched_bin, os.X_OK):
+        _amd_bin: list[str] = [str(patched_bin)]
     else:
-        cmd = [go_bin, "run", "main.go", url]
+        _amd_bin = [go_bin, "run", "main.go"]
+
+    if format_ == "ATMOS":
+        cmd = _amd_bin + ["--atmos", url]
+    elif format_ == "AAC":
+        cmd = _amd_bin + ["--aac", url]
+    else:
+        cmd = _amd_bin + [url]
 
     if skip_file_path:
         cmd += ["--skip-ids-file", str(skip_file_path)]
