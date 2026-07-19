@@ -1,7 +1,19 @@
-# Tauri + SvelteKit + TypeScript
+# Pies Pear Music desktop frontend
 
-This template should help get you started developing with Tauri, SvelteKit and TypeScript in Vite.
+This directory contains the Svelte 5 interface and Tauri 2 desktop shell for
+Pies Pear Music. It is not an independent web application: at runtime the
+Tauri shell starts the bundled Python sidecar and gives the frontend an
+authenticated loopback connection.
 
-## Recommended IDE Setup
+Run frontend checks from this directory:
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer).
+```bash
+npm ci
+npm run check
+npm run build
+npm run tauri dev
+```
+
+See the root [README](../README.md), [dependency reference](../docs/dependencies.md),
+and [development guide](../docs/development.md) for the complete toolchain and
+Linux system packages.

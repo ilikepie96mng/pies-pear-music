@@ -3,6 +3,11 @@
 ## Supported release targets
 
 Version 0.1 targets Linux x86_64 with AppImage, Debian, and RPM artifacts.
+Ubuntu 22.04 is the build baseline. Ubuntu and Debian use `.deb` or AppImage;
+Fedora Workstation uses RPM or AppImage; Bazzite and Arch-family systems use
+AppImage only. Arch-family support is best-effort until its clean-machine smoke
+test exists. No distro is labeled release-supported before its manual package
+check passes.
 
 ## Launching
 

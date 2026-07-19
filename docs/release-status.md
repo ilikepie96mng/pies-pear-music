@@ -8,8 +8,8 @@ not a publication approval.
 - Desktop package launches a PyInstaller backend sidecar instead of requiring a
   source checkout.
 - Local Debian and RPM packages build and contain `usr/bin/pies-backend`.
-- CI builds Ubuntu 22.04 Debian/AppImage artifacts, validates the Debian
-  sidecar, records checksums/build inputs, and uploads SBOM inventory files.
+- CI defines an Ubuntu 22.04 Debian/AppImage build with sidecar, checksum,
+  build-input, and SBOM validation. A green artifact run is still pending.
 - URL/format/name/path input validation, bounded SQLite waits, Strawberry busy
   handling, generic error-path redaction, constrained CORS, and a restrictive
   Tauri CSP are in place.
@@ -29,7 +29,7 @@ not a publication approval.
 
 ## Verified locally
 
-- Non-API Python tests: 149 passing on the available Python 3.14 environment.
+- Compatible local Python suite: 154 passing on the available Python 3.14 environment.
 - Svelte check/build: zero diagnostics.
 - Rust format/Clippy/tests: passing, including sidecar port parsing tests.
 - Debian/RPM artifact verifier: checksums, SBOM manifests, build info, and

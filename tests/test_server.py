@@ -117,9 +117,9 @@ def test_library_returns_dict(client):
         assert isinstance(tracks, list)
 
 
-def test_track_art_missing_path_returns_404(client):
+def test_track_art_unknown_path_is_forbidden(client):
     resp = client.get("/track-art", params={"path": "/tmp/nonexistent.m4a"})
-    assert resp.status_code == 404
+    assert resp.status_code == 403
 
 
 def test_get_config_omits_password(client):
@@ -145,7 +145,7 @@ def test_diagnostics_returns_list(client):
 def test_diagnostics_includes_expected_checks(client):
     resp = client.get("/diagnostics")
     labels = {c["label"] for c in resp.json()}
-    for expected in ("ffmpeg", "Config file", "Music directory", "State directory"):
+    for expected in ("FFmpeg", "Config file", "Music directory", "State directory"):
         assert expected in labels
 
 

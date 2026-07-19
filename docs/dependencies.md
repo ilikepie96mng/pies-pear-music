@@ -8,7 +8,7 @@ wrapper, container, or media executables.
 
 | Dependency | Needed for | Required? | Notes |
 | --- | --- | --- | --- |
-| Linux x86_64 desktop session | Application | Yes | Version 0.1 target. Ubuntu/Debian/Fedora are package-test targets; use AppImage on Bazzite. |
+| Linux x86_64 desktop session | Application | Yes | Version 0.1 target. Ubuntu, Debian, and Fedora are package-test targets; use AppImage on Bazzite and Arch-family systems. |
 | `podman` | Apple/wrapper login | Yes for login and sync | Must be usable by the current user. |
 | Go (`go`) | Sync | Yes for the unmodified downloader source path | Used to run the configured downloader when no separately patched local executable exists. |
 | `ffmpeg` | Media processing | Yes for sync | Must be on `PATH`. |
@@ -54,6 +54,12 @@ The Python packages are declared in `pyproject.toml`; JavaScript packages are
 locked in `app/package-lock.json`; Rust packages are locked in
 `app/src-tauri/Cargo.lock`. `rustfmt` and Clippy are required for the documented
 verification commands.
+
+For Tauri development on Fedora, Arch, OSTree-based systems, and other Linux
+distributions, use the official [Tauri Linux prerequisites](https://v2.tauri.app/start/prerequisites/)
+for the distro-specific WebKitGTK and native package names. Those packages are
+build dependencies; users of a finished package do not need Node, Rust, Python,
+or compiler toolchains.
 
 ## Dependency checks
 

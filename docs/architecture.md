@@ -8,6 +8,20 @@ Pies Pear Music is a Linux desktop application with three distinct layers:
 3. **Python backend** — manages local state, sync jobs, diagnostics, library
    records, and integrations in `alac_rip/`.
 
+## Structure review
+
+The frontend and Tauri lifecycle boundaries are small and explicit. SQLite
+ownership is centralized in `state.py`, and media organization remains in
+`sync.py`. The main structural debt is `server.py`, which currently combines
+API routing, wrapper/auth process management, queue orchestration, diagnostics,
+and third-party integrations. It should eventually be split along those
+boundaries after the release behavior is stable. Auth extraction must happen
+last and preserve the fixture-driven contract in `docs/auth-contract.md`.
+
+Legacy CLI, Git-backed state sync, installer, and systemd files remain only in
+the private development history. The public snapshot verifier excludes them;
+they are not part of the desktop architecture or supported product surface.
+
 ## Packaged and external components
 
 The Tauri bundle embeds a PyInstaller-built `pies-backend` sidecar. This means

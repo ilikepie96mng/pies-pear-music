@@ -1,16 +1,34 @@
 # Pies Pear Music
 
-Pies Pear Music is a Linux desktop application for maintaining an Apple Music
-library through a user-installed downloader and wrapper. Version 0.1 will
-support manual playlist syncs from the desktop application only.
+Pies Pear Music is a local-first Linux desktop companion for manually syncing,
+organizing, exploring, and exporting an Apple Music library through
+user-installed downloader and media tools.
 
 ## Release status
 
-This repository is being prepared for its first public release. Release
-packages are not available yet. Do not use the legacy `install.sh`,
+This private development repository is preparing its first public `0.1.0`
+release. **No supported release packages are available yet.** Do not use the legacy `install.sh`,
 `uninstall.sh`, `music-sync` CLI, or systemd timer as a supported installation
 or sync path; they do not represent the desktop product and will not ship in
 the public release.
+
+## Linux compatibility
+
+“Target” means the packaging path is planned. “Supported” will only be used
+after the clean-machine smoke checklist passes for that distro.
+
+| Distribution | Intended artifact | Current status |
+| --- | --- | --- |
+| Ubuntu 22.04+ | `.deb` or AppImage | Primary build baseline; clean-laptop package test pending |
+| Debian 12+ | `.deb` or AppImage | Compatibility target; clean-machine test pending |
+| Fedora Workstation | RPM or AppImage | Compatibility target; clean-machine test pending |
+| Bazzite | AppImage only | Compatibility target; RPM layering is deliberately unsupported |
+| Arch Linux and derivatives | AppImage | Best-effort compatibility target; no native package or completed smoke test |
+
+Version `0.1.0` targets Linux x86_64. Flatpak, Snap, native Arch packages,
+ARM builds, and other distributions are not currently release targets. An
+AppImage still depends on a compatible host webview/runtime and must be tested;
+“portable” does not mean every Linux installation is automatically supported.
 
 ## Planned v0.1 scope
 
@@ -70,6 +88,24 @@ npm ci
 npm run check
 npm run build
 ```
+
+## Repository structure
+
+| Path | Responsibility |
+| --- | --- |
+| `app/src/` | Svelte desktop interface and authenticated sidecar API client |
+| `app/src-tauri/` | Tauri process lifecycle, launcher metadata, capabilities, and packaging |
+| `alac_rip/server.py` | FastAPI sidecar routes, job queue, wrapper lifecycle, and integrations |
+| `alac_rip/state.py` | SQLite schema, migrations, and local-library persistence |
+| `alac_rip/sync.py` | Media organization and sync-domain behavior |
+| `tests/` | Python unit, API-boundary, auth-contract, and sync regression tests |
+| `scripts/` | Sidecar builds, artifact verification, SBOM inventory, and launch helpers |
+| `docs/` | Architecture, dependencies, packaging, security, and release evidence |
+
+The backend server is still larger than the desired long-term module boundary.
+Its eventual split into auth, jobs, library, integrations, and API modules is a
+tracked maintainability task, not a prerequisite for testing the current
+behavior. Authentication code remains frozen behind its contract tests.
 
 The public contribution and AI-use disclosures are in
 [CONTRIBUTING.md](CONTRIBUTING.md) and [AI_DISCLOSURE.md](AI_DISCLOSURE.md).
