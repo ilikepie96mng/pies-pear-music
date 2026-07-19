@@ -8,8 +8,11 @@ not a publication approval.
 - Desktop package launches a PyInstaller backend sidecar instead of requiring a
   source checkout.
 - Local Debian and RPM packages build and contain `usr/bin/pies-backend`.
-- CI defines an Ubuntu 22.04 Debian/AppImage build with sidecar, checksum,
-  build-input, and SBOM validation. A green artifact run is still pending.
+- CI successfully builds Ubuntu 22.04 Debian and AppImage packages with the
+  real backend sidecar, then verifies package contents, checksums, build-input
+  metadata, and SBOM manifests before uploading the artifacts. The first fully
+  green artifact run was
+  [CI run 29705112778](https://github.com/ilikepie96mng/pies-alac-rip-tool/actions/runs/29705112778).
 - URL/format/name/path input validation, bounded SQLite waits, Strawberry busy
   handling, generic error-path redaction, constrained CORS, and a restrictive
   Tauri CSP are in place.
@@ -34,20 +37,18 @@ not a publication approval.
 - Rust format/Clippy/tests: passing, including sidecar port parsing tests.
 - Debian/RPM artifact verifier: checksums, SBOM manifests, build info, and
   sidecar placement pass.
+- CI Python suites pass on Python 3.12 and 3.13; frontend and Rust checks pass.
+- CI builds and verifies Ubuntu 22.04 Debian and AppImage artifacts. This is
+  build evidence, not a substitute for the clean-machine smoke tests below.
 
 ## Publication blockers
 
-- Build and smoke-test AppImage on the Ubuntu 22.04 CI baseline. Fedora 44
-  local AppImage bundling is blocked by linuxdeploy's older `strip` tool not
-  understanding newer ELF `RELR` sections; it is not release evidence.
 - Validate the complete package smoke matrix on Ubuntu 22.04, Debian 12,
   current Fedora, and current Bazzite.
 - Resolve third-party provenance and licensing for every borrowed or external
   dependency path. No package may distribute an unlicensed patch or binary.
 - Create the sanitized public repository from a reviewed new history and pass
   secret/PII/history review. Never publish this private history.
-- Run the Python API suite on the supported 3.12 and 3.13 CI environments.
-  Local Python 3.14 hangs during FastAPI TestClient lifespan startup.
 - Perform the authorized manual release check: login/2FA, manual playlist sync,
   restart, desktop Secret Service behavior, authenticated sidecar launch,
   dependency failures, and state retention. No live credentials or downloads
