@@ -1,28 +1,21 @@
 # Copy this to ~/.config/pies-alac-rip/config.yaml and fill in values.
 # This file is safe to commit. config.yaml (without .example) is gitignored.
 
-# Your Apple Music media-user-token (session credential — expires periodically).
-# Get it: open Apple Music in browser → DevTools → Application → Cookies → media-user-token
-# If downloads stop authenticating, re-fetch this token and update both this file
-# and ~/.local/share/pies-alac-rip/apple-music-downloader/config.yaml
-media_user_token: "YOUR_TOKEN_HERE"
-
 # Where to store downloaded music (must exist or be creatable)
-music_dir: "~/Music/Apple Music"
-
-# Staging area for in-progress downloads (auto-created)
-staging_dir: "~/Music/.staging"
-
-# Path to cloned zhaarey downloader repo
-downloader_repo: "~/.local/share/pies-alac-rip/apple-music-downloader"
-
-# Path to wrapper binary
-wrapper_bin: "~/.local/share/pies-alac-rip/wrapper"
+music_dir: "~/Music/pies-alac-rip"
 
 # Path to local state. This database and its logs are never committed or synced
 # by the application.
 state_dir: "~/.local/share/pies-alac-rip"
 
+# Parent directory containing apple-music-downloader/ and wrapper/.
+# This is a user-installed external dependency; see docs/dependencies.md.
+alac_rip_dir: ""
+
 # Number of days to keep sync logs. Logs older than this are deleted at the
 # start of each sync. Set to 0 to disable cleanup.
 log_retention_days: 2
+
+# Optional. Enables Last.fm-based recommendations; never put Apple/wrapper
+# credentials in this file. They are handled through the desktop Secret Service.
+lastfm_api_key: ""

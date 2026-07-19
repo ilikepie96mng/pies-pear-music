@@ -42,6 +42,8 @@ are out of scope for v0.1.
 Pies Pear Music uses user-installed downloader, wrapper, Podman, and media
 tools. The Setup and Diagnostics screens identify missing dependencies and
 their configured locations without exposing those paths in support output.
+See [the complete dependency reference](docs/dependencies.md) before setting
+up a source checkout or attempting a sync.
 
 ## Data and security
 
