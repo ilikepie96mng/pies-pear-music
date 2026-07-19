@@ -9,9 +9,11 @@
   import Home from "$lib/Home.svelte";
   import PlaylistDetail from "$lib/PlaylistDetail.svelte";
   import Download from "$lib/Download.svelte";
+  import About from "$lib/About.svelte";
+  import DataControls from "$lib/DataControls.svelte";
   import { api, type Playlist } from "../api";
 
-  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home";
+  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data";
 
   let view = $state<View>("home");
   let playlists = $state<Playlist[]>([]);
@@ -60,7 +62,7 @@
   }
 </script>
 
-<div class="flex h-screen bg-[#0f0f0f] text-white overflow-hidden select-none">
+<div class="flex h-screen overflow-hidden select-none" style="background:var(--bg);color:var(--text-primary);">
   <Sidebar
     {playlists}
     selectedName={selectedName}
@@ -72,6 +74,8 @@
     onopenHome={() => (view = "home")}
     onopenDashboard={() => (view = "dashboard")}
     onopenDownload={() => (view = "download")}
+    onopenAbout={() => (view = "about")}
+    onopenData={() => (view = "data")}
     onopenSync={syncingPlaylist ? () => (view = "sync") : undefined}
     onplaylistAdded={onPlaylistAdded}
   />
@@ -113,6 +117,10 @@
         <Settings />
       {:else if view === "download"}
         <Download />
+      {:else if view === "about"}
+        <About />
+      {:else if view === "data"}
+        <DataControls />
       {:else}
         <div class="flex items-center justify-center h-full text-zinc-600 text-sm">
           Select a playlist from the sidebar

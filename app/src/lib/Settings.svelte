@@ -1,17 +1,59 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api } from "../api";
+  import {
+    applyTheme, getStoredTheme, parseAppearance, serializeAppearance, textContrast, themes, type ThemeId,
+  } from "./themes";
 
   let cfg = $state<Record<string, string>>({});
   let saving = $state(false);
   let saved = $state(false);
   let error = $state<string | null>(null);
   let loaded = $state(false);
+  let theme = $state<ThemeId>("amber-night");
+  let appearanceMessage = $state<string | null>(null);
+  let contrast = $derived(textContrast(theme));
 
   onMount(async () => {
+    theme = getStoredTheme();
     cfg = await api.config();
     loaded = true;
   });
+
+  function selectTheme(id: ThemeId) {
+    theme = id;
+    applyTheme(id);
+    appearanceMessage = null;
+  }
+
+  function resetTheme() {
+    selectTheme("amber-night");
+    appearanceMessage = "Reset to Amber Night.";
+  }
+
+  function exportTheme() {
+    const blob = new Blob([serializeAppearance(theme)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "pies-pear-music-appearance.json";
+    link.click();
+    URL.revokeObjectURL(url);
+    appearanceMessage = "Preset exported.";
+  }
+
+  async function importTheme(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    try {
+      selectTheme(parseAppearance(await file.text()));
+      appearanceMessage = "Preset imported.";
+    } catch (e) {
+      appearanceMessage = e instanceof Error ? e.message : "Could not import theme file.";
+    }
+  }
 
   const SECTIONS: {
     title: string;
@@ -23,19 +65,12 @@
       fields: [
         { key: "music_dir",   label: "Music directory",   hint: "Where synced ALAC files are stored. Must exist or be creatable." },
         { key: "state_dir",   label: "State directory",   hint: "Where the track database (downloaded.db) and sync logs are stored." },
-        { key: "staging_dir", label: "Staging directory", hint: "Optional — override the temporary area used during downloads. Default: music_dir/.staging" },
       ],
     },
     {
       title: "Tools",
       fields: [
         { key: "alac_rip_dir", label: "alac-rip directory", hint: "Absolute path to your alac-rip clone (contains wrapper/ and apple-music-downloader/)." },
-      ],
-    },
-    {
-      title: "Sync",
-      fields: [
-        { key: "github_remote", label: "GitHub remote", hint: "Optional — used to push state DB changes. Leave blank to disable." },
       ],
     },
     {
@@ -92,6 +127,49 @@
     </div>
   {:else}
     <div class="flex flex-col gap-7">
+      <div>
+        <div class="flex items-baseline gap-2 mb-3">
+          <span class="text-zinc-300 text-sm font-semibold">Appearance</span>
+          <span class="text-zinc-600 text-xs">Stored locally; it does not alter sync configuration.</span>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          {#each themes as preset}
+            <button
+              type="button"
+              onclick={() => selectTheme(preset.id)}
+              aria-pressed={theme === preset.id}
+              class="rounded-xl border p-3 text-left transition-colors {theme === preset.id ? 'border-amber-500 bg-amber-950/30' : 'border-[rgba(255,255,255,0.10)] bg-[#12100e] hover:border-zinc-600'}">
+              <div class="flex gap-1.5 mb-2" aria-hidden="true">
+                {#each [preset.colors['--bg'], preset.colors['--surface'], preset.colors['--accent'], preset.colors['--accent-2']] as color}
+                  <span class="h-4 w-4 rounded-full border border-white/20" style:background={color}></span>
+                {/each}
+              </div>
+              <div class="text-sm font-medium text-white">{preset.name}</div>
+              <div class="mt-0.5 text-[10px] text-zinc-500">{preset.description}</div>
+            </button>
+          {/each}
+        </div>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <button type="button" onclick={resetTheme} class="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs" style="color:var(--text-secondary);background:var(--surface);">Reset</button>
+          <button type="button" onclick={exportTheme} class="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs" style="color:var(--text-secondary);background:var(--surface);">Export preset</button>
+          <label class="cursor-pointer rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs" style="color:var(--text-secondary);background:var(--surface);">
+            Import preset
+            <input class="sr-only" type="file" accept="application/json,.json" onchange={importTheme} />
+          </label>
+          {#if appearanceMessage}
+            <span class="text-xs" style="color:var(--text-muted);">{appearanceMessage}</span>
+          {/if}
+        </div>
+        <p class="mt-2 text-xs" style="color:var(--text-muted);">
+          Primary text contrast: {contrast.toFixed(1)}:1
+          {#if contrast < 4.5}
+            <span style="color:#f87171;"> — below the 4.5:1 target.</span>
+          {:else}
+            <span style="color:var(--accent);"> — meets the 4.5:1 target.</span>
+          {/if}
+        </p>
+      </div>
+
       {#each SECTIONS as section}
         <div>
           <div class="flex items-baseline gap-2 mb-3">

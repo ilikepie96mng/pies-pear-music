@@ -19,9 +19,8 @@ config.yaml
 # Binaries installed by install.sh
 .local/
 
-# .state/ is intentionally NOT gitignored — it's committed after each sync
-# to back up playlist state to GitHub
-.state/logs/
+# Runtime state is user data. It must never enter source control.
+.state/
 
 .worktrees/
 .superpowers/
@@ -29,4 +28,5 @@ config.yaml
 app/node_modules/
 app/dist/
 app/src-tauri/target/
+app/src-tauri/binaries/
 app/.codex/

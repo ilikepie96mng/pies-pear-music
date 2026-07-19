@@ -137,6 +137,30 @@ def test_rename_playlist(state):
     assert any(t.track_id == "track-x1" for t in tracks)
 
 
+def test_delete_playlist_removes_its_links_and_sync_history(state):
+    state.add_playlist("Remove Me", "https://music.apple.com/playlist/remove")
+    state.add_track(Track(
+        track_id="track-remove",
+        title="Song",
+        artist="Artist",
+        album="Album",
+        local_path="/Music/song.m4a",
+        downloaded_at=datetime.now().isoformat(),
+    ))
+    state.add_track_to_playlist("Remove Me", "track-remove")
+    state.record_sync_run(
+        "Remove Me", "2026-01-01T00:00:00", "2026-01-01T00:01:00",
+        "success", 1, 0, 0, "/tmp/sync.log",
+    )
+
+    state.delete_playlist("Remove Me")
+
+    assert state.get_playlists() == []
+    assert state.get_playlist_tracks("Remove Me") == []
+    assert state.get_recent_runs("Remove Me") == []
+    assert state.is_downloaded("track-remove") is True
+
+
 def test_set_playlist_paused(state):
     state.add_playlist("Toggle PL", "https://music.apple.com/playlist/toggle")
 

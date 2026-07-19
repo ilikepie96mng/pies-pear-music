@@ -29,6 +29,13 @@ def get_similar_artists(artist: str, api_key: str, limit: int = 10) -> list[dict
     return [{"name": a["name"], "match": float(a["match"]), "url": a["url"]} for a in artists]
 
 
+def get_tag_top_artists(tag: str, api_key: str, limit: int = 10) -> list[dict]:
+    """Returns popular artists for a Last.fm tag: [{name, url}]."""
+    data = _get({"method": "tag.getTopArtists", "tag": tag, "api_key": api_key, "limit": limit})
+    artists = data.get("topartists", {}).get("artist", [])
+    return [{"name": a["name"], "url": a["url"]} for a in artists]
+
+
 def get_artist_top_tracks(artist: str, api_key: str, limit: int = 5) -> list[dict]:
     """Returns top tracks for artist: [{name, url, artist}]. Returns [] if not found."""
     data = _get({"method": "artist.getTopTracks", "artist": artist, "api_key": api_key, "limit": limit})

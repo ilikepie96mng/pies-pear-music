@@ -7,20 +7,28 @@ name = "pies-alac-rip-tool"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "typer>=0.13",
-    "rich>=13",
     "mutagen>=1.47",
     "requests>=2.32",
-    "textual>=0.60",
     "pyyaml>=6.0",
     "fastapi>=0.115",
     "uvicorn>=0.30",
 ]
 
-[project.scripts]
-# Single entrypoint — subcommands: sync (default), add, status, clean
-music-sync = "alac_rip.cli:app"
+[project.optional-dependencies]
+test = [
+    "httpx>=0.28,<0.29",
+    "pytest>=8.2,<9",
+    "pytest-mock>=3.14,<4",
+    "pytest-timeout>=2.3,<3",
+    "ruff>=0.12,<1",
+]
+package = [
+    "pyinstaller>=6.11,<7",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["alac_rip*"]
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]

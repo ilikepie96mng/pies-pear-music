@@ -1,13 +1,13 @@
 import asyncio
-import base64
 import json
 import os
 import queue
 import re
+import secrets
 import shutil
 import socket
-import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import uuid
@@ -15,14 +15,15 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import uvicorn
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from mutagen.mp4 import MP4, MP4Cover
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from alac_rip import am_api, lastfm_api, strawberry_sync
 from alac_rip.am_api import AMApiError
@@ -39,8 +40,68 @@ def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+_DOWNLOAD_FORMATS = frozenset({"ALAC", "AAC", "ATMOS"})
+_MAX_PLAYLIST_NAME_LENGTH = 120
+_ABSOLUTE_PATH_RE = re.compile(r"(?<![\w:])/(?:[^\s:'\"]+/?)+")
+
+
+def _validate_apple_music_url(value: str) -> str:
+    """Accept only absolute Apple Music HTTPS URLs suitable for the downloader."""
+    url = value.strip()
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "music.apple.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.path.strip("/")
+    ):
+        raise ValueError("URL must be an HTTPS music.apple.com link")
+    return url
+
+
+def _validate_download_format(value: str) -> str:
+    format_ = value.upper()
+    if format_ not in _DOWNLOAD_FORMATS:
+        raise ValueError(f"Format must be one of: {', '.join(sorted(_DOWNLOAD_FORMATS))}")
+    return format_
+
+
+def _validate_playlist_name(value: str) -> str:
+    name = value.strip()
+    if not name:
+        raise ValueError("Playlist name is required")
+    if len(name) > _MAX_PLAYLIST_NAME_LENGTH:
+        raise ValueError(f"Playlist name must be at most {_MAX_PLAYLIST_NAME_LENGTH} characters")
+    if any(ord(char) < 32 or ord(char) == 127 for char in name):
+        raise ValueError("Playlist name cannot contain control characters")
+    return name
+
+
+def _redact_runtime_paths(message: str) -> str:
+    """Keep unexpected errors actionable without exposing local filesystem paths."""
+    return _ABSOLUTE_PATH_RE.sub("<local path>", message)
+
+
 cfg: Optional[Config] = None
 state: Optional[StateManager] = None
+
+
+def _resolve_library_file(path: str) -> Path:
+    """Resolve a user-supplied path only when it is a recorded library track."""
+    if cfg is None or state is None:
+        raise HTTPException(503, "Library is not ready")
+
+    try:
+        track_path = Path(path).expanduser().resolve()
+        music_dir = cfg.music_dir.expanduser().resolve()
+        track_path.relative_to(music_dir)
+    except (OSError, RuntimeError, ValueError):
+        raise HTTPException(403, "Path is outside the music library")
+
+    if not state.has_track_path(track_path):
+        raise HTTPException(403, "Path is not a known library track")
+    return track_path
 
 # ── Wrapper / downloader state ────────────────────────────────────────────────
 
@@ -52,6 +113,13 @@ wrapper_running: bool = False
 wrapper_needs_2fa: bool = False
 wrapper_2fa_type: str = ""  # "device" | "sms" | ""
 wrapper_logs: list[str] = []
+_session_credentials: Optional[tuple[str, str]] = None
+
+_SECRET_SERVICE_ATTRIBUTES = ("application", "pies-pear-music", "purpose", "apple-wrapper")
+_SECRET_SERVICE_LABEL = "Pies Pear Music Apple wrapper credentials"
+_SECRET_SERVICE_TIMEOUT_SECONDS = 5
+_API_CAPABILITY_HEADER = "x-pies-api-token"
+_api_capability: Optional[str] = None
 
 job_queue: queue.Queue = queue.Queue()
 active_job: Optional[dict] = None
@@ -60,41 +128,94 @@ pending_jobs_lock: threading.Lock = threading.Lock()
 
 
 def _credentials_path() -> Path:
+    """Legacy path, retained only for one-way cleanup after keyring migration."""
     return Path.home() / ".config" / "pies-alac-rip" / ".credentials"
 
 
-def save_credentials(email: str, password: str) -> bool:
+def _secret_service_available() -> bool:
+    return shutil.which("secret-tool") is not None
+
+
+def _secret_service_store(email: str, password: str) -> bool:
+    if not _secret_service_available():
+        return False
     try:
-        data = {
-            "email": base64.b64encode(email.encode()).decode(),
-            "password": base64.b64encode(password.encode()).decode(),
-        }
-        _credentials_path().write_text(json.dumps(data))
-        return True
-    except Exception:
+        result = subprocess.run(
+            ["secret-tool", "store", f"--label={_SECRET_SERVICE_LABEL}", *_SECRET_SERVICE_ATTRIBUTES],
+            input=json.dumps({"email": email, "password": password}),
+            capture_output=True,
+            text=True,
+            timeout=_SECRET_SERVICE_TIMEOUT_SECONDS,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
         return False
 
 
-def load_credentials() -> tuple[Optional[str], Optional[str]]:
+def _secret_service_load() -> tuple[Optional[str], Optional[str]]:
+    if not _secret_service_available():
+        return None, None
     try:
-        path = _credentials_path()
-        if path.exists():
-            data = json.loads(path.read_text())
-            return (
-                base64.b64decode(data["email"]).decode(),
-                base64.b64decode(data["password"]).decode(),
-            )
-    except Exception:
+        result = subprocess.run(
+            ["secret-tool", "lookup", *_SECRET_SERVICE_ATTRIBUTES],
+            capture_output=True,
+            text=True,
+            timeout=_SECRET_SERVICE_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0 or not result.stdout:
+            return None, None
+        data = json.loads(result.stdout)
+        if not isinstance(data, dict):
+            return None, None
+        email = data.get("email")
+        password = data.get("password")
+        if isinstance(email, str) and isinstance(password, str):
+            return email, password
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
         pass
     return None, None
 
 
-def delete_credentials() -> None:
+def _secret_service_clear() -> None:
+    if not _secret_service_available():
+        return
     try:
-        path = _credentials_path()
-        if path.exists():
-            path.unlink()
-    except Exception:
+        subprocess.run(
+            ["secret-tool", "clear", *_SECRET_SERVICE_ATTRIBUTES],
+            capture_output=True,
+            text=True,
+            timeout=_SECRET_SERVICE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def save_credentials(email: str, password: str) -> bool:
+    """Store credentials in Secret Service, retaining only a session fallback."""
+    global _session_credentials
+    _session_credentials = (email, password)
+    persisted = _secret_service_store(email, password)
+    if persisted:
+        try:
+            _credentials_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+    return persisted
+
+
+def load_credentials() -> tuple[Optional[str], Optional[str]]:
+    if _session_credentials is not None:
+        return _session_credentials
+    return _secret_service_load()
+
+
+def delete_credentials() -> None:
+    global _session_credentials
+    _session_credentials = None
+    _secret_service_clear()
+    try:
+        _credentials_path().unlink(missing_ok=True)
+    except OSError:
         pass
 
 
@@ -110,6 +231,19 @@ def ensure_wrapper_image(wrapper_dir: Path) -> tuple[bool, Optional[str]]:
     return True, None
 
 
+def _redact_wrapper_log(value: str, email: Optional[str] = None, password: Optional[str] = None) -> str:
+    """Keep submitted credentials out of user-visible wrapper logs.
+
+    Parsing uses the original wrapper output, so this display-only redaction
+    cannot change the known-good login and 2FA markers.
+    """
+    redacted = value
+    for secret in (email, password):
+        if secret:
+            redacted = redacted.replace(secret, "[redacted]")
+    return redacted
+
+
 def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login=False):
     global wrapper_running, wrapper_process, wrapper_needs_2fa, wrapper_2fa_type
     login_successful = False
@@ -118,7 +252,7 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
             line = line.strip()
             if not line:
                 continue
-            target_list.append(line)
+            target_list.append(_redact_wrapper_log(line, email, password))
             if "credentialHandler:" in line and "2FA: true" in line:
                 wrapper_needs_2fa = True
                 wrapper_2fa_type = "sms"
@@ -139,6 +273,8 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
                     if email and password:
                         if save_credentials(email, password):
                             target_list.append("Credentials saved for auto-login")
+                        else:
+                            target_list.append("Credentials kept for this session only")
     except Exception as e:
         target_list.append(f"Error reading wrapper logs: {e}")
     finally:
@@ -174,7 +310,7 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
         wrapper_logs = []
 
     prefix = "Auto-login: " if auto_login else ""
-    wrapper_logs.append(f"{prefix}Starting wrapper login for {email}...")
+    wrapper_logs.append(f"{prefix}Starting wrapper login...")
 
     if cfg is None or not cfg.alac_rip_dir or not cfg.alac_rip_dir.exists():
         wrapper_logs.append(f"{prefix}alac_rip_dir not configured — set it in Settings")
@@ -244,11 +380,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="pies-alac-rip", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_api_capability(request: Request, call_next):
+    """Require the Tauri-generated capability when running as a sidecar."""
+    if request.method != "OPTIONS" and _api_capability:
+        supplied = request.headers.get(_API_CAPABILITY_HEADER)
+        if not supplied or not secrets.compare_digest(supplied, _api_capability):
+            return Response(status_code=401)
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # Tauri's Linux webview uses http://tauri.localhost. Keep the Vite origin
+    # only for local development; do not expose the loopback API to arbitrary
+    # browser origins.
+    allow_origins=["http://tauri.localhost", "http://localhost:1420"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
+    allow_headers=["content-type", _API_CAPABILITY_HEADER],
 )
 
 
@@ -264,37 +415,52 @@ def get_diagnostics():
 
     results: list[dict] = []
 
-    ffmpeg = shutil.which("ffmpeg")
-    results.append(check("ffmpeg", ffmpeg is not None, ffmpeg or "not found in PATH"))
-
-    git = shutil.which("git")
-    results.append(check("Git", git is not None, git or "not found in PATH"))
+    for command, label, optional in (
+        ("podman", "Podman", False),
+        ("go", "Go", False),
+        ("ffmpeg", "FFmpeg", False),
+        ("MP4Box", "MP4Box", False),
+        ("mp4decrypt", "mp4decrypt", True),
+    ):
+        available = shutil.which(command) is not None
+        if available:
+            detail = "available"
+        elif optional:
+            detail = "optional — not found in PATH"
+        else:
+            detail = "not found in PATH"
+        results.append(check(label, available, detail))
 
     config_exists = DEFAULT_CONFIG_PATH.exists()
-    results.append(check("Config file", config_exists, str(DEFAULT_CONFIG_PATH)))
+    results.append(check("Config file", config_exists, "available" if config_exists else "not found"))
 
     if cfg is not None:
         music_ok = cfg.music_dir.exists()
-        results.append(check("Music directory", music_ok, str(cfg.music_dir)))
+        results.append(check("Music directory", music_ok, "available" if music_ok else "not found"))
 
         state_ok = cfg.state_dir.exists()
-        results.append(check("State directory", state_ok, str(cfg.state_dir)))
+        results.append(check("State directory", state_ok, "available" if state_ok else "not found"))
 
         alac_ok = bool(cfg.alac_rip_dir) and cfg.alac_rip_dir.exists()
-        results.append(check("alac-rip directory", alac_ok, str(cfg.alac_rip_dir) if alac_ok else "not configured — set in Settings"))
+        results.append(check("alac-rip directory", alac_ok, "available" if alac_ok else "not configured — set in Settings"))
+        downloader_ok = alac_ok and (cfg.alac_rip_dir / "apple-music-downloader").is_dir()
+        results.append(check(
+            "Downloader source",
+            downloader_ok,
+            "available" if downloader_ok else "not found under alac-rip directory",
+        ))
+        wrapper_ok = alac_ok and (cfg.alac_rip_dir / "wrapper").is_dir()
+        results.append(check(
+            "Wrapper source",
+            wrapper_ok,
+            "available" if wrapper_ok else "not found under alac-rip directory",
+        ))
     else:
-        for label in ("Music directory", "State directory", "alac-rip directory"):
+        for label in (
+            "Music directory", "State directory", "alac-rip directory",
+            "Downloader source", "Wrapper source",
+        ):
             results.append(check(label, False, "Config not loaded"))
-
-    try:
-        proc = subprocess.run(
-            ["systemctl", "--user", "is-active", "pies-alac-rip.timer"],
-            capture_output=True, text=True, timeout=5,
-        )
-        timer_active = proc.stdout.strip() == "active"
-        results.append(check("Systemd timer", timer_active, proc.stdout.strip() or "inactive"))
-    except Exception as exc:
-        results.append(check("Systemd timer", False, str(exc)))
 
     return results
 
@@ -321,19 +487,21 @@ def get_playlists():
 
 @app.post("/playlists", status_code=201)
 def add_playlist(body: PlaylistIn):
-    state.add_playlist(body.name, body.url)
+    try:
+        name = _validate_playlist_name(body.name)
+        url = _validate_apple_music_url(body.url)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    state.add_playlist(name, url)
     # Fetch the newly added playlist and return via _playlist_dict for consistency
     from alac_rip.state import Playlist
-    playlist = Playlist(name=body.name, url=body.url, last_synced=None, paused=False)
+    playlist = Playlist(name=name, url=url, last_synced=None, paused=False)
     return _playlist_dict(playlist)
 
 
 @app.delete("/playlists/{name}", status_code=204)
 def delete_playlist(name: str):
-    with sqlite3.connect(cfg.state_dir / "downloaded.db") as conn:
-        conn.execute("DELETE FROM playlist_tracks WHERE playlist_name = ?", (name,))
-        conn.execute("DELETE FROM sync_runs WHERE playlist_name = ?", (name,))
-        conn.execute("DELETE FROM playlists WHERE name = ?", (name,))
+    state.delete_playlist(name)
     return None
 
 
@@ -348,10 +516,14 @@ def patch_playlist(name: str, body: PlaylistPatch):
     if name not in playlists:
         raise HTTPException(404, f"Playlist '{name}' not found")
     if body.name is not None and body.name != name:
-        if body.name in playlists:
-            raise HTTPException(409, f"Playlist '{body.name}' already exists")
-        state.rename_playlist(name, body.name)
-        name = body.name
+        try:
+            new_name = _validate_playlist_name(body.name)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        if new_name in playlists:
+            raise HTTPException(409, f"Playlist '{new_name}' already exists")
+        state.rename_playlist(name, new_name)
+        name = new_name
     if body.paused is not None:
         state.set_playlist_paused(name, body.paused)
     updated = {p.name: p for p in state.get_playlists()}[name]
@@ -410,7 +582,7 @@ def _run_job(job: dict) -> None:
             amd_cfg = yaml.safe_load(f) or {}
         save_folder = Path(amd_cfg.get(save_folder_key, "")).expanduser()
     except Exception as exc:
-        msg = f"Cannot read downloader config: {exc}"
+        msg = _redact_runtime_paths(f"Cannot read downloader config: {exc}")
         emit({"status": "error", "message": msg, "log_path": str(log_path)})
         if playlist_name:
             state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
@@ -424,10 +596,8 @@ def _run_job(job: dict) -> None:
                                   "error", 0, 0, 0, str(log_path), msg)
         return
 
-    linuxbrew_bin = "/var/home/linuxbrew/.linuxbrew/bin"
     env = os.environ.copy()
-    env["PATH"] = f"{linuxbrew_bin}:{env.get('PATH', '')}"
-    go_bin = shutil.which("go", path=env["PATH"]) or f"{linuxbrew_bin}/go"
+    go_bin = shutil.which("go", path=env.get("PATH")) or "go"
     _tmp = tempfile.mkdtemp()
     manifest_path = Path(_tmp) / "manifest.json"
 
@@ -520,7 +690,7 @@ def _run_job(job: dict) -> None:
             cwd=str(amd_dir), env=env,
         )
     except Exception as exc:
-        msg = str(exc)
+        msg = _redact_runtime_paths(str(exc))
         write_log(f"[error] {msg}")
         emit({"status": "error", "message": msg, "log_path": str(log_path)})
         if playlist_name:
@@ -557,7 +727,7 @@ def _run_job(job: dict) -> None:
         )
         result = engine.sync(save_folder)
     except Exception as exc:
-        msg = str(exc)
+        msg = _redact_runtime_paths(str(exc))
         write_log(f"[error] {msg}")
         emit({"status": "error", "message": msg, "log_path": str(log_path)})
         if playlist_name:
@@ -610,7 +780,7 @@ def _queue_worker() -> None:
         try:
             _run_job(job)
         except Exception as exc:
-            job["log_q"].put({"status": "error", "message": f"Internal error: {exc}"})
+            job["log_q"].put({"status": "error", "message": _redact_runtime_paths(f"Internal error: {exc}")})
         finally:
             job["log_q"].put(None)  # sentinel: tells _job_event_stream to stop
             active_job = None
@@ -665,6 +835,10 @@ def get_queue():
 
 @app.get("/sync/{name}")
 async def sync_playlist(name: str, format: str = "ALAC"):
+    try:
+        format = _validate_download_format(format)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     playlists = {p.name: p for p in state.get_playlists()}
     if name not in playlists:
         raise HTTPException(404, f"Playlist '{name}' not found")
@@ -742,24 +916,46 @@ def get_home():
 
     api_key = cfg.lastfm_api_key if cfg else ""
     recommendations: list[dict] = []
-    recommendations_available = bool(api_key)
+    cached_recommendations = state.get_recommendation_cache()
+    recommendations_available = bool(api_key or cached_recommendations)
+    recommendation_source = "unavailable"
+    recommendations_live = False
 
     if api_key:
         try:
             top_artists = state.get_top_artists(limit=10)
             library_lower = {a.lower() for a in state.get_all_artists()}
+            excluded_lower = {a.lower() for a in state.get_recommendation_exclusions()}
             seen: dict[str, float] = {}
             for artist in top_artists:
                 try:
                     for s in lastfm_api.get_similar_artists(artist, api_key, limit=5):
+                        recommendations_live = True
                         name_lower = s["name"].lower()
-                        if name_lower not in library_lower and name_lower not in seen:
+                        if name_lower not in library_lower and name_lower not in excluded_lower and name_lower not in seen:
                             seen[name_lower] = s["match"]
                             recommendations.append({
                                 "artist": s["name"],
                                 "similar_to": artist,
+                                "reason": f"Similar to {artist} in your library",
                                 "match": s["match"],
                                 "lastfm_url": s["url"],
+                            })
+                except Exception:
+                    pass
+            for genre in state.get_recommendation_genres():
+                try:
+                    for tagged_artist in lastfm_api.get_tag_top_artists(genre, api_key, limit=5):
+                        recommendations_live = True
+                        name_lower = tagged_artist["name"].lower()
+                        if name_lower not in library_lower and name_lower not in excluded_lower and name_lower not in seen:
+                            seen[name_lower] = 0.35
+                            recommendations.append({
+                                "artist": tagged_artist["name"],
+                                "similar_to": genre,
+                                "reason": f"Matches your {genre} preference",
+                                "match": 0.35,
+                                "lastfm_url": tagged_artist["url"],
                             })
                 except Exception:
                     pass
@@ -784,13 +980,96 @@ def get_home():
             except Exception:
                 pass
 
+    if recommendations_live:
+        state.set_recommendation_cache({
+            "recommendations": recommendations,
+            "recommended_tracks": recommended_tracks,
+            "recommended_albums": recommended_albums,
+        })
+        recommendation_source = "live"
+    elif cached_recommendations:
+        recommendations = cached_recommendations.get("recommendations", [])
+        recommended_tracks = cached_recommendations.get("recommended_tracks", [])
+        recommended_albums = cached_recommendations.get("recommended_albums", [])
+        recommendation_source = "cached"
     return {
         "recent_tracks": recent_tracks,
         "recommendations": recommendations,
         "recommended_tracks": recommended_tracks,
         "recommended_albums": recommended_albums,
         "recommendations_available": recommendations_available,
+        "recommendation_source": recommendation_source,
+        "recommendations_updated_at": (
+            cached_recommendations.get("updated_at") if recommendation_source == "cached" and cached_recommendations else None
+        ),
         "last_sync": last_sync,
+    }
+
+
+class RecommendationExclusionRequest(BaseModel):
+    artist: str
+
+
+@app.post("/recommendations/exclusions")
+def exclude_recommendation_artist(body: RecommendationExclusionRequest):
+    artist = body.artist.strip()
+    if not artist or len(artist) > 200:
+        raise HTTPException(422, "Artist name must be between 1 and 200 characters")
+    state.exclude_recommendation_artist(artist)
+    return {"status": "ok"}
+
+
+@app.get("/recommendations/exclusions")
+def get_recommendation_exclusions():
+    return {"artists": state.get_recommendation_exclusions()}
+
+
+@app.delete("/recommendations/exclusions")
+def clear_recommendation_exclusions():
+    state.clear_recommendation_exclusions()
+    return {"status": "ok"}
+
+
+@app.delete("/recommendations/exclusions/{artist}")
+def include_recommendation_artist(artist: str):
+    artist = artist.strip()
+    if not artist:
+        raise HTTPException(422, "Artist name is required")
+    state.include_recommendation_artist(artist)
+    return {"status": "ok"}
+
+
+class RecommendationPreferencesRequest(BaseModel):
+    genres: list[str]
+
+
+@app.get("/recommendations/preferences")
+def get_recommendation_preferences():
+    return {"genres": state.get_recommendation_genres()}
+
+
+@app.put("/recommendations/preferences")
+def set_recommendation_preferences(body: RecommendationPreferencesRequest):
+    genres: list[str] = []
+    for value in body.genres:
+        genre = value.strip().lower()
+        if not genre or len(genre) > 60:
+            raise HTTPException(422, "Each genre must be between 1 and 60 characters")
+        if genre not in genres:
+            genres.append(genre)
+    if len(genres) > 10:
+        raise HTTPException(422, "Choose at most 10 genre preferences")
+    state.set_recommendation_genres(genres)
+    return {"genres": genres}
+
+
+@app.get("/library-profile")
+def library_profile():
+    return {
+        "schema_version": 1,
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "library": state.get_library_profile(),
+        "privacy": "Contains artist, album, and aggregate track counts only; no paths, URLs, credentials, or tokens.",
     }
 
 
@@ -800,6 +1079,72 @@ class RevealRequest(BaseModel):
 
 class StrawberryExportRequest(BaseModel):
     playlist_name: str
+
+
+class M3uSaveRequest(BaseModel):
+    path: str
+
+
+def _playlist_m3u(tracks) -> str:
+    """Return a portable extended-M3U playlist for the local track paths."""
+    lines = ["#EXTM3U"]
+    for track in tracks:
+        artist = track.artist.replace("\n", " ").replace("\r", " ")
+        title = track.title.replace("\n", " ").replace("\r", " ")
+        lines.append(f"#EXTINF:-1,{artist} - {title}")
+        lines.append(track.local_path)
+    return "\n".join(lines) + "\n"
+
+
+def _m3u_save_target(value: str) -> Path:
+    target = Path(value).expanduser()
+    if not target.is_absolute() or target.suffix.lower() not in {".m3u", ".m3u8"}:
+        raise ValueError("Choose an absolute .m3u or .m3u8 file path")
+    if not target.parent.is_dir():
+        raise ValueError("The selected folder does not exist")
+    return target
+
+
+@app.get("/playlists/{name}/m3u")
+def export_playlist_m3u(name: str):
+    try:
+        name = _validate_playlist_name(name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    tracks = state.get_playlist_tracks(name)
+    if not tracks:
+        raise HTTPException(status_code=404, detail="Playlist has no downloaded tracks")
+    return PlainTextResponse(
+        _playlist_m3u(tracks),
+        media_type="audio/x-mpegurl",
+        headers={"Content-Disposition": 'attachment; filename="playlist.m3u8"'},
+    )
+
+
+@app.post("/playlists/{name}/m3u/save")
+def save_playlist_m3u(name: str, body: M3uSaveRequest):
+    try:
+        name = _validate_playlist_name(name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    try:
+        target = _m3u_save_target(body.path)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    tracks = state.get_playlist_tracks(name)
+    if not tracks:
+        raise HTTPException(status_code=404, detail="Playlist has no downloaded tracks")
+    temporary_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=target.parent, delete=False) as file:
+            file.write(_playlist_m3u(tracks))
+            temporary_path = Path(file.name)
+        temporary_path.replace(target)
+    except OSError:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise HTTPException(500, "Could not save the M3U file") from None
+    return {"status": "ok"}
 
 
 @app.post("/strawberry/export")
@@ -821,8 +1166,10 @@ def strawberry_export(req: StrawberryExportRequest):
         raise HTTPException(status_code=400, detail=f"playlist '{req.playlist_name}' has no tracks")
     try:
         result = strawberry_sync.export_playlist(db_path, req.playlist_name, tracks)
+    except strawberry_sync.StrawberryBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"export failed: {exc}")
+        raise HTTPException(status_code=500, detail=_redact_runtime_paths(f"export failed: {exc}"))
     return result
 
 
@@ -835,7 +1182,7 @@ def reveal_track(req: RevealRequest):
     file). Falls back to xdg-open on the parent directory if D-Bus fails.
     """
     from urllib.parse import quote
-    p = Path(req.local_path)
+    p = _resolve_library_file(req.local_path)
     if not p.exists():
         raise HTTPException(status_code=404, detail=f"file not found: {req.local_path}")
 
@@ -864,7 +1211,7 @@ def reveal_track(req: RevealRequest):
             )
             return {"ok": True, "method": "xdg-open-parent"}
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=_redact_runtime_paths(str(exc)))
 
     raise HTTPException(status_code=501, detail="No file manager found (install xdg-utils)")
 
@@ -883,7 +1230,7 @@ def get_run_tracks(run_id: int):
 
 
 @app.get("/sync-history")
-def get_sync_history(limit: int = 30):
+def get_sync_history(limit: int = Query(default=30, ge=1, le=100)):
     runs = state.get_recent_runs(limit=limit)
     return [
         {
@@ -903,7 +1250,7 @@ def get_sync_history(limit: int = 30):
 
 
 @app.get("/sync-history/{name}")
-def get_playlist_sync_history(name: str, limit: int = 20):
+def get_playlist_sync_history(name: str, limit: int = Query(default=20, ge=1, le=100)):
     runs = state.get_recent_runs(playlist_name=name, limit=limit)
     return [
         {
@@ -944,7 +1291,7 @@ def get_library():
 
 @app.get("/track-art")
 def get_track_art(path: str):
-    track_path = Path(path)
+    track_path = _resolve_library_file(path)
     if not track_path.exists():
         raise HTTPException(404, "File not found")
     try:
@@ -958,19 +1305,37 @@ def get_track_art(path: str):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(500, str(exc))
+        raise HTTPException(500, _redact_runtime_paths(str(exc)))
 
 
 class ConfigUpdate(BaseModel):
     music_dir: Optional[str] = None
     state_dir: Optional[str] = None
-    github_remote: Optional[str] = None
     alac_rip_dir: Optional[str] = None
     log_retention_days: Optional[int] = None
     lastfm_api_key: Optional[str] = None
 
+    @field_validator("music_dir", "state_dir", "alac_rip_dir")
+    @classmethod
+    def paths_must_be_absolute(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        if "\x00" in value:
+            raise ValueError("Path cannot contain a null byte")
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            raise ValueError("Path must be absolute (or begin with ~)")
+        return value
 
-_CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key"}
+    @field_validator("log_retention_days")
+    @classmethod
+    def log_retention_must_be_reasonable(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and not 0 <= value <= 3650:
+            raise ValueError("Log retention must be between 0 and 3650 days")
+        return value
+
+
+_CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key", "github_remote"}
 
 
 @app.get("/config")
@@ -989,6 +1354,7 @@ def update_config(body: ConfigUpdate):
     if DEFAULT_CONFIG_PATH.exists():
         with open(DEFAULT_CONFIG_PATH) as f:
             current = yaml.safe_load(f) or {}
+    current.pop("github_remote", None)
     current.update(body.model_dump(exclude_none=True))
     DEFAULT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(DEFAULT_CONFIG_PATH, "w") as f:
@@ -1066,10 +1432,13 @@ def get_wrapper_status():
 
 @app.get("/download/one-off")
 async def download_one_off(url: str = "", format: str = "ALAC"):
+    try:
+        url = _validate_apple_music_url(url)
+        format = _validate_download_format(format)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     if not wrapper_running:
         raise HTTPException(409, "Wrapper not running — log in to Apple Music first")
-    if not url:
-        raise HTTPException(400, "No URL provided")
 
     job: dict = {
         "id": str(uuid.uuid4()),
@@ -1091,10 +1460,28 @@ async def download_one_off(url: str = "", format: str = "ALAC"):
     )
 
 
+def _read_sidecar_handshake(value: str) -> tuple[int, str]:
+    try:
+        data = json.loads(value)
+        port = data["port"]
+        capability = data["capability"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        raise ValueError("Invalid sidecar handshake") from None
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("Invalid sidecar handshake")
+    if not isinstance(capability, str) or not re.fullmatch(r"[0-9a-f]{64}", capability):
+        raise ValueError("Invalid sidecar handshake")
+    return port, capability
+
+
 if __name__ == "__main__":
+    port = 0
+    if "--sidecar-handshake" in sys.argv:
+        try:
+            port, _api_capability = _read_sidecar_handshake(sys.stdin.readline())
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from None
     sock = socket.socket()
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    Path("/tmp/pies-alac-rip.port").write_text(str(port))
+    sock.bind(("127.0.0.1", port))
     uvicorn.run(app, fd=sock.fileno(), log_level="warning")

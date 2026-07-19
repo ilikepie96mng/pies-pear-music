@@ -12,7 +12,6 @@ def client(tmp_path, monkeypatch):
     cfg_file.write_text(
         f"music_dir: {tmp_path}/Music\n"
         f"state_dir: {tmp_path}/state\n"
-        "github_remote: ''\n"
     )
     monkeypatch.setattr(server_mod, "DEFAULT_CONFIG_PATH", cfg_file)
     with TestClient(app) as c:
@@ -25,7 +24,6 @@ def client_with_lastfm(tmp_path, monkeypatch):
     cfg_file.write_text(
         f"music_dir: {tmp_path}/Music\n"
         f"state_dir: {tmp_path}/state\n"
-        "github_remote: ''\n"
         "lastfm_api_key: 'test-lfm-key'\n"
     )
     monkeypatch.setattr(server_mod, "DEFAULT_CONFIG_PATH", cfg_file)

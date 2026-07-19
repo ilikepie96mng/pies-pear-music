@@ -14,10 +14,9 @@
     artUrls = {};
     const lib = await api.library();
     tracks = lib[name] ?? [];
-    // Port is cached after api.library() resolves — build all URLs synchronously
     const newUrls: Record<string, string> = {};
     for (const t of tracks) {
-      const url = api.trackArtUrl(t.local_path);
+      const url = await api.trackArtUrl(t.local_path);
       if (url) newUrls[t.track_id] = url;
     }
     artUrls = newUrls;

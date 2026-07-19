@@ -13,7 +13,6 @@ def tmp_config(tmp_path):
         "downloader_repo: '~/.local/share/pies-alac-rip/apple-music-downloader'\n"
         "wrapper_bin: '~/.local/share/pies-alac-rip/wrapper'\n"
         "state_dir: '~/Music/Apple Music/.state'\n"
-        "github_remote: 'git@github.com:user/pies-alac-rip-tool.git'\n"
     )
     return config_file
 

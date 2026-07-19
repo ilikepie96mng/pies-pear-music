@@ -26,6 +26,11 @@ class _TrackLike:
 
 _FLATPAK_DB = Path.home() / ".var/app/org.strawberrymusicplayer.strawberry/data/strawberry/strawberry/strawberry.db"
 _NATIVE_DB = Path.home() / ".local/share/strawberry/strawberry/strawberry.db"
+_DB_TIMEOUT_SECONDS = 5
+
+
+class StrawberryBusyError(RuntimeError):
+    """Raised when another process currently owns Strawberry's database."""
 
 
 def find_strawberry_db() -> Optional[Path]:
@@ -65,12 +70,16 @@ def export_playlist(
     if not tracks:
         raise ValueError("refusing to export an empty playlist")
 
+    conn = sqlite3.connect(str(db_path), timeout=_DB_TIMEOUT_SECONDS)
     backup = db_path.with_suffix(f".db.bak.{int(time.time())}")
-    shutil.copy2(db_path, backup)
-
-    conn = sqlite3.connect(str(db_path))
     try:
-        conn.execute("BEGIN")
+        conn.execute(f"PRAGMA busy_timeout = {int(_DB_TIMEOUT_SECONDS * 1000)}")
+        # This is the authority on concurrent writers. A process can start after
+        # the pgrep check, but it cannot write through this transaction.
+        conn.execute("BEGIN IMMEDIATE")
+        # Copy only after SQLite grants our write reservation so the backup
+        # cannot race another writer.
+        shutil.copy2(db_path, backup)
 
         old_ids = [
             r[0]
@@ -99,11 +108,13 @@ def export_playlist(
             )
 
         conn.commit()
+    except sqlite3.OperationalError as exc:
+        conn.rollback()
+        if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+            raise StrawberryBusyError("Strawberry's database is busy; close Strawberry and try again") from exc
+        raise
     except Exception:
         conn.rollback()
-        # Restore the backup on failure so we never leave Strawberry in a bad state
-        conn.close()
-        shutil.copy2(backup, db_path)
         raise
     finally:
         try:

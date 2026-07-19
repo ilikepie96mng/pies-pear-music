@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
-  import { api, type SyncEvent } from "../api";
+  import { streamEvents, type SyncEvent } from "../api";
 
   type Status = "idle" | "queued" | "running" | "done" | "error";
   type Phase = "downloading" | "organizing";
@@ -14,7 +14,7 @@
   let errorMessage = $state<string | null>(null);
   let queuePosition = $state(0);
   let logEl = $state<HTMLElement | null>(null);
-  let source: EventSource | null = null;
+  let streamAbort: AbortController | null = null;
   let nextId = 0;
 
   const PHASES: { key: Phase; label: string }[] = [
@@ -41,10 +41,8 @@
     result = null;
     errorMessage = null;
 
-    source = new EventSource(api.download.oneOffUrl(url.trim(), format));
-
-    source.onmessage = (e) => {
-      const data: SyncEvent = JSON.parse(e.data);
+    streamAbort = new AbortController();
+    void streamEvents(`/download/one-off?url=${encodeURIComponent(url.trim())}&format=${encodeURIComponent(format)}`, (data: SyncEvent) => {
 
       if (data.status === "queued") {
         status = "queued";
@@ -59,21 +57,16 @@
       } else if (data.status === "done") {
         status = "done";
         result = { new: data.new ?? 0, skipped: data.skipped ?? 0, errors: data.errors ?? 0 };
-        source?.close();
       } else if (data.status === "error") {
         status = "error";
         errorMessage = data.message ?? "Unknown error";
-        source?.close();
       }
-    };
-
-    source.onerror = () => {
-      if (status === "running" || status === "queued") {
+    }, streamAbort.signal).catch((error) => {
+      if (error.name !== "AbortError" && (status === "running" || status === "queued")) {
         status = "error";
         errorMessage = "Lost connection to server.";
       }
-      source?.close();
-    };
+    });
   }
 
   function reset() {
@@ -83,7 +76,7 @@
     errorMessage = null;
   }
 
-  onDestroy(() => source?.close());
+  onDestroy(() => streamAbort?.abort());
 </script>
 
 <div class="flex flex-col h-full overflow-y-auto p-8 max-w-2xl">

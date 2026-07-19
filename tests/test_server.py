@@ -11,7 +11,6 @@ def client(tmp_path, monkeypatch):
     cfg_file.write_text(
         f"music_dir: {tmp_path}/Music\n"
         f"state_dir: {tmp_path}/state\n"
-        "github_remote: ''\n"
     )
     monkeypatch.setattr(server_mod, "DEFAULT_CONFIG_PATH", cfg_file)
     with TestClient(app) as c:
@@ -146,7 +145,7 @@ def test_diagnostics_returns_list(client):
 def test_diagnostics_includes_expected_checks(client):
     resp = client.get("/diagnostics")
     labels = {c["label"] for c in resp.json()}
-    for expected in ("ffmpeg", "Config file", "Music directory", "State directory", "Systemd timer"):
+    for expected in ("ffmpeg", "Config file", "Music directory", "State directory"):
         assert expected in labels
 
 
@@ -318,12 +317,12 @@ def test_sync_history_global_aggregates_playlists(client, monkeypatch):
 
 
 def test_put_config_roundtrip(client):
-    resp = client.put("/config", json={"github_remote": "git@github.com:user/repo.git"})
+    resp = client.put("/config", json={"alac_rip_dir": "/opt/pies-tools"})
     assert resp.status_code == 200
 
     resp = client.get("/config")
     assert resp.status_code == 200
-    assert resp.json().get("github_remote") == "git@github.com:user/repo.git"
+    assert resp.json().get("alac_rip_dir") == "/opt/pies-tools"
 
 
 def test_download_one_off_requires_wrapper(client):

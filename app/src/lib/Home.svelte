@@ -1,9 +1,15 @@
 <script lang="ts">
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
   import { api, type HomeData, type RecentTrack } from "../api";
 
   function appleMusicSearch(term: string): string {
-    return `https://music.apple.com/search?term=${encodeURIComponent(term)}`;
+    return `https://music.apple.com/us/search?term=${encodeURIComponent(term)}`;
+  }
+
+  function openExternal(event: MouseEvent, url: string) {
+    event.preventDefault();
+    void openUrl(url).catch(() => {});
   }
 
   interface Props {
@@ -15,6 +21,10 @@
   let data = $state<HomeData | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
+  let profileMessage = $state<string | null>(null);
+  let recommendationsLoading = $state(false);
+  let hiddenArtistsOpen = $state(false);
+  let hiddenArtists = $state<string[]>([]);
 
   // Modal state for "+N tracks" expansion
   let runTracksOpen = $state(false);
@@ -65,6 +75,49 @@
 
   function matchPct(match: number): string {
     return `${Math.round(match * 100)}%`;
+  }
+
+  async function exportLibraryProfile() {
+    try {
+      const profile = await api.libraryProfile();
+      const url = URL.createObjectURL(new Blob([JSON.stringify(profile, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "pies-pear-music-library-profile.json";
+      link.click();
+      URL.revokeObjectURL(url);
+      profileMessage = "Profile exported — it contains no file paths or credentials.";
+    } catch {
+      profileMessage = "Could not export the library profile.";
+    }
+  }
+
+  async function hideRecommendation(artist: string) {
+    try {
+      await api.excludeRecommendationArtist(artist);
+      if (data) data = { ...data, recommendations: data.recommendations.filter((rec) => rec.artist !== artist) };
+    } catch {}
+  }
+
+  async function refreshRecommendations() {
+    recommendationsLoading = true;
+    try {
+      data = await api.home();
+    } catch {
+      profileMessage = "Could not refresh recommendations.";
+    } finally {
+      recommendationsLoading = false;
+    }
+  }
+
+  async function toggleHiddenArtists() {
+    hiddenArtistsOpen = !hiddenArtistsOpen;
+    if (hiddenArtistsOpen) hiddenArtists = await api.recommendationExclusions();
+  }
+
+  async function restoreRecommendation(artist: string) {
+    await api.includeRecommendationArtist(artist);
+    hiddenArtists = hiddenArtists.filter((item) => item !== artist);
   }
 </script>
 
@@ -152,8 +205,28 @@
     <div class="border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden">
       <div class="px-4 py-2.5 bg-[#12100e] border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
         <span class="text-zinc-400 text-xs uppercase tracking-widest font-semibold">Recommended Artists</span>
-        <span class="text-zinc-600 text-[10px]">via Last.fm</span>
+        <div class="flex items-center gap-3">
+          <button onclick={refreshRecommendations} disabled={recommendationsLoading} class="text-[10px] text-zinc-500 hover:text-amber-400 transition-colors disabled:opacity-40">{recommendationsLoading ? "Refreshing…" : "Refresh"}</button>
+          <button onclick={toggleHiddenArtists} class="text-[10px] text-zinc-500 hover:text-amber-400 transition-colors">Hidden artists</button>
+          <button onclick={exportLibraryProfile} class="text-[10px] text-zinc-500 hover:text-amber-400 transition-colors">Export profile</button>
+          <span class="text-zinc-600 text-[10px]">{data.recommendation_source === "cached" ? "cached — offline" : "via Last.fm"}</span>
+        </div>
       </div>
+      {#if profileMessage}<div class="px-4 pt-3 text-[11px] text-zinc-500">{profileMessage}</div>{/if}
+      {#if hiddenArtistsOpen}
+        <div class="px-4 py-3 border-b border-[rgba(255,255,255,0.06)] bg-[#0e0d0c]">
+          <div class="text-[10px] uppercase tracking-widest text-zinc-600 mb-2">Hidden artists</div>
+          {#if hiddenArtists.length === 0}
+            <div class="text-xs text-zinc-600">No hidden artists.</div>
+          {:else}
+            <div class="flex flex-wrap gap-2">
+              {#each hiddenArtists as artist}
+                <button onclick={() => restoreRecommendation(artist)} class="rounded border border-zinc-800 px-2 py-1 text-xs text-zinc-400 hover:text-white hover:border-zinc-600">{artist} ×</button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
 
       {#if !data.recommendations_available}
         <div class="px-4 py-6 text-center">
@@ -172,23 +245,25 @@
         </div>
 
       {:else}
+        <div class="px-4 pt-3 text-[11px] text-zinc-600">Based on artists already in your library; Last.fm similar artists you own or hide are filtered out.</div>
         <div class="divide-y divide-[#181818]">
           {#each data.recommendations as rec}
             <div class="flex items-center gap-3 px-4 py-3">
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
-                  <a href={rec.lastfm_url} target="_blank" rel="noopener noreferrer"
+                  <a href={rec.lastfm_url} onclick={(event) => openExternal(event, rec.lastfm_url)}
                     class="text-sm text-white font-medium hover:text-[#c4b5fd] transition-colors truncate">
                     {rec.artist}
                   </a>
-                  <a href={appleMusicSearch(rec.artist)} target="_blank" rel="noopener noreferrer"
+                  <a href={appleMusicSearch(rec.artist)} onclick={(event) => openExternal(event, appleMusicSearch(rec.artist))}
                     class="flex-shrink-0 text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
                     ♫ Apple Music
                   </a>
                 </div>
-                <div class="text-zinc-600 text-xs mt-0.5">Similar to {rec.similar_to}</div>
+                <div class="text-zinc-600 text-xs mt-0.5">{rec.reason}</div>
               </div>
               <div class="text-zinc-500 text-xs flex-shrink-0">{matchPct(rec.match)} match</div>
+              <button onclick={() => hideRecommendation(rec.artist)} class="text-zinc-700 hover:text-zinc-300 text-xs" title="Hide this artist from recommendations" aria-label={`Hide ${rec.artist}`}>×</button>
             </div>
           {/each}
         </div>
@@ -206,13 +281,13 @@
           {#each data.recommended_tracks as track}
             <div class="flex items-center gap-3 px-4 py-2.5">
               <div class="flex-1 min-w-0">
-                <a href={track.url} target="_blank" rel="noopener noreferrer"
+                <a href={track.url} onclick={(event) => openExternal(event, track.url)}
                   class="text-sm text-white font-medium hover:text-[#fde68a] transition-colors truncate block">
                   {track.name}
                 </a>
                 <div class="text-zinc-600 text-xs mt-0.5">{track.artist}</div>
               </div>
-              <a href={appleMusicSearch(`${track.name} ${track.artist}`)} target="_blank" rel="noopener noreferrer"
+              <a href={appleMusicSearch(`${track.name} ${track.artist}`)} onclick={(event) => openExternal(event, appleMusicSearch(`${track.name} ${track.artist}`))}
                 class="flex-shrink-0 text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
                 ♫ Apple Music
               </a>
@@ -238,13 +313,13 @@
                 <div class="w-9 h-9 rounded flex-shrink-0 bg-[#1e1e1e]"></div>
               {/if}
               <div class="flex-1 min-w-0">
-                <a href={album.url} target="_blank" rel="noopener noreferrer"
+                <a href={album.url} onclick={(event) => openExternal(event, album.url)}
                   class="text-sm text-white font-medium hover:text-[#fde68a] transition-colors truncate block">
                   {album.name}
                 </a>
                 <div class="text-zinc-600 text-xs mt-0.5">{album.artist}</div>
               </div>
-              <a href={appleMusicSearch(`${album.name} ${album.artist}`)} target="_blank" rel="noopener noreferrer"
+              <a href={appleMusicSearch(`${album.name} ${album.artist}`)} onclick={(event) => openExternal(event, appleMusicSearch(`${album.name} ${album.artist}`))}
                 class="flex-shrink-0 text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
                 ♫ Apple Music
               </a>
@@ -260,11 +335,11 @@
 
 {#if runTracksOpen}
   <div role="dialog" aria-modal="true"
-    onclick={() => (runTracksOpen = false)}
+    onclick={e => { if (e.target === e.currentTarget) runTracksOpen = false; }}
     onkeydown={e => { if (e.key === 'Escape') runTracksOpen = false; }}
     tabindex="-1"
     class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-    <div onclick={e => e.stopPropagation()} role="document"
+    <div role="document"
       class="w-[min(640px,90vw)] max-h-[80vh] flex flex-col rounded-2xl border border-[rgba(255,255,255,0.08)] bg-[#0e0c0a] shadow-2xl overflow-hidden">
       <div class="flex items-center justify-between px-5 py-3 border-b border-[rgba(255,255,255,0.06)]">
         <div>

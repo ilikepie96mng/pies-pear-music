@@ -8,12 +8,15 @@
   let { onopenSettings }: Props = $props();
 
   const GROUPS: { title: string; labels: string[]; critical?: boolean }[] = [
-    { title: "System tools",  labels: ["ffmpeg", "Git"] },
-    { title: "Configuration", labels: ["Config file", "Music directory", "State directory", "Staging directory"], critical: true },
-    { title: "Automation",    labels: ["Systemd timer"] },
+    { title: "System tools", labels: ["Podman", "Go", "FFmpeg", "MP4Box", "mp4decrypt"] },
+    { title: "Configuration", labels: ["Config file", "Music directory", "State directory", "alac-rip directory"], critical: true },
+    { title: "External sources", labels: ["Downloader source", "Wrapper source"], critical: true },
   ];
 
-  const CRITICAL = new Set(["Config file", "Music directory", "State directory"]);
+  const CRITICAL = new Set([
+    "Config file", "Music directory", "State directory", "alac-rip directory",
+    "Downloader source", "Wrapper source",
+  ]);
 
   let checks = $state<DiagnosticCheck[]>([]);
   let loading = $state(true);

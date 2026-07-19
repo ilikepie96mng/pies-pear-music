@@ -19,19 +19,9 @@ downloader_repo: "~/.local/share/pies-alac-rip/apple-music-downloader"
 # Path to wrapper binary
 wrapper_bin: "~/.local/share/pies-alac-rip/wrapper"
 
-# Path to state directory — MUST be inside the repo root so git add works.
-# install.sh sets this to the absolute path of <repo>/.state automatically.
-state_dir: "FILLED_BY_INSTALL_SCRIPT"
-
-# GitHub remote for state sync (set automatically by install.sh)
-github_remote: ""
-
-# Apple ID credentials for the FairPlay decryption wrapper.
-# IMPORTANT: The known-good wrapper flow uses your normal Apple ID login,
-# not an app-specific password, because the wrapper performs an interactive
-# device login and may prompt for 2FA.
-apple_id_email: "YOUR_APPLE_ID@email.com"
-apple_id_password: "YOUR_APPLE_ID_PASSWORD"
+# Path to local state. This database and its logs are never committed or synced
+# by the application.
+state_dir: "~/.local/share/pies-alac-rip"
 
 # Number of days to keep sync logs. Logs older than this are deleted at the
 # start of each sync. Set to 0 to disable cleanup.

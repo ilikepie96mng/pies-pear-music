@@ -14,6 +14,6 @@ def test_load_config_expands_home_in_music_dir(tmp_config):
 
 
 
-def test_load_config_reads_github_remote(tmp_config):
+def test_load_config_uses_local_state_directory(tmp_config):
     cfg = load_config(tmp_config)
-    assert cfg.github_remote == "git@github.com:user/pies-alac-rip-tool.git"
+    assert cfg.state_dir.is_absolute()

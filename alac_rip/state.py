@@ -1,4 +1,5 @@
 import sqlite3
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -44,7 +45,12 @@ class StateManager:
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+        # A local desktop app can have overlapping UI and sync requests. Bound
+        # SQLite's lock wait so a busy database cannot leave an API request
+        # stuck indefinitely.
+        conn = sqlite3.connect(self.db_path, timeout=5)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        return conn
 
     def _init_db(self) -> None:
         with self._conn() as conn:
@@ -98,6 +104,23 @@ class StateManager:
                 conn.execute("ALTER TABLE tracks ADD COLUMN am_track_id TEXT")
             if "artwork_url" not in track_cols:
                 conn.execute("ALTER TABLE tracks ADD COLUMN artwork_url TEXT")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS recommendation_exclusions (
+                    artist TEXT PRIMARY KEY
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS recommendation_genres (
+                    genre TEXT PRIMARY KEY
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS recommendation_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
 
     def is_downloaded(self, track_id: str) -> bool:
         with self._conn() as conn:
@@ -136,12 +159,32 @@ class StateManager:
             ).fetchall()
             return [Track(*r) for r in rows]
 
+    def has_track_path(self, path: Path) -> bool:
+        """Return whether *path* belongs to a track recorded by this library."""
+        target = path.resolve()
+        with self._conn() as conn:
+            paths = conn.execute("SELECT local_path FROM tracks").fetchall()
+        for (stored_path,) in paths:
+            try:
+                if Path(stored_path).expanduser().resolve() == target:
+                    return True
+            except (OSError, RuntimeError):
+                continue
+        return False
+
     def add_playlist(self, name: str, url: str) -> None:
         with self._conn() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO playlists (name, url, last_synced) VALUES (?, ?, NULL)",
                 (name, url),
             )
+
+    def delete_playlist(self, name: str) -> None:
+        """Remove a playlist and only the records that belong to it."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM playlist_tracks WHERE playlist_name = ?", (name,))
+            conn.execute("DELETE FROM sync_runs WHERE playlist_name = ?", (name,))
+            conn.execute("DELETE FROM playlists WHERE name = ?", (name,))
 
     def get_playlists(self) -> list[Playlist]:
         with self._conn() as conn:
@@ -311,6 +354,75 @@ class StateManager:
         with self._conn() as conn:
             rows = conn.execute("SELECT DISTINCT artist FROM tracks").fetchall()
         return [r[0] for r in rows]
+
+    def get_recommendation_exclusions(self) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT artist FROM recommendation_exclusions").fetchall()
+        return [row[0] for row in rows]
+
+    def exclude_recommendation_artist(self, artist: str) -> None:
+        with self._conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO recommendation_exclusions (artist) VALUES (?)", (artist,))
+
+    def include_recommendation_artist(self, artist: str) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM recommendation_exclusions WHERE artist = ?", (artist,))
+
+    def clear_recommendation_exclusions(self) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM recommendation_exclusions")
+
+    def get_recommendation_genres(self) -> list[str]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT genre FROM recommendation_genres ORDER BY genre").fetchall()
+        return [row[0] for row in rows]
+
+    def set_recommendation_genres(self, genres: list[str]) -> None:
+        with self._conn() as conn:
+            conn.execute("DELETE FROM recommendation_genres")
+            conn.executemany(
+                "INSERT INTO recommendation_genres (genre) VALUES (?)",
+                [(genre,) for genre in genres],
+            )
+
+    def get_recommendation_cache(self) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT payload, updated_at FROM recommendation_cache WHERE cache_key = 'home'"
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            payload = json.loads(row[0])
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return {**payload, "updated_at": row[1]}
+
+    def set_recommendation_cache(self, payload: dict) -> None:
+        updated_at = datetime.now().astimezone().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO recommendation_cache (cache_key, payload, updated_at) VALUES ('home', ?, ?)",
+                (json.dumps(payload), updated_at),
+            )
+
+    def get_library_profile(self) -> dict:
+        with self._conn() as conn:
+            artist_rows = conn.execute(
+                "SELECT artist, COUNT(*) FROM tracks GROUP BY artist ORDER BY COUNT(*) DESC, artist LIMIT 200"
+            ).fetchall()
+            album_rows = conn.execute(
+                "SELECT artist, album, COUNT(*) FROM tracks GROUP BY artist, album ORDER BY COUNT(*) DESC, artist, album LIMIT 200"
+            ).fetchall()
+            track_count = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+        return {
+            "track_count": track_count,
+            "artists": [{"name": artist, "track_count": count} for artist, count in artist_rows],
+            "albums": [
+                {"artist": artist, "name": album, "track_count": count}
+                for artist, album, count in album_rows
+            ],
+        }
 
     def get_playlist_thumbnail(self, playlist_name: str) -> Optional[str]:
         with self._conn() as conn:

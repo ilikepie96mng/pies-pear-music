@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { save } from "@tauri-apps/plugin-dialog";
+  import { openPath } from "@tauri-apps/plugin-opener";
   import { onMount, tick } from "svelte";
   import { api, type Playlist, type Track, type SyncRun } from "../api";
 
@@ -18,7 +20,7 @@
 
   // Rename
   let editing = $state(false);
-  let draftName = $state(playlist.name);
+  let draftName = $state("");
   let nameInput = $state<HTMLInputElement | null>(null);
   let renaming = $state(false);
   let renameError = $state<string | null>(null);
@@ -107,6 +109,7 @@
 
   // Strawberry export
   let exporting = $state(false);
+  let exportingM3u = $state(false);
   let exportMsg = $state<{ kind: "ok" | "err"; text: string } | null>(null);
   let exportMsgTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -121,6 +124,33 @@
       exportMsg = { kind: "err", text: String(e instanceof Error ? e.message : e) };
     } finally {
       exporting = false;
+      exportMsgTimer = setTimeout(() => (exportMsg = null), 6000);
+    }
+  }
+
+  async function exportM3u(openInPlayer = false) {
+    exportingM3u = true;
+    exportMsg = null;
+    if (exportMsgTimer) clearTimeout(exportMsgTimer);
+    try {
+      const path = await save({
+        title: "Export playlist",
+        defaultPath: `${playlist.name}.m3u8`,
+        filters: [{ name: "M3U playlists", extensions: ["m3u8", "m3u"] }],
+      });
+      if (path) {
+        await api.savePlaylistM3u(playlist.name, path);
+        if (openInPlayer) {
+          await openPath(path);
+          exportMsg = { kind: "ok", text: "M3U playlist opened in your default player" };
+        } else {
+          exportMsg = { kind: "ok", text: "M3U playlist saved" };
+        }
+      }
+    } catch (e) {
+      exportMsg = { kind: "err", text: String(e instanceof Error ? e.message : e) };
+    } finally {
+      exportingM3u = false;
       exportMsgTimer = setTimeout(() => (exportMsg = null), 6000);
     }
   }
@@ -248,11 +278,9 @@
           </div>
           {#if renameError}<div style="color:#f87171;font-size:11px;margin-top:2px;">{renameError}</div>{/if}
         {:else}
-          <div style="display:flex;align-items:center;gap:6px;"
-            onmouseenter={e => { const btn = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[data-rename-btn]'); if (btn) btn.style.opacity='1'; }}
-            onmouseleave={e => { const btn = (e.currentTarget as HTMLElement).querySelector<HTMLElement>('[data-rename-btn]'); if (btn) btn.style.opacity='0'; }}>
+          <div class="group" style="display:flex;align-items:center;gap:6px;">
             <h1 style="color:var(--text-primary);font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0;line-height:1.05;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 2px 12px rgba(0,0,0,0.5);">{playlist.name}</h1>
-            <button onclick={startEditing} data-rename-btn style="opacity:0;color:var(--text-muted);font-size:13px;background:transparent;border:none;cursor:pointer;" title="Rename">✎</button>
+            <button onclick={startEditing} class="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100" style="color:var(--text-muted);font-size:13px;background:transparent;border:none;cursor:pointer;" title="Rename" aria-label="Rename playlist">✎</button>
           </div>
         {/if}
 
@@ -287,6 +315,14 @@
                 ? 'background:rgba(180,83,9,.3);color:#f59e0b;border:1px solid rgba(180,83,9,.4);'
                 : 'background:#1a1a1a;color:var(--text-secondary);border:1px solid #2a2a2a;'}">
             {playlist.paused ? "▶ Resume" : "⏸ Pause"}
+          </button>
+          <button onclick={() => exportM3u()} disabled={exportingM3u} title="Export a portable playlist file"
+            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:#1a1a1a;color:var(--text-secondary);border:1px solid #2a2a2a;cursor:pointer;opacity:{exportingM3u?'.5':'1'};">
+            {exportingM3u ? "…" : "⇩ M3U"}
+          </button>
+          <button onclick={() => exportM3u(true)} disabled={exportingM3u} title="Save then open in your default player"
+            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(163,230,53,.12);color:#bef264;border:1px solid rgba(163,230,53,.25);cursor:pointer;opacity:{exportingM3u?'.5':'1'};">
+            {exportingM3u ? "…" : "▶ Player"}
           </button>
           <button onclick={exportToStrawberry} disabled={exporting} title="Replace this playlist in Strawberry"
             style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(196,181,253,0.12);color:var(--accent-2);border:1px solid rgba(196,181,253,0.25);cursor:pointer;opacity:{exporting?'.5':'1'};">

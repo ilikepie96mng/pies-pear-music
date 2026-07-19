@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import alac_rip.strawberry_sync as strawberry_sync
 from alac_rip.strawberry_sync import _path_to_url, export_playlist
 
 
@@ -46,7 +47,7 @@ def _make_strawberry_schema(db: Path) -> None:
 
 
 def test_path_to_url_quotes_special_chars():
-    assert _path_to_url("/var/home/Music/Q & A/01 — Title.flac").startswith("file:///")
+    assert _path_to_url("/tmp/Music/Q & A/01 — Title.flac").startswith("file:///")
     assert "%20" in _path_to_url("/path with space/song.flac")
     assert "%26" in _path_to_url("/path/Q&A/song.flac")  # & must escape
 
@@ -139,3 +140,22 @@ def test_export_url_encoding(tmp_path):
     assert url.startswith("file:///")
     assert "%20" in url
     assert "%26" in url
+
+
+def test_export_reports_busy_database_without_overwriting_it(tmp_path, monkeypatch):
+    db = tmp_path / "strawberry.db"
+    _make_strawberry_schema(db)
+    monkeypatch.setattr(strawberry_sync, "_DB_TIMEOUT_SECONDS", 0.01)
+
+    lock = sqlite3.connect(str(db))
+    lock.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(strawberry_sync.StrawberryBusyError):
+            export_playlist(db, "Locked", [_Track("T", "A", "Al", "/music/t.flac")])
+    finally:
+        lock.rollback()
+        lock.close()
+
+    conn = sqlite3.connect(str(db))
+    assert conn.execute("SELECT COUNT(*) FROM playlists").fetchone()[0] == 0
+    conn.close()

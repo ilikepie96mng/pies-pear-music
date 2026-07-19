@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
-  import { api, type SyncEvent } from "../api";
+  import { api, streamEvents, type SyncEvent } from "../api";
 
   interface Props {
     playlistName: string;
@@ -25,7 +25,7 @@
   let result = $state<{ new: number; skipped: number; errors: number } | null>(null);
   let errorMessage = $state<string | null>(null);
   let logEl = $state<HTMLElement | null>(null);
-  let source: EventSource | null = null;
+  let streamAbort: AbortController | null = null;
   let copied = $state(false);
   let copiedLogPath = $state(false);
   let autoFollow = $state(true);
@@ -151,10 +151,8 @@
       libraryCount = lib[playlistName]?.length ?? 0;
     }).catch(() => {});
 
-    source = new EventSource(api.syncJobUrl(playlistName, "ALAC"));
-
-    source.onmessage = async (e) => {
-      const data: SyncEvent = JSON.parse(e.data);
+    streamAbort = new AbortController();
+    void streamEvents(`/sync/${encodeURIComponent(playlistName)}?format=ALAC`, async (data: SyncEvent) => {
       if (data.log_path) logPath = data.log_path;
 
       if (data.status === "queued") {
@@ -180,27 +178,22 @@
         phase = "done";
         latestMessage = `Sync complete: ${data.new ?? 0} new, ${data.skipped ?? 0} skipped, ${data.errors ?? 0} errors`;
         result = { new: data.new ?? 0, skipped: data.skipped ?? 0, errors: data.errors ?? 0 };
-        source?.close();
       } else if (data.status === "error") {
         await flushPendingLogs();
         errorMessage = data.message ?? "Unknown error";
         latestMessage = errorMessage;
-        source?.close();
       }
-    };
-
-    source.onerror = () => {
-      if (status === "running" || status === "queued") {
+    }, streamAbort.signal).catch((error) => {
+      if (error.name !== "AbortError" && (status === "running" || status === "queued")) {
         status = "error";
         errorMessage = "Lost connection to sync server.";
       }
-      source?.close();
-    };
+    });
   });
 
   onDestroy(() => {
     if (flushTimer !== null) clearTimeout(flushTimer);
-    source?.close();
+    streamAbort?.abort();
   });
 </script>
 

@@ -1,21 +1,63 @@
 import { invoke } from "@tauri-apps/api/core";
 
-let _port: number | null = null;
+interface ApiConnection {
+  port: number;
+  capability: string;
+}
 
-async function getPort(): Promise<number> {
-  if (_port !== null) return _port;
-  const cached = sessionStorage.getItem("api_port");
-  if (cached) {
-    _port = parseInt(cached, 10);
-    return _port;
-  }
-  _port = await invoke<number>("get_api_port");
-  sessionStorage.setItem("api_port", String(_port));
-  return _port;
+let _connection: ApiConnection | null = null;
+
+async function getConnection(): Promise<ApiConnection> {
+  if (_connection !== null) return _connection;
+  _connection = await invoke<ApiConnection>("get_api_connection");
+  return _connection;
 }
 
 async function base(): Promise<string> {
-  return `http://127.0.0.1:${await getPort()}`;
+  return `http://127.0.0.1:${(await getConnection()).port}`;
+}
+
+async function request(path: string, init: RequestInit = {}): Promise<Response> {
+  const connection = await getConnection();
+  return fetch(`${await base()}${path}`, {
+    ...init,
+    headers: {
+      "X-Pies-Api-Token": connection.capability,
+      ...init.headers,
+    },
+  });
+}
+
+export async function streamEvents(
+  path: string,
+  onEvent: (event: SyncEvent) => void | Promise<void>,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await request(path, { signal });
+  if (!response.ok || !response.body) throw new Error(`Stream request failed (${response.status})`);
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pending += decoder.decode(value, { stream: true });
+      const messages = pending.split("\n\n");
+      pending = messages.pop() ?? "";
+      for (const message of messages) {
+        const data = message
+          .split("\n")
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => line.slice(6))
+          .join("\n");
+        if (data) await onEvent(JSON.parse(data) as SyncEvent);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 export interface Playlist {
@@ -97,6 +139,7 @@ export interface RecentTrack {
 export interface Recommendation {
   artist: string;
   similar_to: string;
+  reason: string;
   match: number;
   lastfm_url: string;
 }
@@ -120,17 +163,19 @@ export interface HomeData {
   recommended_tracks: RecommendedTrack[];
   recommended_albums: RecommendedAlbum[];
   recommendations_available: boolean;
+  recommendation_source: "live" | "cached" | "unavailable";
+  recommendations_updated_at: string | null;
   last_sync: { run_id: number; playlist_name: string; started_at: string; synced_at: string; new_tracks: number } | null;
 }
 
 export const api = {
   async playlists(): Promise<Playlist[]> {
-    const r = await fetch(`${await base()}/playlists`);
+    const r = await request("/playlists");
     return r.json();
   },
 
   async addPlaylist(name: string, url: string): Promise<Playlist> {
-    const r = await fetch(`${await base()}/playlists`, {
+    const r = await request("/playlists", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, url }),
@@ -140,13 +185,13 @@ export const api = {
   },
 
   async deletePlaylist(name: string): Promise<void> {
-    await fetch(`${await base()}/playlists/${encodeURIComponent(name)}`, {
+    await request(`/playlists/${encodeURIComponent(name)}`, {
       method: "DELETE",
     });
   },
 
   async patchPlaylist(name: string, patch: { name?: string; paused?: boolean }): Promise<Playlist> {
-    const r = await fetch(`${await base()}/playlists/${encodeURIComponent(name)}`, {
+    const r = await request(`/playlists/${encodeURIComponent(name)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
@@ -156,43 +201,39 @@ export const api = {
   },
 
   async library(): Promise<Record<string, Track[]>> {
-    const r = await fetch(`${await base()}/library`);
+    const r = await request("/library");
     return r.json();
   },
 
-  trackArtUrl(localPath: string): string {
-    if (_port === null) return "";
-    return `http://127.0.0.1:${_port}/track-art?path=${encodeURIComponent(localPath)}`;
-  },
-
-  syncJobUrl(name: string, format: string = "ALAC"): string {
-    if (_port === null) throw new Error("Port not yet known");
-    return `http://127.0.0.1:${_port}/sync/${encodeURIComponent(name)}?format=${encodeURIComponent(format)}`;
+  async trackArtUrl(localPath: string): Promise<string> {
+    const response = await request(`/track-art?path=${encodeURIComponent(localPath)}`);
+    if (!response.ok) return "";
+    return URL.createObjectURL(await response.blob());
   },
 
   async stats(): Promise<Stats> {
-    const r = await fetch(`${await base()}/stats`);
+    const r = await request("/stats");
     return r.json();
   },
 
   async diagnostics(): Promise<DiagnosticCheck[]> {
-    const r = await fetch(`${await base()}/diagnostics`);
+    const r = await request("/diagnostics");
     return r.json();
   },
 
   async queue(): Promise<QueueStatus> {
-    const r = await fetch(`${await base()}/sync/queue`);
+    const r = await request("/sync/queue");
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
   },
 
   async config(): Promise<Record<string, string>> {
-    const r = await fetch(`${await base()}/config`);
+    const r = await request("/config");
     return r.json();
   },
 
   async updateConfig(updates: Partial<Record<string, string>>): Promise<void> {
-    const r = await fetch(`${await base()}/config`, {
+    const r = await request("/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updates),
@@ -201,19 +242,67 @@ export const api = {
   },
 
   async home(): Promise<HomeData> {
-    const r = await fetch(`${await base()}/home`);
+    const r = await request("/home");
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
   },
 
+  async libraryProfile(): Promise<Record<string, unknown>> {
+    const r = await request("/library-profile");
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async excludeRecommendationArtist(artist: string): Promise<void> {
+    const r = await request("/recommendations/exclusions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ artist }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+  },
+
+  async recommendationExclusions(): Promise<string[]> {
+    const r = await request("/recommendations/exclusions");
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json() as { artists: string[] };
+    return data.artists;
+  },
+
+  async includeRecommendationArtist(artist: string): Promise<void> {
+    const r = await request(`/recommendations/exclusions/${encodeURIComponent(artist)}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(await r.text());
+  },
+
+  async clearRecommendationExclusions(): Promise<void> {
+    const r = await request("/recommendations/exclusions", { method: "DELETE" });
+    if (!r.ok) throw new Error(await r.text());
+  },
+
+  async recommendationPreferences(): Promise<{ genres: string[] }> {
+    const r = await request("/recommendations/preferences");
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async updateRecommendationPreferences(genres: string[]): Promise<{ genres: string[] }> {
+    const r = await request("/recommendations/preferences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ genres }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
   async syncRunTracks(runId: number): Promise<{ run_id: number; playlist_name: string; tracks: RecentTrack[] }> {
-    const r = await fetch(`${await base()}/sync-runs/${runId}/tracks`);
+    const r = await request(`/sync-runs/${runId}/tracks`);
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
   },
 
   async strawberryExport(playlistName: string): Promise<{ removed: number; inserted: number; playlist_id: number; backup: string }> {
-    const r = await fetch(`${await base()}/strawberry/export`, {
+    const r = await request("/strawberry/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ playlist_name: playlistName }),
@@ -225,8 +314,23 @@ export const api = {
     return r.json();
   },
 
+  async playlistM3u(playlistName: string): Promise<string> {
+    const r = await request(`/playlists/${encodeURIComponent(playlistName)}/m3u`);
+    if (!r.ok) throw new Error(await r.text());
+    return r.text();
+  },
+
+  async savePlaylistM3u(playlistName: string, path: string): Promise<void> {
+    const r = await request(`/playlists/${encodeURIComponent(playlistName)}/m3u/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+  },
+
   async revealTrack(localPath: string): Promise<void> {
-    const r = await fetch(`${await base()}/reveal-track`, {
+    const r = await request("/reveal-track", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ local_path: localPath }),
@@ -236,15 +340,15 @@ export const api = {
 
   async syncHistory(playlistName?: string, limit = 30): Promise<SyncRun[]> {
     const url = playlistName
-      ? `${await base()}/sync-history/${encodeURIComponent(playlistName)}?limit=${limit}`
-      : `${await base()}/sync-history?limit=${limit}`;
-    const r = await fetch(url);
+      ? `/sync-history/${encodeURIComponent(playlistName)}?limit=${limit}`
+      : `/sync-history?limit=${limit}`;
+    const r = await request(url);
     return r.json();
   },
 
   wrapper: {
     async login(email: string, password: string): Promise<{ status: string; msg: string }> {
-      const r = await fetch(`${await base()}/wrapper/login`, {
+      const r = await request("/wrapper/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
@@ -253,12 +357,12 @@ export const api = {
     },
 
     async stop(): Promise<{ status: string; msg: string }> {
-      const r = await fetch(`${await base()}/wrapper/stop`, { method: "POST" });
+      const r = await request("/wrapper/stop", { method: "POST" });
       return r.json();
     },
 
     async submit2fa(code: string): Promise<{ status: string; msg: string }> {
-      const r = await fetch(`${await base()}/wrapper/2fa`, {
+      const r = await request("/wrapper/2fa", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code }),
@@ -267,15 +371,9 @@ export const api = {
     },
 
     async status(): Promise<{ running: boolean; needs_2fa: boolean; "2fa_type": string; logs: string[] }> {
-      const r = await fetch(`${await base()}/wrapper/status`);
+      const r = await request("/wrapper/status");
       return r.json();
     },
   },
 
-  download: {
-    oneOffUrl(url: string, format: string): string {
-      if (_port === null) throw new Error("Port not yet known");
-      return `http://127.0.0.1:${_port}/download/one-off?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`;
-    },
-  },
 };

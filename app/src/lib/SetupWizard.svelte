@@ -36,9 +36,8 @@
 
   // Group checks for display
   const GROUPS: { title: string; labels: string[] }[] = [
-    { title: "System tools",  labels: ["ffmpeg", "Git"] },
+    { title: "System tools",  labels: ["ffmpeg"] },
     { title: "Configuration", labels: ["Config file", "Music directory", "State directory"] },
-    { title: "Automation",    labels: ["Systemd timer"] },
   ];
 
   function checksForGroup(labels: string[]): DiagnosticCheck[] {
@@ -55,7 +54,6 @@
     { key: "alac_rip_dir",  label: "alac-rip directory", hint: "Path to your alac-rip clone (contains wrapper/ and apple-music-downloader/)" },
     { key: "music_dir",     label: "Music directory",    hint: "Where synced ALAC files are stored" },
     { key: "state_dir",     label: "State directory",    hint: "Where the track database and sync logs are stored" },
-    { key: "github_remote", label: "GitHub remote",      hint: "Optional — push state DB to a remote repo. Leave blank to skip." },
   ];
 
   async function loadConfig() {
@@ -114,7 +112,7 @@
       <div class="flex flex-col gap-6">
         <div>
           <div class="text-amber-500 text-xs font-semibold uppercase tracking-widest mb-2">Setup</div>
-          <h1 class="text-white text-3xl font-bold tracking-tight leading-tight">Welcome to pies-alac-rip</h1>
+          <h1 class="text-white text-3xl font-bold tracking-tight leading-tight">Welcome to Pies Pear Music</h1>
           <p class="text-zinc-500 text-sm mt-3 leading-relaxed">
             A Linux-native music library sync tool. This wizard will verify your environment
             and configure your paths before your first sync.
@@ -123,7 +121,7 @@
 
         <div class="border border-[rgba(255,255,255,0.06)] rounded-xl p-4 flex flex-col gap-2 bg-[#12100e]">
           <div class="text-zinc-400 text-xs font-semibold uppercase tracking-widest mb-1">What we'll check</div>
-          {#each ["System tools (ffmpeg, Git)", "Configuration (directories, config file)", "Automation (systemd timer)"] as item}
+          {#each ["System tools (ffmpeg)", "Configuration (directories, config file)"] as item}
             <div class="flex items-center gap-2 text-sm text-zinc-400">
               <span class="text-amber-600 text-xs">◆</span> {item}
             </div>
