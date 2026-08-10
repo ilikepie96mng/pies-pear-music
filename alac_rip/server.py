@@ -597,6 +597,11 @@ def _run_job(job: dict) -> None:
         return
 
     env = os.environ.copy()
+    # Ensure linuxbrew is in PATH for MP4Box and other tools
+    linuxbrew_bin = "/home/linuxbrew/.linuxbrew/bin"
+    current_path = env.get("PATH", "")
+    if linuxbrew_bin not in current_path:
+        env["PATH"] = f"{linuxbrew_bin}:{current_path}" if current_path else linuxbrew_bin
     go_bin = shutil.which("go", path=env.get("PATH")) or "go"
     _tmp = tempfile.mkdtemp()
     manifest_path = Path(_tmp) / "manifest.json"
