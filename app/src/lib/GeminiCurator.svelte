@@ -4,6 +4,8 @@
 
   let prompt = $state("");
   let trackCount = $state(20);
+  let selectedModel = $state("gemini-2.5-flash");
+  let customModel = $state("");
   let curating = $state(false);
   let error = $state<string | null>(null);
   let result = $state<GeminiPlaylistResult | null>(null);
@@ -12,8 +14,9 @@
     if (!prompt.trim()) return;
     curating = true;
     error = null;
+    const modelToUse = selectedModel === "custom" ? customModel.trim() : selectedModel;
     try {
-      result = await api.curateGemini(prompt.trim(), trackCount);
+      result = await api.curateGemini(prompt.trim(), trackCount, modelToUse || undefined);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -60,18 +63,48 @@
       ></textarea>
     </div>
 
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <label for="gemini-track-count-range" class="text-xs text-zinc-400">Target tracks:</label>
-        <input
-          id="gemini-track-count-range"
-          type="range"
-          min="5"
-          max="30"
-          bind:value={trackCount}
-          class="w-28 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-amber-400"
-        />
-        <span class="text-xs font-bold text-white min-w-[24px]">{trackCount}</span>
+    <div class="flex flex-wrap items-center justify-between gap-4 pt-2 border-t" style="border-color:var(--border);">
+      <div class="flex flex-wrap items-center gap-4">
+        <div class="flex items-center gap-2">
+          <label for="gemini-model-select" class="text-xs text-zinc-400 font-medium">Model:</label>
+          <select
+            id="gemini-model-select"
+            bind:value={selectedModel}
+            class="px-2.5 py-1.5 rounded-lg text-xs bg-black/60 border text-white outline-none focus:border-amber-400"
+            style="border-color:var(--border);"
+          >
+            <option value="gemini-2.5-flash">gemini-2.5-flash (Fast & Recommended)</option>
+            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+            <option value="gemini-1.5-flash-latest">gemini-1.5-flash-latest</option>
+            <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+            <option value="gemini-2.5-pro">gemini-2.5-pro (Deep Reasoning)</option>
+            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+            <option value="custom">Custom Model…</option>
+          </select>
+        </div>
+
+        {#if selectedModel === "custom"}
+          <input
+            type="text"
+            bind:value={customModel}
+            placeholder="e.g. gemini-2.0-flash-lite"
+            class="px-2.5 py-1.5 rounded-lg text-xs bg-black/60 border text-white outline-none focus:border-amber-400 w-40"
+            style="border-color:var(--border);"
+          />
+        {/if}
+
+        <div class="flex items-center gap-2">
+          <label for="gemini-track-count-range" class="text-xs text-zinc-400 font-medium">Target tracks:</label>
+          <input
+            id="gemini-track-count-range"
+            type="range"
+            min="5"
+            max="30"
+            bind:value={trackCount}
+            class="w-24 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-amber-400"
+          />
+          <span class="text-xs font-bold text-white min-w-[20px]">{trackCount}</span>
+        </div>
       </div>
 
       <button

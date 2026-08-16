@@ -494,11 +494,11 @@ export const api = {
     return r.json();
   },
 
-  async curateGemini(prompt: string, trackCount: number = 20): Promise<GeminiPlaylistResult> {
+  async curateGemini(prompt: string, trackCount: number = 20, model?: string): Promise<GeminiPlaylistResult> {
     const r = await request("/gemini/curate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, track_count: trackCount }),
+      body: JSON.stringify({ prompt, track_count: trackCount, model: model || undefined }),
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));

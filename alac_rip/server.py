@@ -2018,6 +2018,7 @@ def post_parse_playlist_import(req: ImportPlaylistParseRequest):
 class GeminiCurateRequest(BaseModel):
     prompt: str
     track_count: int = 20
+    model: Optional[str] = None
 
 
 @app.post("/gemini/curate")
@@ -2052,6 +2053,7 @@ def post_gemini_curate(req: GeminiCurateRequest):
         state=state,
         track_count=req.track_count,
         bearer_token=bearer,
+        model=req.model,
     )
 
     if result.get("error"):
