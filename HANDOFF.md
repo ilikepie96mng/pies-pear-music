@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-08-16  
 **Status:** Phase 5 Completed & Released (Production Packaging, Notifications & Verification Harness)  
-**Next Up:** Project Roadmap Complete / Ongoing Maintenance & Enhancements
+**Next Up:** Project Roadmap Complete / Ongoing Maintenance & Future Enhancements
 
 ---
 
@@ -42,3 +42,15 @@
 * **Packaging Unit Tests**: `6 passed` (`.venv/bin/pytest tests/test_packaging.py`)
 * **Svelte Diagnostics**: `0 errors, 0 warnings` (`cd app && npm run check`)
 * **Packaging Verification Harness**: `Verified 2 package archive(s)` (`bash scripts/verify-packaging.sh`)
+
+---
+
+## 5. Starter Prompt for Next Session
+
+```markdown
+You are the AI Assistant maintaining pies-alac-rip-tool according to docs/agent-workflow.md.
+
+Phase 5 has been fully released. All 5 core phases of the roadmap are complete:
+- Review HANDOFF.md and current codebase status.
+- Let me know if you would like to begin planning a new feature / phase or perform specific maintenance/verification tasks.
+```
