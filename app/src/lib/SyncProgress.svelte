@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from "svelte";
   import { api, streamEvents, type SyncEvent } from "../api";
+  import { notifySyncStarted, notifySyncCompleted, notifySyncFailed } from "./notifications";
 
   interface Props {
     playlistName: string;
@@ -31,6 +32,8 @@
   let autoFollow = $state(true);
   let latestMessage = $state("Waiting for output…");
   let logPath = $state<string | null>(null);
+  let hasNotifiedStart = false;
+  let hasNotifiedEnd = false;
 
   // Live counters during processing
   let liveNew = $state(0);
@@ -163,6 +166,10 @@
       status = data.status as Status;
 
       if (data.status === "running") {
+        if (!hasNotifiedStart) {
+          hasNotifiedStart = true;
+          void notifySyncStarted(playlistName);
+        }
         if (data.phase) phase = data.phase;
         if (data.message) {
           latestMessage = data.message;
@@ -178,15 +185,27 @@
         phase = "done";
         latestMessage = `Sync complete: ${data.new ?? 0} new, ${data.skipped ?? 0} skipped, ${data.errors ?? 0} errors`;
         result = { new: data.new ?? 0, skipped: data.skipped ?? 0, errors: data.errors ?? 0 };
+        if (!hasNotifiedEnd) {
+          hasNotifiedEnd = true;
+          void notifySyncCompleted(playlistName, data.new ?? 0, data.skipped ?? 0);
+        }
       } else if (data.status === "error") {
         await flushPendingLogs();
         errorMessage = data.message ?? "Unknown error";
         latestMessage = errorMessage;
+        if (!hasNotifiedEnd) {
+          hasNotifiedEnd = true;
+          void notifySyncFailed(playlistName, errorMessage);
+        }
       }
     }, streamAbort.signal).catch((error) => {
       if (error.name !== "AbortError" && (status === "running" || status === "queued")) {
         status = "error";
         errorMessage = "Lost connection to sync server.";
+        if (!hasNotifiedEnd) {
+          hasNotifiedEnd = true;
+          void notifySyncFailed(playlistName, errorMessage);
+        }
       }
     });
   });

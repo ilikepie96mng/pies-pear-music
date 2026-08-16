@@ -10,6 +10,7 @@
   } from "../api";
   import LyricsModal from "./LyricsModal.svelte";
   import DapExportModal from "./DapExportModal.svelte";
+  import { notifyIntegrityCompleted } from "./notifications";
 
   interface Props {
     onselectPlaylist?: (name: string) => void;
@@ -234,6 +235,9 @@
     repairMessage = null;
     try {
       integrityReport = await api.verifyIntegrity();
+      if (integrityReport) {
+        void notifyIntegrityCompleted(integrityReport.corrupted?.length ?? 0);
+      }
     } catch (e) {
       integrityError = String(e);
     } finally {

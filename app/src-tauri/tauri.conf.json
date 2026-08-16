@@ -3,6 +3,7 @@
   "productName": "Pies Pear Music",
   "version": "0.1.0",
   "identifier": "com.pies.pear-music",
+  "mainBinaryName": "pies-pear-music",
   "build": {
     "beforeDevCommand": "npm run prepare-sidecar && npm run dev",
     "devUrl": "http://localhost:1420",

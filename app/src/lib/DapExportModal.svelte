@@ -2,6 +2,7 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { openPath } from "@tauri-apps/plugin-opener";
   import { api, type DapExportResult } from "../api";
+  import { notifyDapExportCompleted } from "./notifications";
 
   interface Props {
     playlistName: string;
@@ -54,6 +55,9 @@
     try {
       const res = await api.exportDap(playlistName, targetDir.trim(), format, bitrate || undefined);
       result = res;
+      if (res) {
+        void notifyDapExportCompleted(playlistName, res.exported_count);
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
