@@ -2059,7 +2059,21 @@ def post_gemini_curate(req: GeminiCurateRequest):
     if result.get("error"):
         raise HTTPException(500, f"Gemini curation error: {result['error']}")
 
-    return result
+@app.get("/gemini/models")
+def get_gemini_models():
+    """Returns available Gemini models for the configured API key, sorted cheapest first."""
+    api_key = cfg.gemini_api_key if cfg else ""
+    if not api_key:
+        try:
+            if DEFAULT_CONFIG_PATH.exists():
+                with open(DEFAULT_CONFIG_PATH) as f:
+                    raw = yaml.safe_load(f) or {}
+                api_key = raw.get("gemini_api_key", "")
+        except Exception:
+            pass
+
+    models = gemini_ai.list_available_gemini_models(api_key)
+    return {"models": models}
 
 
 def _read_sidecar_handshake(value: str) -> tuple[int, str]:

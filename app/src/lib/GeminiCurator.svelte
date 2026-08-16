@@ -1,14 +1,43 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { api, type GeminiPlaylistResult } from "../api";
   import { player } from "./player.svelte";
 
   let prompt = $state("");
   let trackCount = $state(20);
+  let availableModels = $state<string[]>([]);
   let selectedModel = $state("gemini-2.5-flash");
   let customModel = $state("");
   let curating = $state(false);
+  let loadingModels = $state(false);
   let error = $state<string | null>(null);
   let result = $state<GeminiPlaylistResult | null>(null);
+
+  onMount(async () => {
+    loadingModels = true;
+    try {
+      const models = await api.getGeminiModels();
+      if (models && models.length > 0) {
+        availableModels = models;
+        // Default to the first (cheapest / most cost-effective) model
+        if (!selectedModel || !models.includes(selectedModel)) {
+          selectedModel = models[0];
+        }
+      }
+    } catch {
+      // Fallback to defaults
+      availableModels = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash-8b",
+        "gemini-1.5-flash",
+        "gemini-2.5-pro",
+      ];
+    } finally {
+      loadingModels = false;
+    }
+  });
 
   async function handleCurate() {
     if (!prompt.trim()) return;
@@ -57,29 +86,35 @@
         id="gemini-curator-prompt"
         bind:value={prompt}
         rows="3"
-        placeholder="e.g., A moody 80s late-night cyberpunk rain mix with ethereal synths, heavy bass, and driving electronic percussion..."
-        class="w-full p-4 rounded-xl text-xs bg-black/40 border outline-none text-white focus:border-amber-400 resize-none"
+        placeholder="e.g., A moody late-night indie rock & post-punk mix with heavy basslines and driving drums..."
+        class="w-full p-4 rounded-xl text-xs bg-black/50 border outline-none text-white focus:border-amber-400 resize-none placeholder:text-zinc-500"
         style="border-color:var(--border);"
       ></textarea>
     </div>
 
-    <div class="flex flex-wrap items-center justify-between gap-4 pt-2 border-t" style="border-color:var(--border);">
+    <div class="flex flex-wrap items-center justify-between gap-4 pt-3 border-t" style="border-color:var(--border);">
       <div class="flex flex-wrap items-center gap-4">
         <div class="flex items-center gap-2">
-          <label for="gemini-model-select" class="text-xs text-zinc-400 font-medium">Model:</label>
+          <label for="gemini-model-select" class="text-xs text-zinc-300 font-semibold">Model:</label>
           <select
             id="gemini-model-select"
             bind:value={selectedModel}
-            class="px-2.5 py-1.5 rounded-lg text-xs bg-black/60 border text-white outline-none focus:border-amber-400"
-            style="border-color:var(--border);"
+            style="background:#111116;color:#ffffff;border:1px solid rgba(255,255,255,0.2);"
+            class="px-3 py-1.5 rounded-lg text-xs font-medium outline-none focus:border-amber-400 cursor-pointer"
           >
-            <option value="gemini-2.5-flash">gemini-2.5-flash (Fast & Recommended)</option>
-            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-            <option value="gemini-1.5-flash-latest">gemini-1.5-flash-latest</option>
-            <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-            <option value="gemini-2.5-pro">gemini-2.5-pro (Deep Reasoning)</option>
-            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
-            <option value="custom">Custom Model…</option>
+            {#if availableModels.length > 0}
+              {#each availableModels as m}
+                <option value={m} style="background:#111116;color:#ffffff;">
+                  {m} {#if m.includes('flash') || m.includes('lite')}(Cheapest & Fast){:else if m.includes('pro')}(Deep Analysis){/if}
+                </option>
+              {/each}
+            {:else}
+              <option value="gemini-2.5-flash" style="background:#111116;color:#ffffff;">gemini-2.5-flash</option>
+              <option value="gemini-2.0-flash-lite" style="background:#111116;color:#ffffff;">gemini-2.0-flash-lite (Lowest Cost)</option>
+              <option value="gemini-2.0-flash" style="background:#111116;color:#ffffff;">gemini-2.0-flash</option>
+              <option value="gemini-1.5-flash" style="background:#111116;color:#ffffff;">gemini-1.5-flash</option>
+            {/if}
+            <option value="custom" style="background:#111116;color:#ffffff;">Custom Model Name…</option>
           </select>
         </div>
 
@@ -88,22 +123,22 @@
             type="text"
             bind:value={customModel}
             placeholder="e.g. gemini-2.0-flash-lite"
-            class="px-2.5 py-1.5 rounded-lg text-xs bg-black/60 border text-white outline-none focus:border-amber-400 w-40"
-            style="border-color:var(--border);"
+            style="background:#111116;color:#ffffff;border:1px solid rgba(255,255,255,0.2);"
+            class="px-3 py-1.5 rounded-lg text-xs outline-none focus:border-amber-400 w-44"
           />
         {/if}
 
         <div class="flex items-center gap-2">
-          <label for="gemini-track-count-range" class="text-xs text-zinc-400 font-medium">Target tracks:</label>
+          <label for="gemini-track-count-range" class="text-xs text-zinc-300 font-semibold">Target tracks:</label>
           <input
             id="gemini-track-count-range"
             type="range"
             min="5"
             max="30"
             bind:value={trackCount}
-            class="w-24 h-1 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-amber-400"
+            class="w-24 h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-amber-400"
           />
-          <span class="text-xs font-bold text-white min-w-[20px]">{trackCount}</span>
+          <span class="text-xs font-bold text-amber-300 min-w-[20px]">{trackCount}</span>
         </div>
       </div>
 

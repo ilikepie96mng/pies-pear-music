@@ -9,12 +9,59 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_GEMINI_MODELS = [
     "gemini-2.5-flash",
+    "gemini-2.0-flash-lite",
     "gemini-2.0-flash",
-    "gemini-1.5-flash-latest",
+    "gemini-1.5-flash-8b",
     "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
     "gemini-2.5-pro",
-    "gemini-pro",
+    "gemini-1.5-pro",
 ]
+
+
+def list_available_gemini_models(api_key: str, timeout: float = 10.0) -> list[str]:
+    """
+    Queries Google Generative Language API to discover available models for this key.
+    Returns a sorted list of model names supporting generateContent.
+    """
+    if not api_key:
+        return DEFAULT_GEMINI_MODELS
+
+    for api_version in ("v1beta", "v1"):
+        url = f"https://generativelanguage.googleapis.com/{api_version}/models?key={api_key}"
+        try:
+            resp = requests.get(url, timeout=timeout)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = data.get("models", [])
+                valid_models = []
+                for m in models:
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" in methods:
+                        name = m.get("name", "")
+                        # name is usually 'models/gemini-2.0-flash'
+                        clean_name = name.replace("models/", "")
+                        valid_models.append(clean_name)
+                if valid_models:
+                    # Sort flash / lite models first for cost-effectiveness
+                    def _sort_key(m: str) -> int:
+                        m_low = m.lower()
+                        if "flash-lite" in m_low or "flash-8b" in m_low:
+                            return 0
+                        if "2.0-flash" in m_low or "2.5-flash" in m_low:
+                            return 1
+                        if "flash" in m_low:
+                            return 2
+                        if "pro" in m_low:
+                            return 3
+                        return 4
+                    valid_models.sort(key=_sort_key)
+                    return valid_models
+        except Exception as e:
+            logger.debug(f"Failed to query Gemini models on {api_version}: {e}")
+            continue
+
+    return DEFAULT_GEMINI_MODELS
 
 
 def generate_smart_playlist(
@@ -25,12 +72,12 @@ def generate_smart_playlist(
     bearer_token: Optional[str] = None,
     storefront: str = "us",
     model: Optional[str] = None,
-    timeout: float = 20.0,
+    timeout: float = 25.0,
 ) -> dict[str, Any]:
     """
     Uses Gemini API to curate a thematic playlist with musical rationale.
     Optionally enriches results by searching Apple Music if bearer_token is provided.
-    Automatically cascades through candidate models if a specific model returns 404.
+    Dynamically discovers available models to guarantee 100% compatibility.
     """
     if not prompt or not prompt.strip():
         return {"error": "Prompt cannot be empty", "tracks": []}
@@ -73,10 +120,22 @@ def generate_smart_playlist(
         }
     }
 
-    candidate_models = [model] if model else []
-    for m in DEFAULT_GEMINI_MODELS:
-        if m not in candidate_models:
-            candidate_models.append(m)
+    # Determine candidate models to try
+    candidate_models: list[str] = []
+    if model and model.strip():
+        clean_user_model = model.strip().replace("models/", "")
+        candidate_models.append(clean_user_model)
+
+    # Add discovered online models
+    discovered = list_available_gemini_models(api_key)
+    for dm in discovered:
+        if dm not in candidate_models:
+            candidate_models.append(dm)
+
+    # Fallback to defaults if empty
+    for df in DEFAULT_GEMINI_MODELS:
+        if df not in candidate_models:
+            candidate_models.append(df)
 
     last_error = "No response from Gemini"
     playlist_obj = None

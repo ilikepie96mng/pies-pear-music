@@ -507,6 +507,13 @@ export const api = {
     return r.json();
   },
 
+  async getGeminiModels(): Promise<string[]> {
+    const r = await request("/gemini/models");
+    if (!r.ok) return [];
+    const data = await r.json().catch(() => ({ models: [] }));
+    return data.models || [];
+  },
+
   async home(): Promise<HomeData> {
     const r = await request("/home");
     if (!r.ok) throw new Error(`${r.status}`);
