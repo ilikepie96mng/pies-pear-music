@@ -27,8 +27,19 @@
 
   let selectedPlaylist = $derived(playlists.find(p => p.name === selectedName) ?? null);
 
-  onMount(async () => {
-    playlists = await api.playlists();
+  onMount(() => {
+    api.playlists().then(pl => { playlists = pl; });
+
+    const handleCreated = (e: Event) => {
+      api.playlists().then(pl => { playlists = pl; });
+      const detail = (e as CustomEvent).detail;
+      if (detail?.name) {
+        selectedName = detail.name;
+        view = "playlist";
+      }
+    };
+    window.addEventListener("playlist-created", handleCreated);
+    return () => window.removeEventListener("playlist-created", handleCreated);
   });
 
   function selectPlaylist(name: string) {

@@ -69,11 +69,15 @@
   async function saveAsPlaylist() {
     if (!result) return;
     savingPlaylist = true;
+    error = null;
     try {
       const name = result.playlist_title || "Gemini Mix " + new Date().toLocaleDateString();
-      // Create local playlist if API supports it
-      await api.addPlaylist(name, "gemini://" + encodeURIComponent(prompt)).catch(() => {});
+      await api.saveGeminiPlaylist(name, result.tracks || [], prompt);
       savedSuccess = true;
+      // Dispatch custom event so Sidebar refreshes playlist list immediately
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("playlist-created", { detail: { name } }));
+      }
     } catch (e) {
       error = "Could not save playlist: " + (e instanceof Error ? e.message : String(e));
     } finally {

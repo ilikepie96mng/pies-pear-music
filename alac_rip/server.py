@@ -2076,6 +2076,34 @@ def get_gemini_models():
     return {"models": models}
 
 
+class GeminiSavePlaylistRequest(BaseModel):
+    name: str
+    tracks: list[dict[str, Any]] = []
+    prompt: Optional[str] = ""
+
+
+@app.post("/gemini/save-playlist", status_code=201)
+def post_gemini_save_playlist(req: GeminiSavePlaylistRequest):
+    """Save an AI curated mix directly as a local tracked playlist."""
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+
+    name = _validate_playlist_name(req.name)
+    prompt_tag = req.prompt[:40].replace("\n", " ").strip() if req.prompt else "ai-mix"
+    state.add_playlist(name, f"https://music.apple.com/us/playlist/gemini-{prompt_tag}")
+
+    # Add any existing or matched tracks to this playlist
+    for t in req.tracks:
+        am = t.get("am_track") or {}
+        tid = str(am.get("id") or am.get("track_id") or t.get("track_id") or "")
+        if tid:
+            state.add_track_to_playlist(name, tid)
+
+    from alac_rip.state import Playlist
+    playlist = Playlist(name=name, url=f"https://music.apple.com/us/playlist/gemini-{prompt_tag}", last_synced=None, paused=False)
+    return _playlist_dict(playlist)
+
+
 def _read_sidecar_handshake(value: str) -> tuple[int, str]:
     try:
         data = json.loads(value)

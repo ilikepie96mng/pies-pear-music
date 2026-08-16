@@ -514,6 +514,19 @@ export const api = {
     return data.models || [];
   },
 
+  async saveGeminiPlaylist(name: string, tracks: unknown[], prompt: string = ""): Promise<Playlist> {
+    const r = await request("/gemini/save-playlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, tracks, prompt }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to save playlist");
+    }
+    return r.json();
+  },
+
   async home(): Promise<HomeData> {
     const r = await request("/home");
     if (!r.ok) throw new Error(`${r.status}`);
