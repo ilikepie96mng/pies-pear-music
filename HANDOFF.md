@@ -1,8 +1,8 @@
 # Handoff — pies-alac-rip-tool
 
 **Last Updated:** 2026-08-16  
-**Status:** Phase 3 Audit Complete (Adversarial Security & Quality Review Approved: `docs/security-review-2026-08-16-phase3.md`)  
-**Next Up:** Session 4: Git Commit & Release — see `docs/agent-workflow.md`.
+**Status:** Phase 4 Review & Security Audit Complete (Release 1.5 Ready)  
+**Next Up:** Session 4: Git Commit & Release Tagging for Phase 4 (Library Stewardship & Health Maintenance Workstation)
 
 ---
 
@@ -16,26 +16,62 @@
 
 ---
 
-## 2. Accomplished in this Session
+## 2. Phase 4 Review & Security Audit Results (Session 3: Audit)
 
-### Phase 3 Adversarial Security Audit & Quality Review
-1. **Adversarial Audit Complete**:
-   - Inspected `dap_export.py` path validation, bitrate regex enforcement (`^[1-9]\d{1,3}k$`), and subprocess array safety.
-   - Audited TTML regex conversion and `GET /tracks/{track_id}/lyrics` endpoint error safety.
-   - Audited `StreamingGraveyard.svelte` and `LyricsModal.svelte` for DOM injection safety (0 `{@html}` usage).
-   - Verified FLAC stream integrity verification and atomic temporary file rollback.
-2. **Review Deliverable Generated**:
-   - `docs/security-review-2026-08-16-phase3.md` written and approved.
+### 1. Security & Edge Cases Verified
+* **Path Scoping & Traversal Controls**:
+  - `alac_rip/audit.py` enforces `_is_safe_subpath()` verifying all adopted or scanned paths reside strictly within the resolved `music_dir`.
+  - `alac_rip/server.py` guards library routes with `_resolve_library_file()` and checks `state.has_track_path()`.
+  - Capability token authentication (`x-pies-api-token` via `secrets.compare_digest`) protects sidecar endpoints against unauthorized local processes.
+* **Non-Destructive Repair Guarantees**:
+  - Database track pruning (`prune_missing_tracks`) only deletes SQLite metadata for verified missing files; no filesystem audio files are deleted.
+  - Orphan adoption reads existing metadata tags non-destructively and indexes them into SQLite state.
+  - Playlist repair generates clean `#EXTM3U` files safely scoped to `music_dir / "playlists"`.
+* **SQLite Query Safety & Scalability**:
+  - `prune_missing_tracks` chunks deletions in batches of 500 to adhere to SQLite parameter limits.
+  - All database queries use parameterized SQL inputs.
+
+### 2. Code & Architecture Review
+* **`alac_rip/audit.py`**: Clean, modular audit engine with stream frame verification (`flac -t -s`), orphan scanner, and tag fallback.
+* **`alac_rip/state.py`**: Added provenance tracking, library statistics aggregation, and track pruning.
+* **`alac_rip/server.py`**: Added `/library/tracks`, `/library/stats`, `/library/audit`, `/library/verify-integrity`, and `/library/repair`.
+* **`app/src/api.ts` & `app/src/lib/Library.svelte`**: Complete TypeScript typing and multi-tab interface (Tracks, Albums, Artists, Health & Diagnostics) with real-time filtering, sorting, lyrics viewer, DAP export, and 1-click diagnostic repair tools.
 
 ---
 
-## 3. Current Verification State
-* **Python Test Suite**: `234 passed in 6.12s` (`.venv/bin/pytest`)
+## 3. Verification & Test Suite Passing State
+* **Python Test Suite**: `243 passed in 6.51s` (`.venv/bin/pytest`)
 * **Svelte Diagnostics**: `0 errors, 0 warnings` (`cd app && npm run check`)
 
 ---
 
-## 4. Instructions for Next Agent Session (Session 4: Release)
-1. **Goal**: Stage and commit the reviewed changes according to release conventions.
-2. **Deliverables**: Clean working tree committed with appropriate release tags / changelog entries.
+## 4. Instructions for Next Agent Session (Session 4: Release & Commit)
+1. **Target Action**: Commit Phase 4 changes to Git repository.
+2. **Commit Message Format**:
+   - `feat(library): phase 4 library stewardship, health audit & maintenance workstation`
+3. **Files to Stage**:
+   - `alac_rip/audit.py`
+   - `alac_rip/server.py`
+   - `alac_rip/state.py`
+   - `app/src/api.ts`
+   - `app/src/lib/Library.svelte`
+   - `app/src/lib/Sidebar.svelte`
+   - `app/src/routes/+page.svelte`
+   - `docs/plans/phase-4-spec.md`
+   - `tests/test_audit.py`
+   - `tests/test_library_api.py`
+   - `HANDOFF.md`
 
+---
+
+## 5. Starter Prompt for Next Session (Session 4: Release / Commit)
+
+```markdown
+You are the Release Agent executing Session 4 of the Archival Music Workstation roadmap according to docs/agent-workflow.md.
+
+Please review HANDOFF.md and stage/commit the Phase 4 implementation:
+1. Verify git status.
+2. Stage and commit Phase 4 changes with message:
+   `feat(library): phase 4 library stewardship, health audit & maintenance workstation`
+3. Run final sanity test checks (`.venv/bin/pytest` and `cd app && npm run check`).
+```

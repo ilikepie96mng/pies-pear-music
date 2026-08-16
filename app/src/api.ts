@@ -211,6 +211,85 @@ export interface HomeData {
   last_sync: { run_id: number; playlist_name: string; started_at: string; synced_at: string; new_tracks: number } | null;
 }
 
+export interface LibraryTrack {
+  track_id: string;
+  title: string;
+  artist: string;
+  album: string;
+  local_path: string;
+  downloaded_at: string;
+  artwork_url: string | null;
+  playlists: string[];
+  has_lyrics: boolean;
+  format: string;
+  file_size: number;
+  exists_on_disk: boolean;
+}
+
+export interface LibraryStats {
+  total_tracks: number;
+  total_albums: number;
+  total_artists: number;
+  total_playlists: number;
+  delisted_count: number;
+  total_bytes: number;
+}
+
+export interface AuditMissingTrack {
+  track_id: string;
+  title: string;
+  artist: string;
+  album: string;
+  local_path: string;
+  playlists?: string[];
+}
+
+export interface AuditOrphanFile {
+  path: string;
+  name: string;
+  size: number;
+  relative_path: string;
+}
+
+export interface LibraryAuditReport {
+  missing_files: AuditMissingTrack[];
+  orphaned_files: AuditOrphanFile[];
+  missing_lyrics: AuditMissingTrack[];
+  missing_art: AuditMissingTrack[];
+  summary: {
+    total_db_tracks: number;
+    missing_files_count: number;
+    orphaned_files_count: number;
+    missing_lyrics_count: number;
+    missing_art_count: number;
+  };
+}
+
+export interface IntegrityErrorTrack {
+  track_id: string;
+  title: string;
+  artist: string;
+  album: string;
+  local_path: string;
+  error: string;
+}
+
+export interface LibraryIntegrityReport {
+  checked_count: number;
+  corrupted: IntegrityErrorTrack[];
+  status: "ok" | "errors_found";
+}
+
+export interface LibraryRepairResult {
+  status?: string;
+  action?: string;
+  pruned_count?: number;
+  repaired_count?: number;
+  playlists?: string[];
+  adopted_count?: number;
+  adopted?: { track_id: string; title: string; artist: string; album: string; local_path: string }[];
+}
+
 export const api = {
   async playlists(): Promise<Playlist[]> {
     const r = await request("/playlists");
@@ -245,6 +324,47 @@ export const api = {
 
   async library(): Promise<Record<string, Track[]>> {
     const r = await request("/library");
+    return r.json();
+  },
+
+  async allLibraryTracks(): Promise<LibraryTrack[]> {
+    const r = await request("/library/tracks");
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async libraryStats(): Promise<LibraryStats> {
+    const r = await request("/library/stats");
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async auditLibrary(): Promise<LibraryAuditReport> {
+    const r = await request("/library/audit");
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async verifyIntegrity(limit?: number): Promise<LibraryIntegrityReport> {
+    const r = await request("/library/verify-integrity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async repairLibrary(action: string, payload?: { track_ids?: string[]; file_paths?: string[] }): Promise<LibraryRepairResult> {
+    const r = await request("/library/repair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...payload }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Repair failed (${r.status})`);
+    }
     return r.json();
   },
 

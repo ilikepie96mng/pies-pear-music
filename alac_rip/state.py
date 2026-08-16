@@ -518,3 +518,74 @@ class StateManager:
                 (playlist_name,),
             ).fetchone()
             return row[0] if row else None
+
+    def get_all_tracks_with_provenance(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute("""
+                SELECT t.track_id, t.title, t.artist, t.album, t.local_path, t.downloaded_at,
+                       t.artwork_url, t.am_track_id,
+                       GROUP_CONCAT(pt.playlist_name, '|||') AS playlists
+                FROM tracks t
+                LEFT JOIN playlist_tracks pt ON t.track_id = pt.track_id
+                GROUP BY t.track_id
+                ORDER BY t.downloaded_at DESC, t.artist, t.album, t.title
+            """).fetchall()
+            result = []
+            for r in rows:
+                pl_raw = r[8]
+                playlists = [p for p in pl_raw.split("|||") if p] if pl_raw else []
+                result.append({
+                    "track_id": r[0],
+                    "title": r[1],
+                    "artist": r[2],
+                    "album": r[3],
+                    "local_path": r[4],
+                    "downloaded_at": r[5],
+                    "artwork_url": r[6],
+                    "am_track_id": r[7],
+                    "playlists": sorted(playlists),
+                })
+            return result
+
+    def get_library_stats(self) -> dict:
+        with self._conn() as conn:
+            total_tracks = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+            total_albums = conn.execute("SELECT COUNT(DISTINCT album) FROM tracks").fetchone()[0]
+            total_artists = conn.execute("SELECT COUNT(DISTINCT artist) FROM tracks").fetchone()[0]
+            total_playlists = conn.execute("SELECT COUNT(*) FROM playlists").fetchone()[0]
+            delisted_count = conn.execute("SELECT COUNT(*) FROM delisted_tracks").fetchone()[0]
+            local_paths = [r[0] for r in conn.execute("SELECT local_path FROM tracks").fetchall()]
+
+        total_bytes = 0
+        for lp in local_paths:
+            try:
+                p = Path(lp).expanduser().resolve()
+                if p.is_file():
+                    total_bytes += p.stat().st_size
+            except (OSError, RuntimeError):
+                pass
+
+        return {
+            "total_tracks": total_tracks,
+            "total_albums": total_albums,
+            "total_artists": total_artists,
+            "total_playlists": total_playlists,
+            "delisted_count": delisted_count,
+            "total_bytes": total_bytes,
+        }
+
+    def prune_missing_tracks(self, missing_track_ids: list[str]) -> int:
+        if not missing_track_ids:
+            return 0
+        unique_ids = list(set(missing_track_ids))
+        deleted_count = 0
+        with self._conn() as conn:
+            for chunk_start in range(0, len(unique_ids), 500):
+                chunk = unique_ids[chunk_start:chunk_start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                conn.execute(f"DELETE FROM playlist_tracks WHERE track_id IN ({placeholders})", chunk)
+                conn.execute(f"DELETE FROM delisted_tracks WHERE track_id IN ({placeholders})", chunk)
+                cur = conn.execute(f"DELETE FROM tracks WHERE track_id IN ({placeholders})", chunk)
+                deleted_count += cur.rowcount
+        return deleted_count
+

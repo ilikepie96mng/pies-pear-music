@@ -27,7 +27,7 @@ from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from mutagen.mp4 import MP4, MP4Cover
 from pydantic import BaseModel, field_validator
 
-from alac_rip import am_api, lastfm_api, strawberry_sync
+from alac_rip import am_api, audit, lastfm_api, strawberry_sync
 from alac_rip.am_api import AMApiError
 from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config, save_config_file
 from alac_rip.dap_export import DapExportError, export_dap_playlist
@@ -1391,6 +1391,16 @@ def get_playlist_sync_history(name: str, limit: int = Query(default=20, ge=1, le
     ]
 
 
+class VerifyIntegrityRequest(BaseModel):
+    limit: Optional[int] = None
+
+
+class LibraryRepairRequest(BaseModel):
+    action: str  # "regenerate_m3u8" | "prune_missing" | "adopt_orphans"
+    track_ids: Optional[list[str]] = None
+    file_paths: Optional[list[str]] = None
+
+
 @app.get("/library")
 def get_library():
     result: dict = {}
@@ -1410,6 +1420,71 @@ def get_library():
             for t in tracks
         ]
     return result
+
+
+@app.get("/library/tracks")
+def get_library_tracks():
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+    tracks = state.get_all_tracks_with_provenance()
+    result = []
+    for t in tracks:
+        lp = t.get("local_path", "")
+        p = Path(lp).expanduser().resolve() if lp else None
+        exists = p.is_file() if p else False
+        has_lyrics = (p.with_suffix(".lrc").is_file()) if (p and exists) else False
+        size = p.stat().st_size if (p and exists) else 0
+        fmt = p.suffix.lstrip(".").upper() if (p and p.suffix) else "UNKNOWN"
+        result.append({
+            **t,
+            "exists_on_disk": exists,
+            "has_lyrics": has_lyrics,
+            "file_size": size,
+            "format": fmt,
+        })
+    return result
+
+
+@app.get("/library/stats")
+def get_library_stats():
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+    return state.get_library_stats()
+
+
+@app.get("/library/audit")
+def get_library_audit():
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+    return audit.audit_library(cfg.music_dir, state)
+
+
+@app.post("/library/verify-integrity")
+def post_verify_integrity(req: Optional[VerifyIntegrityRequest] = None):
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+    limit = req.limit if req else None
+    return audit.verify_library_flac_integrity(cfg.music_dir, state, limit=limit)
+
+
+@app.post("/library/repair")
+def post_library_repair(req: LibraryRepairRequest):
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+
+    if req.action == "regenerate_m3u8":
+        return audit.repair_playlists(cfg.music_dir, state)
+    elif req.action == "prune_missing":
+        track_ids = req.track_ids
+        if track_ids is None:
+            audit_res = audit.audit_library(cfg.music_dir, state)
+            track_ids = [m["track_id"] for m in audit_res["missing_files"]]
+        pruned_count = state.prune_missing_tracks(track_ids)
+        return {"status": "ok", "action": req.action, "pruned_count": pruned_count}
+    elif req.action == "adopt_orphans":
+        return audit.adopt_orphaned_files(cfg.music_dir, state, req.file_paths)
+    else:
+        raise HTTPException(400, f"Unsupported repair action: {req.action}")
 
 
 @app.get("/streaming-graveyard")

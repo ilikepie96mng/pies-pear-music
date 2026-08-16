@@ -24,20 +24,22 @@ graph TD
   - Affected files and function signatures.
   - Test strategy and commands.
   - Edge cases and security guardrails.
+  - Self-contained starter prompt for the Session 2 Implementer.
 
 ### 2. Session 2: Implementation & Verification
 * **Objective**: Open a **brand new conversation** with fresh context. Read only `docs/plans/phase-X-spec.md` and the targeted source files.
 * **Actions**: Implement the required code, write unit/integration tests, and run automated checks (`pytest`, `npm run check`).
-* **Deliverable**: Clean code changes + updated `HANDOFF.md`.
+* **Deliverable**: Clean code changes + updated `HANDOFF.md` + self-contained starter prompt for the Session 3 Reviewer.
 
 ### 3. Session 3: Adversarial Security & Quality Review
 * **Objective**: Open a **brand new conversation** (e.g. Codex or Sol audit agent).
 * **Actions**: Inspect `git diff` against the acceptance criteria, run the security audit checklist, and verify test assertions.
-* **Deliverable**: `docs/security-review-<date>.md` or approval to commit.
+* **Deliverable**: `docs/security-review-<date>.md` or approval to commit + starter prompt for Session 4 Release.
 
 ---
 
-## Token Efficiency Rules for Agents
+## Token Efficiency & Handoff Rules for Agents
 1. **Never carry dead context**: When a milestone is done, summarize to `HANDOFF.md` and instruct the user to start a fresh chat.
 2. **Stand on your own**: Any spec written to `docs/plans/` must be completely understandable by an agent with zero previous chat context.
 3. **Keep state in git & docs**: The source of truth is always the filesystem (`docs/`, `HANDOFF.md`, `tests/`), never the conversation transcript.
+4. **Always provide a clean copy-pasteable handoff prompt**: At the end of every session, output a simple markdown codeblock containing the exact prompt to paste into the next fresh agent session.
