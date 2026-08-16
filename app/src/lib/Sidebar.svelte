@@ -18,6 +18,7 @@
     onopenGraveyard: () => void;
     onopenAbout: () => void;
     onopenData: () => void;
+    onopenGemini?: () => void;
     onopenSync?: () => void;
     onplaylistAdded: (pl: Playlist) => void;
   }
@@ -25,7 +26,7 @@
   let {
     playlists, selectedName,
     onselectPlaylist, onstartSync,
-    onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenLibrary, onopenDashboard, onopenDownload, onopenGraveyard, onopenAbout, onopenData,
+    onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenLibrary, onopenDashboard, onopenDownload, onopenGraveyard, onopenAbout, onopenData, onopenGemini,
     onplaylistAdded, onopenSync,
   }: Props = $props();
 
@@ -74,8 +75,6 @@
       adding = false;
     }
   }
-
-
 </script>
 
 <aside style="width:180px;min-width:180px;background:linear-gradient(180deg,rgba(196,181,253,0.09) 0%,rgba(252,211,77,0.05) 70px,var(--bg) 160px);display:flex;flex-direction:column;border-right:1px solid var(--border);">
@@ -93,6 +92,7 @@
     {#each [
       { label: "⌂ Home", action: onopenHome },
       { label: "♫ Library", action: onopenLibrary },
+      { label: "✨ Gemini AI", action: onopenGemini },
       { label: "▦ Dashboard", action: onopenDashboard },
       { label: "🏛 Graveyard", action: onopenGraveyard },
       { label: "⊕ Diagnostics", action: onopenDiagnostics },
@@ -102,12 +102,14 @@
       { label: "↓ Download", action: onopenDownload },
       { label: "ⓘ About", action: onopenAbout },
     ] as item}
-      <button
-        onclick={item.action}
-        style="width:100%;text-align:left;padding:6px 10px;border-radius:6px;font-size:13px;color:var(--text-secondary);background:transparent;border:none;cursor:pointer;transition:color .15s,background .15s;"
-        onmouseenter={e => { (e.currentTarget as HTMLElement).style.color='var(--text-primary)'; (e.currentTarget as HTMLElement).style.background='var(--surface)'; }}
-        onmouseleave={e => { (e.currentTarget as HTMLElement).style.color='var(--text-secondary)'; (e.currentTarget as HTMLElement).style.background='transparent'; }}
-      >{item.label}</button>
+      {#if item.action}
+        <button
+          onclick={item.action}
+          style="width:100%;text-align:left;padding:6px 10px;border-radius:6px;font-size:13px;color:var(--text-secondary);background:transparent;border:none;cursor:pointer;transition:color .15s,background .15s;"
+          onmouseenter={e => { (e.currentTarget as HTMLElement).style.color='var(--text-primary)'; (e.currentTarget as HTMLElement).style.background='var(--surface)'; }}
+          onmouseleave={e => { (e.currentTarget as HTMLElement).style.color='var(--text-secondary)'; (e.currentTarget as HTMLElement).style.background='transparent'; }}
+        >{item.label}</button>
+      {/if}
     {/each}
   </nav>
 

@@ -10,6 +10,8 @@
   } from "../api";
   import LyricsModal from "./LyricsModal.svelte";
   import DapExportModal from "./DapExportModal.svelte";
+  import VirtualTrackTable from "./VirtualTrackTable.svelte";
+  import PlaylistImportModal from "./PlaylistImportModal.svelte";
   import { notifyIntegrityCompleted } from "./notifications";
 
   interface Props {
@@ -42,6 +44,7 @@
   let activeLyricsTrack = $state<LibraryTrack | null>(null);
   let dapExportPlaylist = $state<string | null>(null);
   let dapExportTrackCount = $state<number>(0);
+  let showPlaylistImportModal = $state(false);
 
   // Health Audit & Repair State
   let auditLoading = $state(false);
@@ -327,7 +330,23 @@
         </span>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2.5">
+        <button
+          onclick={() => (showPlaylistImportModal = true)}
+          class="px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-colors text-black"
+          style="background:var(--accent);"
+          title="Import playlist from Spotify, Tidal, CSV, M3U"
+        >
+          <span>⤓</span> Import & Match
+        </button>
+        <button
+          onclick={() => { dapExportPlaylist = "All Tracks"; dapExportTrackCount = tracks.length; }}
+          class="px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors"
+          style="background:var(--surface);color:var(--text-secondary);border:1px solid var(--border);"
+          title="Export entire library to portable DAP player"
+        >
+          <span>⚡</span> Export to DAP
+        </button>
         <button
           onclick={loadLibraryData}
           disabled={loading}
@@ -497,128 +516,15 @@
           {/if}
         </div>
       {:else}
-        <div class="border rounded-xl overflow-hidden" style="border-color:var(--border);background:var(--surface);">
-          <table class="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr class="border-b text-zinc-500 font-medium uppercase text-[10px] tracking-wider" style="border-color:var(--border);background:rgba(0,0,0,0.2);">
-                <th class="py-3 px-4 w-12 text-center">#</th>
-                <th class="py-3 px-4">Title & Artist</th>
-                <th class="py-3 px-4 hidden md:table-cell">Album</th>
-                <th class="py-3 px-4">Provenance</th>
-                <th class="py-3 px-4 hidden sm:table-cell">Format</th>
-                <th class="py-3 px-4 hidden lg:table-cell">Size</th>
-                <th class="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y" style="border-color:var(--border);">
-              {#each sortedTracks as track, index (track.track_id)}
-                <tr class="hover:bg-white/[0.03] transition-colors group">
-                  <!-- Index & Art -->
-                  <td class="py-2.5 px-4 text-center">
-                    <div class="w-8 h-8 rounded overflow-hidden bg-black/40 flex items-center justify-center flex-shrink-0 mx-auto">
-                      {#if track.artwork_url}
-                        <img
-                          src={thumbUrl(track.artwork_url, "64x64")}
-                          alt=""
-                          class="w-full h-full object-cover"
-                          onerror={(e) => ((e.currentTarget as HTMLElement).style.display = "none")}
-                        />
-                      {:else}
-                        <span class="text-zinc-600 text-[10px]">♪</span>
-                      {/if}
-                    </div>
-                  </td>
-
-                  <!-- Title & Artist -->
-                  <td class="py-2.5 px-4">
-                    <div class="font-semibold text-white truncate max-w-[260px]">{track.title}</div>
-                    <button
-                      onclick={() => filterByArtist(track.artist)}
-                      class="text-zinc-400 text-[11px] truncate max-w-[260px] text-left hover:text-amber-400 transition-colors"
-                    >
-                      {track.artist}
-                    </button>
-                  </td>
-
-                  <!-- Album -->
-                  <td class="py-2.5 px-4 hidden md:table-cell">
-                    <button
-                      onclick={() => filterByAlbum(track.album)}
-                      class="text-zinc-400 hover:text-amber-400 transition-colors truncate max-w-[200px] text-left"
-                    >
-                      {track.album}
-                    </button>
-                  </td>
-
-                  <!-- Provenance Badges -->
-                  <td class="py-2.5 px-4">
-                    <div class="flex flex-wrap gap-1 max-w-[220px]">
-                      {#each (track.playlists || []) as pl}
-                        <button
-                          onclick={() => filterByPlaylist(pl)}
-                          class="text-[10px] px-2 py-0.5 rounded-md font-medium transition-colors hover:border-amber-400"
-                          style="background:rgba(252,211,77,0.1);color:var(--accent);border:1px solid rgba(252,211,77,0.2);"
-                        >
-                          {pl}
-                        </button>
-                      {/each}
-                      {#if (!track.playlists || track.playlists.length === 0)}
-                        <span class="text-[10px] text-zinc-600 italic">Standalone</span>
-                      {/if}
-                    </div>
-                  </td>
-
-                  <!-- Format & Indicators -->
-                  <td class="py-2.5 px-4 hidden sm:table-cell">
-                    <div class="flex items-center gap-1.5">
-                      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
-                        {track.format}
-                      </span>
-                      {#if track.has_lyrics}
-                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 font-medium" title="Synced/Unsynced LRC lyrics available">
-                          LRC
-                        </span>
-                      {/if}
-                      {#if !track.exists_on_disk}
-                        <span class="text-[10px] px-1.5 py-0.5 rounded bg-red-950 text-red-300 font-bold" title="File missing on disk!">
-                          Missing
-                        </span>
-                      {/if}
-                    </div>
-                  </td>
-
-                  <!-- Size -->
-                  <td class="py-2.5 px-4 hidden lg:table-cell text-zinc-500 font-mono text-[11px]">
-                    {formatBytes(track.file_size)}
-                  </td>
-
-                  <!-- Actions -->
-                  <td class="py-2.5 px-4 text-right">
-                    <div class="flex items-center justify-end gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity">
-                      {#if track.has_lyrics}
-                        <button
-                          onclick={() => (activeLyricsTrack = track)}
-                          title="View Lyrics"
-                          class="px-2 py-1 text-[11px] rounded hover:bg-zinc-700 text-zinc-300 transition-colors"
-                        >
-                          Lyrics
-                        </button>
-                      {/if}
-                      {#if track.local_path && track.exists_on_disk}
-                        <button
-                          onclick={() => { api.revealTrack(track.local_path).catch(console.error); }}
-                          title="Reveal in file explorer"
-                          class="px-2 py-1 text-[11px] rounded hover:bg-zinc-700 text-zinc-300 transition-colors"
-                        >
-                          Reveal
-                        </button>
-                      {/if}
-                    </div>
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+        <div class="h-[600px] w-full">
+          <VirtualTrackTable
+            tracks={sortedTracks}
+            onfilterArtist={filterByArtist}
+            onfilterAlbum={filterByAlbum}
+            onfilterPlaylist={filterByPlaylist}
+            onopenLyrics={(t) => (activeLyricsTrack = t)}
+            onrevealTrack={(p) => api.revealTrack(p).catch(console.error)}
+          />
         </div>
       {/if}
     {/if}
@@ -935,5 +841,12 @@
     playlistName={dapExportPlaylist}
     trackCount={dapExportTrackCount}
     onclose={() => (dapExportPlaylist = null)}
+  />
+{/if}
+
+{#if showPlaylistImportModal}
+  <PlaylistImportModal
+    onclose={() => (showPlaylistImportModal = false)}
+    onstartRip={() => loadLibraryData()}
   />
 {/if}

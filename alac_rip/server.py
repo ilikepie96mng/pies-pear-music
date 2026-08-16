@@ -27,7 +27,8 @@ from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from mutagen.mp4 import MP4, MP4Cover
 from pydantic import BaseModel, field_validator
 
-from alac_rip import am_api, audit, lastfm_api, strawberry_sync
+from alac_rip import am_api, audit, gemini_ai, integrations, lastfm_api, lyrics, playlist_import, strawberry_sync
+from alac_rip.requests import RequestStore
 from alac_rip.am_api import AMApiError
 from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config, save_config_file
 from alac_rip.dap_export import DapExportError, export_dap_playlist
@@ -840,6 +841,19 @@ def _run_job(job: dict) -> None:
             result.new_count, result.skipped_count, result.error_count, str(log_path),
         )
 
+    # Trigger media server webhooks (Jellyfin / Navidrome) asynchronously
+    try:
+        if DEFAULT_CONFIG_PATH.exists():
+            with open(DEFAULT_CONFIG_PATH) as f_cfg:
+                raw_cfg = yaml.safe_load(f_cfg) or {}
+            threading.Thread(
+                target=integrations.dispatch_media_webhooks,
+                args=(raw_cfg,),
+                daemon=True
+            ).start()
+    except Exception as e:
+        write_log(f"[integrations] Webhook dispatch warning: {e}")
+
     write_log(f"[done] {result.new_count} new, {result.skipped_count} skipped, {result.error_count} errors"
               f"{' (downloader reported errors on some tracks; see log)' if downloader_had_errors else ''}")
     emit({"status": "done",
@@ -1505,6 +1519,7 @@ def get_track_lyrics(track_id: str):
 
     lyrics_text = ""
     source = "none"
+    track_path = None
 
     if track.local_path:
         try:
@@ -1518,6 +1533,24 @@ def get_track_lyrics(track_id: str):
                 if tags.get("lyrics"):
                     lyrics_text = tags["lyrics"]
                     source = "embedded"
+        except Exception:
+            pass
+
+    # Phase 6: LRCLIB fallback if no lyrics found locally
+    if not lyrics_text and track.title and track.artist:
+        try:
+            lrclib_res = lyrics.fetch_lrclib_lyrics(track.title, track.artist, track.album)
+            if lrclib_res:
+                if lrclib_res.get("syncedLyrics"):
+                    lyrics_text = lrclib_res["syncedLyrics"]
+                    source = "lrclib"
+                elif lrclib_res.get("plainLyrics"):
+                    lyrics_text = lrclib_res["plainLyrics"]
+                    source = "lrclib"
+
+                # Persist to .lrc sidecar file next to track if local path resolved
+                if lyrics_text and track_path and track_path.is_file():
+                    lyrics.save_lrc_file(track_path.with_suffix(".lrc"), lyrics_text)
         except Exception:
             pass
 
@@ -1585,6 +1618,8 @@ class ConfigUpdate(BaseModel):
     alac_rip_dir: Optional[str] = None
     log_retention_days: Optional[int] = None
     lastfm_api_key: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    integrations: Optional[dict] = None
 
     @field_validator("music_dir", "state_dir", "alac_rip_dir")
     @classmethod
@@ -1606,7 +1641,7 @@ class ConfigUpdate(BaseModel):
         return value
 
 
-_CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key", "github_remote"}
+_CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key", "gemini_api_key", "github_remote"}
 
 
 @app.get("/config")
@@ -1729,6 +1764,300 @@ async def download_one_off(url: str = "", format: str = "ALAC"):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+
+
+# ── Phase 6 Endpoints: Streaming, Integrations, Requests, Playlist Import & Gemini AI ──
+
+@app.get("/api/v1/stream/{track_id}")
+@app.get("/stream/{track_id}")
+def stream_track(track_id: str, request: Request):
+    """Stream local audio file with HTTP Range header support."""
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+
+    track = state.get_track(track_id)
+    if not track or not track.local_path:
+        raise HTTPException(404, f"Track {track_id} not found")
+
+    file_path = _resolve_library_file(track.local_path)
+    if not file_path.is_file():
+        raise HTTPException(404, "Audio file not found on disk")
+
+    # Security check: ensure path is within music_dir
+    try:
+        file_path.relative_to(cfg.music_dir.resolve())
+    except ValueError:
+        raise HTTPException(403, "Access denied to audio path outside music directory")
+
+    file_size = file_path.stat().st_size
+    range_header = request.headers.get("Range")
+
+    media_type = "audio/mp4" if file_path.suffix.lower() in (".m4a", ".alac") else "audio/flac"
+
+    if not range_header:
+        def iterfile():
+            with open(file_path, mode="rb") as f:
+                while chunk := f.read(65536):
+                    yield chunk
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+            "Content-Type": media_type,
+        }
+        return StreamingResponse(iterfile(), headers=headers, media_type=media_type)
+
+    # Parse Range: bytes=start-end
+    range_match = re.match(r"bytes=(\d+)-(\d*)?", range_header)
+    if not range_match:
+        raise HTTPException(416, "Invalid Range header")
+
+    start = int(range_match.group(1))
+    end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+
+    if start >= file_size or end >= file_size or start > end:
+        raise HTTPException(416, "Range Not Satisfiable")
+
+    chunk_length = end - start + 1
+
+    def iter_range(start_pos: int, length: int):
+        with open(file_path, mode="rb") as f:
+            f.seek(start_pos)
+            bytes_left = length
+            while bytes_left > 0:
+                chunk_to_read = min(65536, bytes_left)
+                data = f.read(chunk_to_read)
+                if not data:
+                    break
+                bytes_left -= len(data)
+                yield data
+
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(chunk_length),
+        "Content-Type": media_type,
+    }
+    return StreamingResponse(iter_range(start, chunk_length), status_code=206, headers=headers, media_type=media_type)
+
+
+class JellyfinTestRequest(BaseModel):
+    server_url: str
+    api_key: str
+
+
+@app.post("/integrations/jellyfin/test")
+def post_test_jellyfin(req: JellyfinTestRequest):
+    ok, msg = integrations.test_jellyfin_connection(req.server_url, req.api_key)
+    return {"success": ok, "message": msg}
+
+
+class NavidromeTestRequest(BaseModel):
+    server_url: str
+    user: str
+    token: str
+    salt: str
+
+
+@app.post("/integrations/navidrome/test")
+def post_test_navidrome(req: NavidromeTestRequest):
+    ok, msg = integrations.test_navidrome_connection(req.server_url, req.user, req.token, req.salt)
+    return {"success": ok, "message": msg}
+
+
+class DownloadRequestIn(BaseModel):
+    url: str
+    format: str = "ALAC"
+    requester: str = "local"
+    notes: str = ""
+
+
+def _get_request_store() -> RequestStore:
+    if cfg is None:
+        raise HTTPException(503, "Configuration is not ready")
+    db_p = cfg.state_dir / "download_requests.db"
+    return RequestStore(db_p)
+
+
+@app.get("/api/v1/requests")
+def get_download_requests(status: Optional[str] = None):
+    store = _get_request_store()
+    reqs = store.list_requests(status=status)
+    return [
+        {
+            "id": r.id,
+            "url": r.url,
+            "format": r.format,
+            "requester": r.requester,
+            "status": r.status,
+            "notes": r.notes,
+            "created_at": r.created_at,
+        }
+        for r in reqs
+    ]
+
+
+@app.post("/api/v1/requests", status_code=201)
+def post_download_request(body: DownloadRequestIn):
+    store = _get_request_store()
+    req = store.add_request(
+        url=body.url,
+        format=body.format,
+        requester=body.requester,
+        notes=body.notes,
+    )
+    return {
+        "id": req.id,
+        "url": req.url,
+        "format": req.format,
+        "requester": req.requester,
+        "status": req.status,
+        "notes": req.notes,
+        "created_at": req.created_at,
+    }
+
+
+class UpdateRequestStatusIn(BaseModel):
+    status: str
+
+
+@app.patch("/api/v1/requests/{req_id}")
+def patch_download_request(req_id: str, body: UpdateRequestStatusIn):
+    store = _get_request_store()
+    ok = store.update_request_status(req_id, body.status)
+    if not ok:
+        raise HTTPException(404, "Request not found")
+    return {"status": "ok"}
+
+
+@app.delete("/api/v1/requests/{req_id}", status_code=204)
+def delete_download_request(req_id: str):
+    store = _get_request_store()
+    ok = store.delete_request(req_id)
+    if not ok:
+        raise HTTPException(404, "Request not found")
+    return None
+
+
+class ImportPlaylistParseRequest(BaseModel):
+    source_type: str  # "url" | "csv" | "m3u"
+    content: str  # URL string or raw file text
+
+
+@app.post("/playlist/parse-import")
+def post_parse_playlist_import(req: ImportPlaylistParseRequest):
+    """Parse external playlist URLs (Spotify/Tidal/Qobuz) or CSV/M3U and match against Apple Music."""
+    raw_tracks = []
+    bearer = ""
+    try:
+        bearer = am_api.fetch_bearer_token()
+    except Exception:
+        pass
+
+    if req.source_type == "url":
+        url = req.content.strip()
+        sp_id = playlist_import.parse_spotify_playlist_url(url)
+        if sp_id:
+            raw_tracks = playlist_import.fetch_spotify_public_playlist(sp_id)
+        else:
+            # Check if it's already an Apple Music playlist
+            if "music.apple.com" in url:
+                try:
+                    am_tracks = am_api.fetch_public_playlist_tracks(url, bearer)
+                    return {
+                        "source_type": "apple_music",
+                        "track_count": len(am_tracks),
+                        "matches": [
+                            {
+                                "original_title": t.get("title", ""),
+                                "original_artist": t.get("artist", ""),
+                                "original_album": "",
+                                "matched": True,
+                                "match_score": 1.0,
+                                "am_track": t,
+                            }
+                            for t in am_tracks
+                        ],
+                    }
+                except Exception as e:
+                    raise HTTPException(400, f"Failed to parse Apple Music playlist: {e}")
+            else:
+                # Unsupported URL source
+                raise HTTPException(400, "Unsupported playlist URL. Supported: Spotify, Apple Music, CSV, M3U.")
+    elif req.source_type == "csv":
+        raw_tracks = playlist_import.parse_csv_tracks(req.content)
+    elif req.source_type in ("m3u", "m3u8"):
+        raw_tracks = playlist_import.parse_m3u_tracks(req.content)
+    else:
+        raise HTTPException(400, f"Unsupported source type: {req.source_type}")
+
+    if not raw_tracks:
+        return {"source_type": req.source_type, "track_count": 0, "matches": []}
+
+    matches = playlist_import.match_tracks_to_apple_music(raw_tracks, bearer) if bearer else [
+        {
+            "original_title": t.get("title", ""),
+            "original_artist": t.get("artist", ""),
+            "original_album": t.get("album", ""),
+            "original_isrc": t.get("isrc", ""),
+            "matched": False,
+            "match_score": 0.0,
+            "am_track": None,
+        }
+        for t in raw_tracks
+    ]
+
+    return {
+        "source_type": req.source_type,
+        "track_count": len(raw_tracks),
+        "matches": matches,
+    }
+
+
+class GeminiCurateRequest(BaseModel):
+    prompt: str
+    track_count: int = 20
+
+
+@app.post("/gemini/curate")
+def post_gemini_curate(req: GeminiCurateRequest):
+    """Curate a custom playlist via Gemini AI, matching tracks against Apple Music."""
+    if cfg is None:
+        raise HTTPException(503, "Configuration is not ready")
+
+    api_key = cfg.gemini_api_key
+    if not api_key:
+        # Check config file directly
+        try:
+            if DEFAULT_CONFIG_PATH.exists():
+                with open(DEFAULT_CONFIG_PATH) as f:
+                    raw = yaml.safe_load(f) or {}
+                api_key = raw.get("gemini_api_key", "")
+        except Exception:
+            pass
+
+    if not api_key:
+        raise HTTPException(400, "Gemini API key is not configured. Please add it in Settings.")
+
+    bearer = ""
+    try:
+        bearer = am_api.fetch_bearer_token()
+    except Exception:
+        pass
+
+    result = gemini_ai.generate_smart_playlist(
+        prompt=req.prompt,
+        api_key=api_key,
+        state=state,
+        track_count=req.track_count,
+        bearer_token=bearer,
+    )
+
+    if result.get("error"):
+        raise HTTPException(500, f"Gemini curation error: {result['error']}")
+
+    return result
 
 
 def _read_sidecar_handshake(value: str) -> tuple[int, str]:

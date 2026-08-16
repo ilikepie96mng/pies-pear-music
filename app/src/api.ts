@@ -117,7 +117,7 @@ export interface TrackLyrics {
   album: string;
   lyrics: string;
   synced: boolean;
-  source: "lrc" | "embedded" | "am_api" | "none";
+  source: "lrc" | "embedded" | "am_api" | "lrclib" | "none";
   lines: LyricLine[];
 }
 
@@ -290,6 +290,51 @@ export interface LibraryRepairResult {
   adopted?: { track_id: string; title: string; artist: string; album: string; local_path: string }[];
 }
 
+export interface DownloadRequestItem {
+  id: string;
+  url: string;
+  format: string;
+  requester: string;
+  status: string;
+  notes: string;
+  created_at: string;
+}
+
+export interface ImportMatchResult {
+  original_title: string;
+  original_artist: string;
+  original_album: string;
+  original_isrc: string;
+  matched: boolean;
+  match_score: number;
+  am_track?: {
+    id: string;
+    title: string;
+    artist: string;
+    album: string;
+    url?: string;
+  } | null;
+}
+
+export interface GeminiPlaylistResult {
+  playlist_title: string;
+  description: string;
+  vibe_tags: string[];
+  tracks: {
+    title: string;
+    artist: string;
+    album: string;
+    rationale: string;
+    matched?: boolean;
+    am_track?: {
+      id: string;
+      title: string;
+      artist: string;
+      album: string;
+    } | null;
+  }[];
+}
+
 export const api = {
   async playlists(): Promise<Playlist[]> {
     const r = await request("/playlists");
@@ -390,18 +435,76 @@ export const api = {
     return r.json();
   },
 
-  async config(): Promise<Record<string, string>> {
+  async config(): Promise<Record<string, any>> {
     const r = await request("/config");
     return r.json();
   },
 
-  async updateConfig(updates: Partial<Record<string, string>>): Promise<void> {
+  async updateConfig(updates: Partial<Record<string, any>>): Promise<void> {
     const r = await request("/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(updates),
     });
     if (!r.ok) throw new Error(await r.text());
+  },
+
+  async testJellyfin(serverUrl: string, apiKey: string): Promise<{ success: boolean; message: string }> {
+    const r = await request("/integrations/jellyfin/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ server_url: serverUrl, api_key: apiKey }),
+    });
+    return r.json();
+  },
+
+  async testNavidrome(serverUrl: string, user: string, token: string, salt: string): Promise<{ success: boolean; message: string }> {
+    const r = await request("/integrations/navidrome/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ server_url: serverUrl, user, token, salt }),
+    });
+    return r.json();
+  },
+
+  async downloadRequests(status?: string): Promise<DownloadRequestItem[]> {
+    const url = status ? `/api/v1/requests?status=${encodeURIComponent(status)}` : "/api/v1/requests";
+    const r = await request(url);
+    if (!r.ok) throw new Error(`${r.status}`);
+    return r.json();
+  },
+
+  async createDownloadRequest(url: string, format: string = "ALAC", requester: string = "local", notes: string = ""): Promise<DownloadRequestItem> {
+    const r = await request("/api/v1/requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, format, requester, notes }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async parsePlaylistImport(sourceType: "url" | "csv" | "m3u", content: string): Promise<{ source_type: string; track_count: number; matches: ImportMatchResult[] }> {
+    const r = await request("/playlist/parse-import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_type: sourceType, content }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async curateGemini(prompt: string, trackCount: number = 20): Promise<GeminiPlaylistResult> {
+    const r = await request("/gemini/curate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, track_count: trackCount }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || "Gemini curation failed");
+    }
+    return r.json();
   },
 
   async home(): Promise<HomeData> {
@@ -579,5 +682,4 @@ export const api = {
       return r.json();
     },
   },
-
 };

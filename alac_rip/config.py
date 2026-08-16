@@ -1,6 +1,7 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -14,6 +15,8 @@ class Config:
     alac_rip_dir: Path
     log_retention_days: int = 2
     lastfm_api_key: str = ""
+    gemini_api_key: str = ""
+    integrations: dict[str, Any] = field(default_factory=dict)
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
@@ -30,6 +33,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         alac_rip_dir=p("alac_rip_dir", ""),
         log_retention_days=int(data.get("log_retention_days", 2)),
         lastfm_api_key=data.get("lastfm_api_key", ""),
+        gemini_api_key=data.get("gemini_api_key", ""),
+        integrations=data.get("integrations", {}),
     )
 
 
@@ -55,4 +60,3 @@ def save_config_file(path: Path, data: dict) -> None:
         except OSError:
             pass
         raise
-

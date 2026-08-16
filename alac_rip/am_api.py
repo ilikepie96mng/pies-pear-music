@@ -301,3 +301,44 @@ def fetch_lyrics(
                 return val.strip()
 
     return None
+
+
+def search_apple_music_tracks(
+    query: str,
+    bearer_token: str,
+    storefront: str = "us",
+    limit: int = 10,
+) -> list[dict]:
+    """Search Apple Music catalog for songs matching query."""
+    if not query.strip():
+        return []
+    if not storefront or storefront == "enter your account storefront":
+        storefront = "us"
+
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Origin": "https://music.apple.com",
+    }
+    url = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/search?term={requests.utils.quote(query)}&types=songs&limit={limit}"
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        songs = data.get("results", {}).get("songs", {}).get("data", [])
+        results = []
+        for s in songs:
+            attrs = s.get("attributes", {})
+            art = attrs.get("artwork", {})
+            results.append({
+                "id": s.get("id", ""),
+                "title": attrs.get("name", ""),
+                "artist": attrs.get("artistName", ""),
+                "album": attrs.get("albumName", ""),
+                "url": attrs.get("url", ""),
+                "artwork_url": art.get("url"),
+                "isrc": attrs.get("isrc", ""),
+            })
+        return results
+    except Exception:
+        return []

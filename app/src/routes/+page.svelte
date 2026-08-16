@@ -13,9 +13,11 @@
   import DataControls from "$lib/DataControls.svelte";
   import StreamingGraveyard from "$lib/StreamingGraveyard.svelte";
   import Library from "$lib/Library.svelte";
+  import GeminiCurator from "$lib/GeminiCurator.svelte";
+  import PlayerBar from "$lib/PlayerBar.svelte";
   import { api, type Playlist } from "../api";
 
-  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data" | "graveyard" | "library";
+  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data" | "graveyard" | "library" | "gemini";
 
   let view = $state<View>("home");
   let playlists = $state<Playlist[]>([]);
@@ -64,7 +66,7 @@
   }
 </script>
 
-<div class="flex h-screen overflow-hidden select-none" style="background:var(--bg);color:var(--text-primary);">
+<div class="flex h-screen overflow-hidden select-none relative pb-20" style="background:var(--bg);color:var(--text-primary);">
   <Sidebar
     {playlists}
     selectedName={selectedName}
@@ -75,6 +77,7 @@
     onopenDiagnostics={() => (view = "diagnostics")}
     onopenHome={() => (view = "home")}
     onopenLibrary={() => (view = "library")}
+    onopenGemini={() => (view = "gemini")}
     onopenDashboard={() => (view = "dashboard")}
     onopenDownload={() => (view = "download")}
     onopenGraveyard={() => (view = "graveyard")}
@@ -104,6 +107,8 @@
           onselectPlaylist={selectPlaylist}
           onstartSync={startSync}
         />
+      {:else if view === "gemini"}
+        <GeminiCurator />
       {:else if view === "dashboard"}
         {#key dashboardKey}
           <Dashboard
@@ -139,4 +144,6 @@
       {/if}
     </div>
   </main>
+
+  <PlayerBar />
 </div>

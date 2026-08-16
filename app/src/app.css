@@ -6,16 +6,19 @@
 
 :root {
   --bg:           #15131c;
-  --surface:      rgba(255,255,255,0.05);
-  --border:       rgba(255,255,255,0.09);
+  --surface:      rgba(255,255,255,0.06);
+  --border:       rgba(255,255,255,0.12);
   --accent:       #fcd34d;
   --accent-hover: #fde68a;
   --accent-dim:   rgba(252,211,77,0.18);
   --accent-2:     #c4b5fd;
   --accent-3:     #5eead4;
   --text-primary: #ffffff;
-  --text-secondary: rgba(255,255,255,0.7);
-  --text-muted:   rgba(255,255,255,0.38);
+  --text-secondary: rgba(255,255,255,0.80);
+  --text-muted:   rgba(255,255,255,0.65);
+  --wallpaper-image: none;
+  --wallpaper-dim: 40%;
+  --wallpaper-blur: 8px;
 }
 
 body {
@@ -23,6 +26,34 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text-primary);
+  position: relative;
+  min-height: 100vh;
+}
+
+.wallpaper-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: var(--wallpaper-image);
+  background-size: cover;
+  background-position: center;
+  filter: blur(var(--wallpaper-blur));
+  transform: scale(1.04);
+}
+
+.wallpaper-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: black;
+  opacity: calc(var(--wallpaper-dim) / 100);
+}
+
+.app-root {
+  position: relative;
+  z-index: 1;
 }
 
 button:focus-visible,
