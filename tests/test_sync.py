@@ -331,3 +331,97 @@ def test_sync_m4a_with_cover_saves_cover_jpg(music_dir, staging_dir, sync_state)
     cover_jpg = music_dir / "artists" / "Queen" / "A Night at the Opera" / "cover.jpg"
     assert cover_jpg.exists()
     assert cover_jpg.read_bytes() == FAKE_COVER
+
+
+# ── Staging validation & Security Tests ──────────────────────────────────────
+
+from alac_rip.sync import validate_staging_dir, StagingValidationError
+
+
+def test_validate_staging_dir_rejects_relative_path(tmp_path):
+    with pytest.raises(StagingValidationError):
+        validate_staging_dir(Path("relative/staging"), tmp_path / "music")
+
+
+def test_validate_staging_dir_rejects_root(tmp_path):
+    with pytest.raises(StagingValidationError):
+        validate_staging_dir(Path("/"), tmp_path / "music")
+
+
+def test_validate_staging_dir_rejects_home(tmp_path):
+    with pytest.raises(StagingValidationError):
+        validate_staging_dir(Path.home(), tmp_path / "music")
+
+
+def test_validate_staging_dir_rejects_overlap(tmp_path):
+    music = tmp_path / "music"
+    music.mkdir()
+    with pytest.raises(StagingValidationError):
+        validate_staging_dir(music, music)
+
+    nested_staging = music / "staging"
+    nested_staging.mkdir()
+    with pytest.raises(StagingValidationError):
+        validate_staging_dir(nested_staging, music)
+
+
+def test_sync_manifest_scoped_ignores_stale_files(music_dir, staging_dir, sync_state):
+    # Stale file on disk
+    stale_file = staging_dir / "Stale" / "Old" / "01 - Stale.flac"
+    make_fake_flac(stale_file, title="Stale", artist="Stale Artist", album="Old", track_num=1)
+
+    # Fresh file in manifest
+    fresh_file = staging_dir / "Fresh" / "New" / "01 - Fresh.flac"
+    make_fake_flac(fresh_file, title="Fresh", artist="Fresh Artist", album="New", track_num=1)
+
+    engine = SyncEngine(state=sync_state, music_dir=music_dir, playlist_name="Test Playlist")
+    result = engine.sync(staging_dir, manifest_files=[fresh_file])
+
+    assert result.new_count == 1
+    # Fresh file moved into library
+    assert (music_dir / "artists" / "Fresh Artist" / "New" / "01 - Fresh.flac").exists()
+    # Stale file left untouched on disk
+    assert stale_file.exists()
+    # Stale file was NOT added to library
+    assert not (music_dir / "artists" / "Stale Artist" / "Old" / "01 - Stale.flac").exists()
+
+
+def test_sync_collision_safety_disambiguates_distinct_tracks(music_dir, staging_dir, sync_state):
+    # Track 1
+    src1 = staging_dir / "AC_DC" / "Live" / "01 - Thunderstruck.flac"
+    make_fake_flac(src1, title="Thunderstruck", artist="AC/DC", album="Live", track_num=1)
+
+    engine = SyncEngine(state=sync_state, music_dir=music_dir, playlist_name="Test Playlist")
+    engine.sync(staging_dir, manifest_files=[src1])
+
+    dest1 = music_dir / "artists" / "AC_DC" / "Live" / "01 - Thunderstruck.flac"
+    assert dest1.exists()
+
+    # Track 2 with colliding sanitized name from different source
+    src2 = staging_dir / "AC_DC" / "Live" / "01 - Thunderstruck_other.flac"
+    make_fake_flac(src2, title="Thunderstruck", artist="AC_DC", album="Live", track_num=1)
+
+    result2 = engine.sync(staging_dir, manifest_files=[src2])
+    assert result2.new_count == 1
+
+    # Original file is preserved
+    assert dest1.exists()
+    # Colliding file is disambiguated
+    coll_dest = music_dir / "artists" / "AC_DC" / "Live" / "01 - Thunderstruck_coll_1.flac"
+    assert coll_dest.exists()
+
+
+def test_sync_m3u_flattens_control_characters(music_dir, staging_dir, sync_state):
+    src = staging_dir / "Test" / "Album" / "01 - Song.flac"
+    make_fake_flac(src, title="Song\nWith\nNewlines", artist="Artist\r\nName", album="Album", track_num=1)
+
+    engine = SyncEngine(state=sync_state, music_dir=music_dir, playlist_name="Test\nPlaylist")
+    engine.sync(staging_dir, manifest_files=[src])
+
+    m3u8 = music_dir / "playlists" / "Test_Playlist.m3u8"
+    assert m3u8.exists()
+    content = m3u8.read_text(encoding="utf-8")
+    lines = [line for line in content.splitlines() if line]
+    # Verify no multi-line broken EXTINF
+    assert any(line.startswith("#EXTINF:-1,Artist Name - Song With Newlines") for line in lines)
+

@@ -46,6 +46,18 @@ short error in sync history; it does not make the legacy scheduler supported.
 If a retry fails consistently, collect the diagnostic statuses and a redacted
 error summary.
 
+## Music videos are not downloaded
+
+Music video downloads are disabled by default (`skip-music-videos: true` in the
+downloader's `config.yaml`). Some catalog music videos — particularly older or
+legacy live-performance clips — can fail their DRM key acquisition step in a
+way that is not recoverable by retrying, which previously left a sync stuck in
+an infinite "press Enter to try again" loop and blocked the rest of the
+playlist from finishing. Skipping music videos entirely avoids this failure
+mode. Audio tracks are unaffected. To re-enable music video downloads (at the
+risk of hitting the same stuck-retry behavior on affected clips), set
+`skip-music-videos: false` in the downloader's `config.yaml`.
+
 ## Strawberry database locks
 
 Close Strawberry before exporting a playlist. Pies Pear Music checks for a

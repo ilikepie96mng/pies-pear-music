@@ -18,24 +18,28 @@ def read_tags(file_path: Path) -> dict:
         except ValueError:
             track_num = 0
         artist = str(tags.get("artist", [""])[0])
+        lyrics = str(tags.get("lyrics", tags.get("unsyncedlyrics", [""]))[0])
         return {
             "title": str(tags.get("title", [""])[0]),
             "artist": artist,
             "album_artist": str(tags.get("albumartist", [artist])[0]),
             "album": str(tags.get("album", [""])[0]),
             "track_num": track_num,
+            "lyrics": lyrics,
         }
     else:
         audio = MP4(file_path)
         tags = audio.tags or {}
         track_info = tags.get("trkn", [(0, 0)])[0]
         artist = str(tags.get("©ART", [""])[0])
+        lyrics = str(tags.get("©lyr", [""])[0])
         return {
             "title": str(tags.get("©nam", [""])[0]),
             "artist": artist,
             "album_artist": str(tags.get("aART", [artist])[0]),
             "album": str(tags.get("©alb", [""])[0]),
             "track_num": int(track_info[0]) if track_info else 0,
+            "lyrics": lyrics,
         }
 
 
@@ -47,6 +51,7 @@ def write_tags(
     track_num: int,
     album_artist: str = "",
     playlist_name: str = "",
+    lyrics: str = "",
 ) -> None:
     if _is_flac(file_path):
         audio = FLAC(file_path)
@@ -56,6 +61,9 @@ def write_tags(
         audio["album"] = album
         audio["tracknumber"] = str(track_num)
         audio["genre"] = playlist_name
+        if lyrics:
+            audio["lyrics"] = lyrics
+            audio["unsyncedlyrics"] = lyrics
         audio.save()
     else:
         audio = MP4(file_path)
@@ -67,6 +75,8 @@ def write_tags(
         audio.tags["©alb"] = [album]
         audio.tags["trkn"] = [(track_num, 0)]
         audio.tags["©gen"] = [playlist_name]
+        if lyrics:
+            audio.tags["©lyr"] = [lyrics]
         audio.save()
 
 

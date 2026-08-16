@@ -14,6 +14,7 @@
     onopenHome: () => void;
     onopenDashboard: () => void;
     onopenDownload: () => void;
+    onopenGraveyard: () => void;
     onopenAbout: () => void;
     onopenData: () => void;
     onopenSync?: () => void;
@@ -23,7 +24,7 @@
   let {
     playlists, selectedName,
     onselectPlaylist, onstartSync,
-    onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenDashboard, onopenDownload, onopenAbout, onopenData,
+    onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenDashboard, onopenDownload, onopenGraveyard, onopenAbout, onopenData,
     onplaylistAdded, onopenSync,
   }: Props = $props();
 
@@ -91,6 +92,7 @@
     {#each [
       { label: "⌂ Home", action: onopenHome },
       { label: "▦ Dashboard", action: onopenDashboard },
+      { label: "🏛 Graveyard", action: onopenGraveyard },
       { label: "⊕ Diagnostics", action: onopenDiagnostics },
       { label: "⚙ Settings", action: onopenSettings },
       { label: "◈ Data & recs", action: onopenData },

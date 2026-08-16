@@ -1,6 +1,7 @@
 import requests
 
-LASTFM_BASE = "http://ws.audioscrobbler.com/2.0/"
+LASTFM_BASE = "https://ws.audioscrobbler.com/2.0/"
+_USER_AGENT = "PiesPearMusic/0.1.0 (https://github.com/ilikepie96mng/pies-alac-rip-tool)"
 
 
 class LastFmError(Exception):
@@ -9,7 +10,9 @@ class LastFmError(Exception):
 
 def _get(params: dict) -> dict:
     try:
-        resp = requests.get(LASTFM_BASE, params={**params, "format": "json"}, timeout=10)
+        headers = {"User-Agent": _USER_AGENT}
+        resp = requests.get(LASTFM_BASE, params={**params, "format": "json"}, headers=headers, timeout=10)
+
     except requests.RequestException as e:
         raise LastFmError(f"Network error: {e}") from e
     if not resp.ok:

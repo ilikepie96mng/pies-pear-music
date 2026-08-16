@@ -369,3 +369,52 @@ def test_sync_duplicate_playlist_rejected(client, monkeypatch):
 
     monkeypatch.setattr(server_mod, "active_job", None)
     client.delete("/playlists/Dup PL")
+
+
+def test_streaming_graveyard_endpoint(client):
+    resp = client.get("/streaming-graveyard")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "tracks" in data
+    assert "count" in data
+    assert isinstance(data["tracks"], list)
+
+
+def test_track_lyrics_not_found(client):
+    resp = client.get("/tracks/nonexistent_999999/lyrics")
+    assert resp.status_code == 404
+
+
+def test_track_lyrics_with_lrc(client, tmp_path, monkeypatch):
+    from alac_rip.state import Track
+    # Create test track and .lrc file in music_dir
+    music_dir = server_mod.cfg.music_dir
+    track_file = music_dir / "Artist" / "Album" / "01 Track.flac"
+    track_file.parent.mkdir(parents=True, exist_ok=True)
+    track_file.write_bytes(b"dummy flac content")
+    lrc_file = track_file.with_suffix(".lrc")
+    lrc_content = "[00:12.34] Hello world\n[00:15.50] Second line\n"
+    lrc_file.write_text(lrc_content, encoding="utf-8")
+
+    server_mod.state.add_track(Track(
+        track_id="lyrics_test_123",
+        title="Hello Track",
+        artist="Artist",
+        album="Album",
+        local_path=str(track_file),
+        downloaded_at="2026-08-16T12:00:00",
+        artwork_url=None,
+    ))
+
+    resp = client.get("/tracks/lyrics_test_123/lyrics")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["track_id"] == "lyrics_test_123"
+    assert data["title"] == "Hello Track"
+    assert data["synced"] is True
+    assert data["source"] == "lrc"
+    assert len(data["lines"]) == 2
+    assert data["lines"][0]["text"] == "Hello world"
+    assert data["lines"][0]["time_ms"] == 12340
+    assert data["lines"][1]["text"] == "Second line"
+

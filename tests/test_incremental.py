@@ -261,3 +261,23 @@ def test_retroactive_matching_no_false_positives(tmp_path):
 
     owned = state.get_playlist_am_ids("My PL")
     assert "am-999" not in owned
+
+
+def test_streaming_graveyard_records_and_retrieves_delisted_tracks(state):
+    state.add_playlist("Oldies", "https://music.apple.com/us/playlist/oldies/pl.123")
+    _add_track(state, "Artist/Album/01 - Classic.flac", "am-100")
+    state.add_track_to_playlist("Oldies", "Artist/Album/01 - Classic.flac")
+
+    # Record delisted
+    state.record_delisted_track("Oldies", "Artist/Album/01 - Classic.flac", "2026-08-16T12:00:00")
+    delisted = state.get_delisted_tracks("Oldies")
+
+    assert len(delisted) == 1
+    assert delisted[0]["track_id"] == "Artist/Album/01 - Classic.flac"
+    assert delisted[0]["playlist_name"] == "Oldies"
+    assert delisted[0]["title"] == "Title"
+
+    # Re-adding clears delisted
+    state.clear_delisted_track("Oldies", "Artist/Album/01 - Classic.flac")
+    assert state.get_delisted_tracks("Oldies") == []
+

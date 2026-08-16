@@ -76,6 +76,49 @@ export interface Track {
   local_path: string;
   downloaded_at: string;
   artwork_url: string | null;
+  has_lyrics?: boolean;
+}
+
+export interface DapExportResult {
+  status: string;
+  playlist_name: string;
+  format: string;
+  bitrate: string;
+  target_dir: string;
+  export_dir: string;
+  exported_count: number;
+  skipped_count: number;
+  error_count: number;
+  playlist_file: string;
+  files: string[];
+}
+
+export interface GraveyardTrack {
+  playlist_name: string;
+  track_id: string;
+  delisted_at: string;
+  title: string;
+  artist: string;
+  album: string;
+  local_path: string;
+  artwork_url: string | null;
+}
+
+export interface LyricLine {
+  time_ms?: number;
+  timestamp?: string;
+  text: string;
+}
+
+export interface TrackLyrics {
+  track_id: string;
+  title: string;
+  artist: string;
+  album: string;
+  lyrics: string;
+  synced: boolean;
+  source: "lrc" | "embedded" | "am_api" | "none";
+  lines: LyricLine[];
 }
 
 export interface SyncEvent {
@@ -343,6 +386,47 @@ export const api = {
       ? `/sync-history/${encodeURIComponent(playlistName)}?limit=${limit}`
       : `/sync-history?limit=${limit}`;
     const r = await request(url);
+    return r.json();
+  },
+
+  async exportDap(
+    playlistName: string,
+    targetDir: string,
+    format: string = "opus",
+    bitrate?: string,
+  ): Promise<DapExportResult> {
+    const r = await request("/export/dap", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        playlist_name: playlistName,
+        target_dir: targetDir,
+        format,
+        ...(bitrate ? { bitrate } : {}),
+      }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Export failed (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async getStreamingGraveyard(playlistName?: string): Promise<{ tracks: GraveyardTrack[]; count: number }> {
+    const url = playlistName
+      ? `/streaming-graveyard?playlist_name=${encodeURIComponent(playlistName)}`
+      : "/streaming-graveyard";
+    const r = await request(url);
+    if (!r.ok) throw new Error(`Failed to load streaming graveyard (${r.status})`);
+    return r.json();
+  },
+
+  async getTrackLyrics(trackId: string): Promise<TrackLyrics> {
+    const r = await request(`/tracks/${encodeURIComponent(trackId)}/lyrics`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to load lyrics (${r.status})`);
+    }
     return r.json();
   },
 

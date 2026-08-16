@@ -121,6 +121,68 @@ class StateManager:
                     updated_at TEXT NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS delisted_tracks (
+                    playlist_name TEXT NOT NULL,
+                    track_id      TEXT NOT NULL,
+                    delisted_at   TEXT NOT NULL,
+                    PRIMARY KEY (playlist_name, track_id)
+                )
+            """)
+
+    def record_delisted_track(self, playlist_name: str, track_id: str, delisted_at: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO delisted_tracks (playlist_name, track_id, delisted_at) VALUES (?, ?, ?)",
+                (playlist_name, track_id, delisted_at),
+            )
+
+    def clear_delisted_track(self, playlist_name: str, track_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM delisted_tracks WHERE playlist_name = ? AND track_id = ?",
+                (playlist_name, track_id),
+            )
+
+    def get_delisted_track_ids(self, playlist_name: str) -> set[str]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT track_id FROM delisted_tracks WHERE playlist_name = ?",
+                (playlist_name,),
+            ).fetchall()
+            return {r[0] for r in rows}
+
+    def get_delisted_tracks(self, playlist_name: Optional[str] = None) -> list[dict]:
+        with self._conn() as conn:
+            if playlist_name:
+                rows = conn.execute("""
+                    SELECT d.playlist_name, d.track_id, d.delisted_at, t.title, t.artist, t.album, t.local_path, t.artwork_url
+                    FROM delisted_tracks d
+                    JOIN tracks t ON d.track_id = t.track_id
+                    WHERE d.playlist_name = ?
+                    ORDER BY d.delisted_at DESC
+                """, (playlist_name,)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT d.playlist_name, d.track_id, d.delisted_at, t.title, t.artist, t.album, t.local_path, t.artwork_url
+                    FROM delisted_tracks d
+                    JOIN tracks t ON d.track_id = t.track_id
+                    ORDER BY d.delisted_at DESC
+                """).fetchall()
+
+            return [
+                {
+                    "playlist_name": r[0],
+                    "track_id": r[1],
+                    "delisted_at": r[2],
+                    "title": r[3],
+                    "artist": r[4],
+                    "album": r[5],
+                    "local_path": r[6],
+                    "artwork_url": r[7],
+                }
+                for r in rows
+            ]
 
     def is_downloaded(self, track_id: str) -> bool:
         with self._conn() as conn:
@@ -128,6 +190,26 @@ class StateManager:
                 "SELECT 1 FROM tracks WHERE track_id = ?", (track_id,)
             ).fetchone()
             return row is not None
+
+
+    def get_track(self, track_id: str) -> Optional[Track]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url FROM tracks WHERE track_id = ?",
+                (track_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return Track(
+                track_id=row[0],
+                title=row[1],
+                artist=row[2],
+                album=row[3],
+                local_path=row[4],
+                downloaded_at=row[5],
+                artwork_url=row[6],
+            )
+
 
     def add_track(self, track: Track) -> None:
         with self._conn() as conn:

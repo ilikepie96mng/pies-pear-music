@@ -8,6 +8,8 @@ import shutil
 import socket
 import subprocess
 import sys
+from collections import deque
+
 import tempfile
 import threading
 import uuid
@@ -27,10 +29,14 @@ from pydantic import BaseModel, field_validator
 
 from alac_rip import am_api, lastfm_api, strawberry_sync
 from alac_rip.am_api import AMApiError
-from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config
+from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config, save_config_file
+from alac_rip.dap_export import DapExportError, export_dap_playlist
+from alac_rip.metadata import read_tags
 from alac_rip.organizer import sanitize
+
 from alac_rip.state import StateManager
-from alac_rip.sync import SyncEngine
+from alac_rip.sync import StagingValidationError, SyncEngine, validate_staging_dir
+
 
 
 def _normalize(s: str) -> str:
@@ -43,6 +49,7 @@ def _normalize(s: str) -> str:
 _DOWNLOAD_FORMATS = frozenset({"ALAC", "AAC", "ATMOS"})
 _MAX_PLAYLIST_NAME_LENGTH = 120
 _ABSOLUTE_PATH_RE = re.compile(r"(?<![\w:])/(?:[^\s:'\"]+/?)+")
+_TRACK_PROGRESS_RE = re.compile(r"^Track\s+(\d+)\s+of\s+(\d+):\s*(.*)$")
 
 
 def _validate_apple_music_url(value: str) -> str:
@@ -112,8 +119,9 @@ wrapper_process: Optional[subprocess.Popen] = None
 wrapper_running: bool = False
 wrapper_needs_2fa: bool = False
 wrapper_2fa_type: str = ""  # "device" | "sms" | ""
-wrapper_logs: list[str] = []
+wrapper_logs: deque[str] = deque(maxlen=200)
 _session_credentials: Optional[tuple[str, str]] = None
+
 
 _SECRET_SERVICE_ATTRIBUTES = ("application", "pies-pear-music", "purpose", "apple-wrapper")
 _SECRET_SERVICE_LABEL = "Pies Pear Music Apple wrapper credentials"
@@ -307,7 +315,8 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
         return False
 
     if not auto_login:
-        wrapper_logs = []
+        wrapper_logs.clear()
+
 
     prefix = "Auto-login: " if auto_login else ""
     wrapper_logs.append(f"{prefix}Starting wrapper login...")
@@ -332,10 +341,13 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
         "-i",
         "--network", "host",
         "--volume", "/dev/urandom:/app/rootfs/dev/urandom:ro",
-        "-e", f"args=-L {email}:{password}",
+        "--env", "args",
         IMAGE_NAME,
     ]
     wrapper_logs.append(f"{prefix}Launching container: {CONTAINER_NAME}")
+
+    child_env = os.environ.copy()
+    child_env["args"] = f"-L {email}:{password}"
 
     try:
         wrapper_process = subprocess.Popen(
@@ -345,7 +357,9 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
             stdin=subprocess.PIPE,
             bufsize=1,
             universal_newlines=True,
+            env=child_env,
         )
+
         threading.Thread(
             target=stream_wrapper_logs,
             args=(wrapper_process.stdout, wrapper_logs, email, password, auto_login),
@@ -419,6 +433,7 @@ def get_diagnostics():
         ("podman", "Podman", False),
         ("go", "Go", False),
         ("ffmpeg", "FFmpeg", False),
+        ("flac", "FLAC", True),
         ("MP4Box", "MP4Box", False),
         ("mp4decrypt", "mp4decrypt", True),
     ):
@@ -596,6 +611,22 @@ def _run_job(job: dict) -> None:
                                   "error", 0, 0, 0, str(log_path), msg)
         return
 
+    try:
+        save_folder = validate_staging_dir(
+            save_folder,
+            cfg.music_dir,
+            cfg.state_dir,
+            cfg.alac_rip_dir,
+        )
+    except StagingValidationError as sve:
+        msg = _redact_runtime_paths(f"Invalid downloader staging folder: {sve}")
+        emit({"status": "error", "message": msg, "log_path": str(log_path)})
+        if playlist_name:
+            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
+                                  "error", 0, 0, 0, str(log_path), msg)
+        return
+
+
     env = os.environ.copy()
     # Ensure linuxbrew is in PATH for MP4Box and other tools
     linuxbrew_bin = "/home/linuxbrew/.linuxbrew/bin"
@@ -647,14 +678,40 @@ def _run_job(job: dict) -> None:
             owned = state.get_playlist_am_ids(playlist_name)
             new_ids = am_ids_set - owned
             skip_ids = owned & am_ids_set
+            delisted_ids = owned - am_ids_set
+
+            if delisted_ids:
+                playlist_tracks = state.get_playlist_tracks(playlist_name)
+                delisted_recorded = 0
+                now_str = datetime.now().isoformat()
+                for pt in playlist_tracks:
+                    # Lookup track AM ID
+                    track_obj = state.get_track(pt.track_id)
+                    # If this track was mapped to an AM ID that is no longer in upstream playlist
+                    # or if track itself is in delisted_ids
+                    if track_obj and getattr(track_obj, "am_track_id", None) in delisted_ids:
+                        state.record_delisted_track(playlist_name, pt.track_id, now_str)
+                        delisted_recorded += 1
+                if delisted_recorded:
+                    emit_log("preflight", f"Preserved {delisted_recorded} delisted track(s) in streaming graveyard")
+
+            # If tracks were restored/re-added upstream, clear their delisted mark
+            for sid in skip_ids:
+                # Find track with this AM ID
+                for pt in state.get_playlist_tracks(playlist_name):
+                    track_obj = state.get_track(pt.track_id)
+                    if track_obj and getattr(track_obj, "am_track_id", None) == sid:
+                        state.clear_delisted_track(playlist_name, pt.track_id)
 
             skip_file_path = Path(_tmp) / "skip.json"
             skip_file_path.write_text(json.dumps({"skip_ids": list(skip_ids)}))
 
+            delisted_msg = f", {len(delisted_ids)} unlisted upstream (preserved locally)" if delisted_ids else ""
             emit_log("preflight",
                 f"Pre-flight: {len(am_tracks)} tracks in playlist, "
-                f"{len(new_ids)} new, {len(skip_ids)} already owned"
+                f"{len(new_ids)} new, {len(skip_ids)} already owned{delisted_msg}"
             )
+
         except Exception as e:
             owned = state.get_playlist_am_ids(playlist_name)
             if owned:
@@ -706,22 +763,38 @@ def _run_job(job: dict) -> None:
     for line in iter(proc.stdout.readline, ""):
         line = line.strip()
         if line:
-            emit_log("downloading", line)
+            m = _TRACK_PROGRESS_RE.match(line)
+            if m:
+                current, total, rest = m.groups()
+                emit_log("downloading", f"[{current}/{total}] {rest}".rstrip())
+            else:
+                emit_log("downloading", line)
 
     exit_code = proc.wait()
-    if exit_code != 0:
-        shutil.rmtree(_tmp, ignore_errors=True)
-        msg = f"Download failed (exit code {exit_code})"
-        write_log(f"[error] {msg}")
-        emit({"status": "error", "message": msg, "log_path": str(log_path)})
-        if playlist_name:
-            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
-                                  "error", 0, 0, 0, str(log_path), msg)
-        return
+    downloader_had_errors = exit_code != 0
+    if downloader_had_errors:
+        msg = f"Downloader reported errors (exit code {exit_code}); organizing tracks that downloaded successfully anyway"
+        write_log(f"[warning] {msg}")
+        emit_log("downloading", msg)
 
     # ── Phase 2: organize ─────────────────────────────────────────────────────
     def on_log(msg: str, _phase: str) -> None:
         emit_log("organizing", msg)
+
+    manifest_files = None
+    manifest_entries = []
+    if manifest_path.exists():
+        try:
+            raw_entries = json.loads(manifest_path.read_text())
+            if isinstance(raw_entries, list):
+                manifest_entries = raw_entries
+                manifest_files = [
+                    Path(e["local_path"])
+                    for e in raw_entries
+                    if isinstance(e, dict) and "local_path" in e
+                ]
+        except Exception as exc:
+            write_log(f"[manifest] warning: could not pre-parse manifest: {exc}")
 
     try:
         engine = SyncEngine(
@@ -729,8 +802,9 @@ def _run_job(job: dict) -> None:
             music_dir=cfg.music_dir,
             playlist_name=playlist_name,
             on_log=on_log,
+            state_dir=cfg.state_dir,
         )
-        result = engine.sync(save_folder)
+        result = engine.sync(save_folder, manifest_files=manifest_files)
     except Exception as exc:
         msg = _redact_runtime_paths(str(exc))
         write_log(f"[error] {msg}")
@@ -742,16 +816,16 @@ def _run_job(job: dict) -> None:
         return
 
     # ── Process manifest: update am_track_id in DB ────────────────────────────
-    if manifest_path.exists():
+    if manifest_entries:
         try:
-            entries = json.loads(manifest_path.read_text())
-            for entry in entries:
+            for entry in manifest_entries:
                 rel = Path(entry["local_path"]).relative_to(save_folder)
                 track_id = str(rel.with_suffix(".flac"))
                 state.update_track_am_id(track_id, entry["am_track_id"])
-            write_log(f"[manifest] updated AM IDs for {len(entries)} tracks")
+            write_log(f"[manifest] updated AM IDs for {len(manifest_entries)} tracks")
         except Exception as exc:
             write_log(f"[manifest] warning: could not process manifest: {exc}")
+
 
     # Backfill artwork for tracks that just got their am_track_id set by manifest
     if _artwork_map:
@@ -766,8 +840,10 @@ def _run_job(job: dict) -> None:
             result.new_count, result.skipped_count, result.error_count, str(log_path),
         )
 
-    write_log(f"[done] {result.new_count} new, {result.skipped_count} skipped, {result.error_count} errors")
-    emit({"status": "done", "new": result.new_count, "skipped": result.skipped_count,
+    write_log(f"[done] {result.new_count} new, {result.skipped_count} skipped, {result.error_count} errors"
+              f"{' (downloader reported errors on some tracks; see log)' if downloader_had_errors else ''}")
+    emit({"status": "done",
+          "new": result.new_count, "skipped": result.skipped_count,
           "errors": result.error_count, "log_path": str(log_path)})
 
 
@@ -1178,6 +1254,47 @@ def strawberry_export(req: StrawberryExportRequest):
     return result
 
 
+class DapExportRequest(BaseModel):
+    playlist_name: str
+    target_dir: str
+    format: str = "opus"
+    bitrate: Optional[str] = None
+
+
+@app.post("/export/dap")
+def dap_export(req: DapExportRequest):
+    if cfg is None or state is None:
+        raise HTTPException(503, "Library is not ready")
+
+    try:
+        playlist_name = _validate_playlist_name(req.playlist_name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+    target_path = Path(req.target_dir).expanduser()
+    if not target_path.is_absolute():
+        raise HTTPException(422, "Target directory must be an absolute path")
+
+    try:
+        result = export_dap_playlist(
+            music_dir=cfg.music_dir,
+            playlist_name=playlist_name,
+            target_dir=target_path,
+            format=req.format,
+            bitrate=req.bitrate,
+            state=state,
+        )
+    except DapExportError as exc:
+        msg = str(exc)
+        if "has no tracks" in msg:
+            raise HTTPException(404, msg)
+        raise HTTPException(422, _redact_runtime_paths(msg))
+    except Exception as exc:
+        raise HTTPException(500, _redact_runtime_paths(f"DAP export failed: {exc}"))
+
+    return result
+
+
 @app.post("/reveal-track")
 def reveal_track(req: RevealRequest):
     """Open the track in the file manager with the file selected.
@@ -1288,10 +1405,84 @@ def get_library():
                 "local_path": t.local_path,
                 "downloaded_at": t.downloaded_at,
                 "artwork_url": t.artwork_url,
+                "has_lyrics": Path(t.local_path).with_suffix(".lrc").is_file() if t.local_path else False,
             }
             for t in tracks
         ]
     return result
+
+
+@app.get("/streaming-graveyard")
+def get_streaming_graveyard(playlist_name: Optional[str] = None):
+    tracks = state.get_delisted_tracks(playlist_name)
+    return {"tracks": tracks, "count": len(tracks)}
+
+
+@app.get("/tracks/{track_id}/lyrics")
+@app.get("/track-lyrics")
+def get_track_lyrics(track_id: str):
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+
+    track = state.get_track(track_id)
+    if not track:
+        raise HTTPException(404, f"Track {track_id} not found")
+
+    lyrics_text = ""
+    source = "none"
+
+    if track.local_path:
+        try:
+            track_path = _resolve_library_file(track.local_path)
+            lrc_path = track_path.with_suffix(".lrc")
+            if lrc_path.is_file() and not lrc_path.is_symlink():
+                lyrics_text = lrc_path.read_text(encoding="utf-8", errors="replace")
+                source = "lrc"
+            elif track_path.is_file():
+                tags = read_tags(track_path)
+                if tags.get("lyrics"):
+                    lyrics_text = tags["lyrics"]
+                    source = "embedded"
+        except Exception:
+            pass
+
+    is_synced = bool(re.search(r"\[\d{2}:\d{2}", lyrics_text)) if lyrics_text else False
+
+    parsed_lines = []
+    if lyrics_text:
+        lrc_pattern = re.compile(r"^\[(\d{2}):(\d{2})(?:\.(\d{2,3}))?\](.*)$")
+        for line in lyrics_text.splitlines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            m = lrc_pattern.match(line_str)
+            if m:
+                mins = int(m.group(1))
+                secs = int(m.group(2))
+                frac = m.group(3) or "0"
+                ms = int(frac.ljust(3, "0")[:3])
+                total_ms = (mins * 60 + secs) * 1000 + ms
+                parsed_lines.append({
+                    "time_ms": total_ms,
+                    "timestamp": f"{m.group(1)}:{m.group(2)}.{frac}",
+                    "text": m.group(4).strip(),
+                })
+            else:
+                parsed_lines.append({
+                    "text": line_str,
+                })
+
+    return {
+        "track_id": track_id,
+        "title": track.title,
+        "artist": track.artist,
+        "album": track.album,
+        "lyrics": lyrics_text,
+        "synced": is_synced,
+        "source": source,
+        "lines": parsed_lines,
+    }
+
 
 
 @app.get("/track-art")
@@ -1361,12 +1552,11 @@ def update_config(body: ConfigUpdate):
             current = yaml.safe_load(f) or {}
     current.pop("github_remote", None)
     current.update(body.model_dump(exclude_none=True))
-    DEFAULT_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(DEFAULT_CONFIG_PATH, "w") as f:
-        yaml.dump(current, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    save_config_file(DEFAULT_CONFIG_PATH, current)
     global cfg
     cfg = load_config(DEFAULT_CONFIG_PATH)
     return {"status": "ok"}
+
 
 
 # ── Wrapper routes ────────────────────────────────────────────────────────────
@@ -1430,8 +1620,9 @@ def get_wrapper_status():
         "running": wrapper_running,
         "needs_2fa": wrapper_needs_2fa,
         "2fa_type": wrapper_2fa_type,
-        "logs": wrapper_logs[-200:],
+        "logs": list(wrapper_logs),
     }
+
 
 
 

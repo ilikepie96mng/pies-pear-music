@@ -11,9 +11,10 @@
   import Download from "$lib/Download.svelte";
   import About from "$lib/About.svelte";
   import DataControls from "$lib/DataControls.svelte";
+  import StreamingGraveyard from "$lib/StreamingGraveyard.svelte";
   import { api, type Playlist } from "../api";
 
-  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data";
+  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data" | "graveyard";
 
   let view = $state<View>("home");
   let playlists = $state<Playlist[]>([]);
@@ -74,6 +75,7 @@
     onopenHome={() => (view = "home")}
     onopenDashboard={() => (view = "dashboard")}
     onopenDownload={() => (view = "download")}
+    onopenGraveyard={() => (view = "graveyard")}
     onopenAbout={() => (view = "about")}
     onopenData={() => (view = "data")}
     onopenSync={syncingPlaylist ? () => (view = "sync") : undefined}
@@ -115,6 +117,8 @@
         {/key}
       {:else if view === "settings"}
         <Settings />
+      {:else if view === "graveyard"}
+        <StreamingGraveyard onopenSettings={() => (view = "settings")} />
       {:else if view === "download"}
         <Download />
       {:else if view === "about"}

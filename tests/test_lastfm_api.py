@@ -79,3 +79,14 @@ def test_get_similar_artists_empty_artist_list():
     with patch("alac_rip.lastfm_api.requests.get", return_value=resp):
         result = get_similar_artists("Niche Artist", "fake-key")
     assert result == []
+
+
+def test_lastfm_uses_https_and_user_agent():
+    with patch("alac_rip.lastfm_api.requests.get", return_value=_mock_resp(SIMILAR_RESPONSE)) as mock_get:
+        get_similar_artists("Artist", "key")
+    url = mock_get.call_args[0][0]
+    headers = mock_get.call_args[1].get("headers", {})
+    assert url.startswith("https://")
+    assert "User-Agent" in headers
+    assert "PiesPearMusic" in headers["User-Agent"]
+

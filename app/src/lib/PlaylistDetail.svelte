@@ -3,6 +3,8 @@
   import { openPath } from "@tauri-apps/plugin-opener";
   import { onMount, tick } from "svelte";
   import { api, type Playlist, type Track, type SyncRun } from "../api";
+  import DapExportModal from "./DapExportModal.svelte";
+  import LyricsModal from "./LyricsModal.svelte";
 
   interface Props {
     playlist: Playlist;
@@ -17,6 +19,10 @@
   let tracks = $state<Track[]>([]);
   let loadingTracks = $state(true);
   let tracksError = $state<string | null>(null);
+
+  // Modals
+  let showDapModal = $state(false);
+  let activeLyricsTrack = $state<Track | null>(null);
 
   // Rename
   let editing = $state(false);
@@ -316,6 +322,10 @@
                 : 'background:#1a1a1a;color:var(--text-secondary);border:1px solid #2a2a2a;'}">
             {playlist.paused ? "▶ Resume" : "⏸ Pause"}
           </button>
+          <button onclick={() => (showDapModal = true)} title="Export and transcode playlist to DAP or portable player"
+            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(252,211,77,0.12);color:var(--accent);border:1px solid rgba(252,211,77,0.25);cursor:pointer;">
+            📱 Export to DAP
+          </button>
           <button onclick={() => exportM3u()} disabled={exportingM3u} title="Export a portable playlist file"
             style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:#1a1a1a;color:var(--text-secondary);border:1px solid #2a2a2a;cursor:pointer;opacity:{exportingM3u?'.5':'1'};">
             {exportingM3u ? "…" : "⇩ M3U"}
@@ -397,6 +407,7 @@
                 </button>
               </th>
             {/each}
+            <th style="width:70px;padding:8px 10px;text-align:center;font-size:9px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em;">Lyrics</th>
           </tr>
         </thead>
         <tbody>
@@ -421,6 +432,23 @@
               <td style="padding:6px 10px;color:var(--text-secondary);max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title={track.artist}>{track.artist}</td>
               <td style="padding:6px 10px;color:var(--text-muted);max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title={track.album}>{track.album}</td>
               <td style="padding:6px 10px;color:#333;font-size:11px;white-space:nowrap;">{formatDate(track.downloaded_at)}</td>
+              <td style="padding:6px 10px;text-align:center;">
+                <button
+                  type="button"
+                  onclick={(e) => { e.stopPropagation(); activeLyricsTrack = track; }}
+                  title={track.has_lyrics ? "View synchronized lyrics (.lrc)" : "View / fetch lyrics"}
+                  style="padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;transition:all .15s;
+                    {track.has_lyrics
+                      ? 'background:rgba(252,211,77,0.15);color:var(--accent);border:1px solid rgba(252,211,77,0.3);'
+                      : 'background:rgba(255,255,255,0.04);color:var(--text-muted);border:1px solid var(--border);'}"
+                >
+                  {#if track.has_lyrics}
+                    🎤 LRC
+                  {:else}
+                    🎤
+                  {/if}
+                </button>
+              </td>
             </tr>
           {/each}
         </tbody>
@@ -428,3 +456,18 @@
     {/if}
   </div>
 </div>
+
+{#if showDapModal}
+  <DapExportModal
+    playlistName={playlist.name}
+    trackCount={tracks.length}
+    onclose={() => (showDapModal = false)}
+  />
+{/if}
+
+{#if activeLyricsTrack}
+  <LyricsModal
+    track={activeLyricsTrack}
+    onclose={() => (activeLyricsTrack = null)}
+  />
+{/if}

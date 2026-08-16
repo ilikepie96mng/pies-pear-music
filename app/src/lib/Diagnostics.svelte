@@ -8,7 +8,7 @@
   let { onopenSettings }: Props = $props();
 
   const GROUPS: { title: string; labels: string[]; critical?: boolean }[] = [
-    { title: "System tools", labels: ["Podman", "Go", "FFmpeg", "MP4Box", "mp4decrypt"] },
+    { title: "System tools", labels: ["Podman", "Go", "FFmpeg", "FLAC", "MP4Box", "mp4decrypt"] },
     { title: "Configuration", labels: ["Config file", "Music directory", "State directory", "alac-rip directory"], critical: true },
     { title: "External sources", labels: ["Downloader source", "Wrapper source"], critical: true },
   ];

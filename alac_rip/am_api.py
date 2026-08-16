@@ -1,4 +1,7 @@
 import re
+import xml.etree.ElementTree as ET
+from typing import Optional
+
 import requests
 
 _bearer_token_cache: str | None = None  # not thread-safe; safe for single-threaded use
@@ -176,3 +179,125 @@ def fetch_playlist_tracks(
             url = None
 
     return tracks
+
+
+def _parse_ttml_time(time_str: str) -> Optional[str]:
+    """Convert a TTML timestamp (e.g. 00:01:23.456, 01:23.45, 83.45s) into standard LRC format [mm:ss.xx]."""
+    if not time_str:
+        return None
+    time_str = time_str.strip()
+    if time_str.endswith("ms"):
+        try:
+            total_sec = float(time_str[:-2]) / 1000.0
+            mins = int(total_sec // 60)
+            secs = total_sec % 60
+            return f"[{mins:02d}:{secs:05.2f}]"
+        except ValueError:
+            return None
+    if time_str.endswith("s"):
+        time_str = time_str[:-1]
+
+    if ":" not in time_str:
+        try:
+            total_sec = float(time_str)
+            mins = int(total_sec // 60)
+            secs = total_sec % 60
+            return f"[{mins:02d}:{secs:05.2f}]"
+        except ValueError:
+            return None
+
+    parts = time_str.split(":")
+    if len(parts) == 2:
+        try:
+            mins = int(parts[0])
+            secs = float(parts[1])
+            return f"[{mins:02d}:{secs:05.2f}]"
+        except ValueError:
+            return None
+    elif len(parts) == 3:
+        try:
+            hours = int(parts[0])
+            mins = int(parts[1]) + hours * 60
+            secs = float(parts[2])
+            return f"[{mins:02d}:{secs:05.2f}]"
+        except ValueError:
+            return None
+    return None
+
+
+def ttml_to_lrc(ttml_text: str) -> str:
+    """Convert Apple Music TTML lyric XML string into standard synchronized LRC format."""
+    if not ttml_text or not ttml_text.strip():
+        return ""
+
+    try:
+        root = ET.fromstring(ttml_text)
+    except ET.ParseError:
+        return ttml_text.strip()
+
+    lrc_lines = []
+    for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if tag.lower() == "p":
+            begin_attr = elem.attrib.get("begin") or elem.attrib.get("{http://www.w3.org/ns/ttml}begin")
+            # Extract and normalize text from p and child spans
+            raw_text = "".join(elem.itertext())
+            line_text = re.sub(r"\s+", " ", raw_text).strip()
+            if not line_text and not begin_attr:
+                continue
+
+            lrc_ts = _parse_ttml_time(begin_attr) if begin_attr else ""
+            if lrc_ts:
+                lrc_lines.append(f"{lrc_ts} {line_text}".strip())
+            elif line_text:
+                lrc_lines.append(line_text)
+
+    return "\n".join(lrc_lines)
+
+
+def fetch_lyrics(
+    track_id: str,
+    bearer_token: str,
+    storefront: str = "us",
+) -> Optional[str]:
+    """Fetch synchronized lyrics for a song by track ID from Apple Music AMP API.
+
+    Returns the lyrics converted to synchronized .lrc format, or None if unavailable.
+    """
+    if not storefront or storefront == "enter your account storefront":
+        storefront = "us"
+
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Origin": "https://music.apple.com",
+    }
+
+    url = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/songs/{track_id}/lyrics"
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+    except requests.RequestException as e:
+        raise AMApiError(f"Request failed: {e}") from e
+
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        raise AMApiError(f"Apple Music API returned {r.status_code} for lyrics {track_id}")
+
+    try:
+        data = r.json()
+    except Exception as e:
+        raise AMApiError(f"Failed to parse lyrics response JSON: {e}") from e
+
+    for item in data.get("data", []):
+        attrs = item.get("attributes", {})
+        ttml = attrs.get("ttml")
+        if ttml:
+            lrc = ttml_to_lrc(ttml)
+            if lrc:
+                return lrc
+        for key in ("lrc", "plainText", "lyrics"):
+            val = attrs.get(key)
+            if val and isinstance(val, str) and val.strip():
+                return val.strip()
+
+    return None

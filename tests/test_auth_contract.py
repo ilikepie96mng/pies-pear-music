@@ -37,14 +37,18 @@ class FakeProcess:
         self.terminated = True
 
 
+from collections import deque
+
+
 @pytest.fixture(autouse=True)
 def reset_wrapper_state(monkeypatch):
     monkeypatch.setattr(server, "wrapper_process", None)
     monkeypatch.setattr(server, "wrapper_running", False)
     monkeypatch.setattr(server, "wrapper_needs_2fa", False)
     monkeypatch.setattr(server, "wrapper_2fa_type", "")
-    monkeypatch.setattr(server, "wrapper_logs", [])
+    monkeypatch.setattr(server, "wrapper_logs", deque(maxlen=200))
     monkeypatch.setattr(server, "_session_credentials", None)
+
 
 
 def test_sms_2fa_contract_uses_the_existing_wrapper_marker():
@@ -125,9 +129,14 @@ def test_login_command_shape_is_frozen_by_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "save_credentials", lambda _email, _password: True)
     monkeypatch.setattr(server.subprocess, "run", lambda *args, **kwargs: None)
 
-    captured: list[list[str]] = []
+    captured_cmd: list[list[str]] = []
+    captured_env: list[dict] = []
     process = FakeProcess(FakePipe(["[.] response type 6\n"]))
-    monkeypatch.setattr(server.subprocess, "Popen", lambda command, **kwargs: captured.append(command) or process)
+    monkeypatch.setattr(
+        server.subprocess,
+        "Popen",
+        lambda command, **kwargs: captured_cmd.append(command) or captured_env.append(kwargs.get("env", {})) or process,
+    )
 
     class InlineThread:
         def __init__(self, *, target, args, daemon):
@@ -140,12 +149,14 @@ def test_login_command_shape_is_frozen_by_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(server.threading, "Thread", InlineThread)
 
     assert server.start_wrapper_login("contract@example.invalid", "synthetic-password") is True
-    assert captured == [[
+    assert captured_cmd == [[
         "podman", "run", "--rm", "--name", server.CONTAINER_NAME, "-i",
         "--network", "host", "--volume", "/dev/urandom:/app/rootfs/dev/urandom:ro",
-        "-e", "args=-L contract@example.invalid:synthetic-password", server.IMAGE_NAME,
+        "--env", "args", server.IMAGE_NAME,
     ]]
+    assert captured_env[0].get("args") == "-L contract@example.invalid:synthetic-password"
     assert server.wrapper_running is True
+
 
 
 def test_shutdown_contract_terminates_the_active_wrapper_once(monkeypatch):
