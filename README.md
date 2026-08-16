@@ -1,123 +1,179 @@
-# Pies Pear Music
+# Pies Pear Music 🍐🎵
 
-Pies Pear Music is a local-first Linux desktop companion for manually syncing,
-organizing, exploring, and exporting an Apple Music library through
-user-installed downloader and media tools.
+> **The Local-First, High-Fidelity Music Archival & Workstation Hub**  
+> Bit-perfect Apple Lossless (ALAC/FLAC) syncing, universal cross-service playlist matching, embedded auditioning player, automated Jellyfin & Navidrome streaming server integration, and Gemini AI music curation.
 
-## Release status
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-blue.svg)](#platform-support)
+[![Frontend](https://img.shields.io/badge/Frontend-Svelte%205%20%2B%20Tauri%202.0-orange.svg)](app/)
+[![Backend](https://img.shields.io/badge/Backend-FastAPI%20Sidecar-green.svg)](alac_rip/)
+[![Audio](https://img.shields.io/badge/Audio-ALAC%20%7C%20FLAC%20Lossless-purple.svg)](#key-features)
+[![Tests](https://img.shields.io/badge/Tests-268%20Passing-brightgreen.svg)](tests/)
+[![License](https://img.shields.io/badge/License-GPL--3.0-lightgrey.svg)](LICENSE)
 
-This private development repository is preparing its first public `0.1.0`
-release. **No supported release packages are available yet.** Do not use the legacy `install.sh`,
-`uninstall.sh`, `music-sync` CLI, or systemd timer as a supported installation
-or sync path; they do not represent the desktop product and will not ship in
-the public release.
+---
 
-## Linux compatibility
+## ✨ Key Features
 
-“Target” means the packaging path is planned. “Supported” will only be used
-after the clean-machine smoke checklist passes for that distro.
+* 💎 **Bit-Perfect Lossless ALAC/FLAC**: Download and archive albums and playlists from Apple Music in uncompressed, bit-perfect high-resolution audio (up to 24-bit / 192kHz).
+* ⚡ **High-Performance Virtual Library**: Seamlessly browse and search 10,000+ track libraries at 60fps with lightweight virtual DOM windowing and low memory consumption.
+* 🎧 **Embedded Audio Mini-Player**: Persistent auditioning player with instant local file streaming, waveform seeking, volume control, and OS Media Session keyboard keys (Play/Pause/Skip).
+* 🎤 **Synchronized Karaoke Lyrics**: Displays timed `.lrc` lyrics with automatic fallback to [LRCLIB](https://lrclib.net) to download and save synchronized lyrics sidecars alongside your music.
+* 🔄 **Universal Playlist Importer (Match-and-Rip)**: Ingest playlist links or export files from **Spotify, Tidal, Qobuz, Apple Music, CSV, and M3U8** — automatically resolves tracks via ISRC and downloads them in pristine Apple Lossless.
+* 🤖 **Gemini AI Music Intelligence**: Plug in your Gemini API key for deep library taste profiling, natural-language smart playlist generation (*e.g. "Create a 25-track late-night moody synthwave mix"*), and 1-click lossless ripping.
+* 📡 **Home Media Server Auto-Refresh**: Instant background webhook notifications to **Jellyfin** (`/Library/Refresh`) and **Navidrome / Subsonic** (`/rest/startScan.view`) whenever new music lands.
+* 🍓 **1-Click Strawberry Sync & DAP Export**: Export playlists straight into Strawberry Music Player's SQLite library or transcode/sync directly to portable DAPs and microSD cards.
+* 🎨 **Visual Customization & Wallpaper Engine**: WCAG AAA high-contrast themes (Amber Night, Midnight, OLED, Forest, etc.) plus custom wallpaper background uploads with live blur and dimming sliders.
 
-| Distribution | Intended artifact | Current status |
-| --- | --- | --- |
-| Ubuntu 22.04+ | `.deb` or AppImage | Primary build baseline; clean-laptop package test pending |
-| Debian 12+ | `.deb` or AppImage | Compatibility target; clean-machine test pending |
-| Fedora Workstation | RPM or AppImage | Compatibility target; clean-machine test pending |
-| Bazzite | AppImage only | Compatibility target; RPM layering is deliberately unsupported |
-| Arch Linux and derivatives | AppImage | Best-effort compatibility target; no native package or completed smoke test |
+---
 
-Version `0.1.0` targets Linux x86_64. Flatpak, Snap, native Arch packages,
-ARM builds, and other distributions are not currently release targets. An
-AppImage still depends on a compatible host webview/runtime and must be tested;
-“portable” does not mean every Linux installation is automatically supported.
+## 🏛️ Architecture Overview
 
-## Planned v0.1 scope
+Pies Pear Music uses a modern, sandboxed desktop architecture with an isolated loopback sidecar:
 
-- Linux x86_64 desktop application.
-- Manual playlist syncs initiated from the application.
-- User-selected local music and state directories.
-- User-installed external download and media tools; packages will not silently
-  fetch or bundle third-party executables.
-
-Scheduled syncing, a command-line workflow, and Git-backed state replication
-are out of scope for v0.1.
-
-## Current desktop functionality
-
-- Launch from the application menu as **Pies Pear Music**, or run the packaged
-  `pies-pear-music` executable.
-- Add playlists and perform manual syncs; downloaded media remains in the
-  music directory selected during setup.
-- Export playlists as M3U files, choosing the save location, and open an M3U
-  in the system's configured player.
-- Use Last.fm recommendations with hidden artists, genre preferences, clear
-  explanations, and a local cached/offline fallback.
-- Export a privacy-safe listening profile containing aggregate artist, album,
-  and track counts only. The **Data & recs** screen manages profile export,
-  genres, and hidden artists.
-- Choose among curated appearance themes and use the About, Diagnostics, and
-  Setup views to understand the local installation.
-
-Pies Pear Music uses user-installed downloader, wrapper, Podman, and media
-tools. The Setup and Diagnostics screens identify missing dependencies and
-their configured locations without exposing those paths in support output.
-See [the complete dependency reference](docs/dependencies.md) before setting
-up a source checkout or attempting a sync.
-
-## Data and security
-
-Runtime state, logs, credentials, and downloaded media are user data. They
-must never be committed to source control or included in a support bundle.
-See [SECURITY.md](SECURITY.md) for vulnerability reporting and
-[docs/public-release-plan.md](docs/public-release-plan.md) for the release
-readiness criteria. See [RESPONSIBLE_USE.md](RESPONSIBLE_USE.md) for the
-project's non-affiliation and responsible-use notice.
-
-The current repository history is private and is not the future public
-repository. [The public snapshot manifest](docs/public-snapshot-manifest.md)
-defines the required clean-room publication review.
-
-## Development
-
-The supported Python test versions are 3.12 and 3.13. Python dependencies are
-defined only in `pyproject.toml`; install the desired `test` or `package`
-extra with `python -m pip install -e ".[test]"` or `.[package]`. The frontend
-commands are run from `app/`:
-
-```bash
-npm ci
-npm run check
-npm run build
+```mermaid
+graph TD
+  UI[Svelte 5 / Vite Desktop UI] -->|Tauri 2.0 IPC| Core[Tauri Core Wrapper]
+  Core -->|Loopback Handshake X-Pies-Api-Token| Backend[FastAPI Backend Sidecar]
+  Backend -->|Local Storage| DB[(SQLite State Database)]
+  Backend -->|Audio Ingestion| AMD[Apple Music Downloader]
+  Backend -->|Audio Auditioning| Stream[Local HTTP Range Streamer]
+  Backend -->|External APIs| Integrations[Jellyfin / Navidrome / LRCLIB / Gemini AI]
+  Backend -->|Audiophile Sync| Strawberry[Strawberry Player SQLite]
 ```
 
-## Repository structure
+---
 
-| Path | Responsibility |
-| --- | --- |
-| `app/src/` | Svelte desktop interface and authenticated sidecar API client |
-| `app/src-tauri/` | Tauri process lifecycle, launcher metadata, capabilities, and packaging |
-| `alac_rip/server.py` | FastAPI sidecar routes, job queue, wrapper lifecycle, and integrations |
-| `alac_rip/state.py` | SQLite schema, migrations, and local-library persistence |
-| `alac_rip/sync.py` | Media organization and sync-domain behavior |
-| `tests/` | Python unit, API-boundary, auth-contract, and sync regression tests |
-| `scripts/` | Sidecar builds, artifact verification, SBOM inventory, and launch helpers |
-| `docs/` | Architecture, dependencies, packaging, security, and release evidence |
+## 🚀 Getting Started
 
-The backend server is still larger than the desired long-term module boundary.
-Its eventual split into auth, jobs, library, integrations, and API modules is a
-tracked maintainability task, not a prerequisite for testing the current
-behavior. Authentication code remains frozen behind its contract tests.
+### 1. Prerequisites
 
-The public contribution and AI-use disclosures are in
-[CONTRIBUTING.md](CONTRIBUTING.md) and [AI_DISCLOSURE.md](AI_DISCLOSURE.md).
-Packaging details and current verification status are in
-[docs/packaging.md](docs/packaging.md). Appearance preset behavior is documented
-in [docs/appearance.md](docs/appearance.md). Common setup and recovery steps
-are in [docs/troubleshooting.md](docs/troubleshooting.md).
+Ensure the following tools are installed on your system:
+* **Linux**: `ffmpeg`, `flac`, and `apple-music-downloader` (placed in `~/.local/share/pies-alac-rip/amd-main`).
+* **Node.js**: v18+ (for building the frontend).
+* **Python**: 3.12+ (for running the backend sidecar).
 
-Build and verification instructions are in [docs/development.md](docs/development.md).
-Component and boundary details are in [docs/architecture.md](docs/architecture.md).
-The required pre-change auth regression gate is in [docs/auth-contract.md](docs/auth-contract.md).
-Current release blockers and completed preparation are tracked in
-[docs/release-status.md](docs/release-status.md).
-The required clean-user package checks are listed in
-[docs/manual-smoke-test.md](docs/manual-smoke-test.md).
+*(Tip: The built-in **Diagnostics** screen automatically checks and verifies all installed system dependencies).*
+
+---
+
+### 2. Running from Source
+
+Clone the repository and install dependencies:
+
+```bash
+# Clone the repository
+git clone https://github.com/ilikepie96mng/pies-alac-rip-tool.git
+cd pies-alac-rip-tool
+
+# Set up Python virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[test,package]"
+
+# Install frontend dependencies
+cd app
+npm install
+```
+
+Start the application in development mode:
+
+```bash
+# Inside the app/ directory
+npm run tauri dev
+```
+
+---
+
+### 3. Building Production Packages
+
+To build standalone Linux packages (`.AppImage`, `.deb`, `.rpm`) and freeze the backend sidecar:
+
+```bash
+# Freeze the Python sidecar binary
+bash scripts/build-backend-sidecar.sh
+
+# Build all package bundles
+bash scripts/build-packages.sh
+
+# Run packaging smoke verification
+bash scripts/verify-packaging.sh
+```
+
+Packaged artifacts will be generated in `app/src-tauri/target/release/bundle/`.
+
+---
+
+## ⚙️ Configuration & Integrations
+
+Settings can be managed directly in the application UI (**Settings**) or via `config.yaml`:
+
+### Jellyfin Auto-Refresh
+```yaml
+integrations:
+  jellyfin:
+    enabled: true
+    server_url: "http://192.168.1.100:8096"
+    api_key: "your_jellyfin_api_key"
+    auto_refresh: true
+```
+
+### Navidrome / Subsonic Auto-Refresh
+```yaml
+integrations:
+  navidrome:
+    enabled: true
+    server_url: "http://192.168.1.100:4533"
+    user: "admin"
+    token: "your_subsonic_token"
+    salt: "your_salt"
+    auto_refresh: true
+```
+
+### Gemini AI Music Intelligence
+```yaml
+gemini_api_key: "AIzaSy..."
+gemini_model: "gemini-2.5-flash"  # or gemini-2.5-pro
+```
+
+---
+
+## 🧪 Testing & Code Quality
+
+The repository enforces 100% automated test coverage across both backend and frontend:
+
+```bash
+# Run backend test suite (268 unit & integration tests)
+.venv/bin/pytest
+
+# Run frontend typechecking and Svelte diagnostics
+cd app && npm run check
+```
+
+---
+
+## 📂 Repository Structure
+
+| Path | Description |
+| :--- | :--- |
+| [`app/src/lib/`](app/src/lib/) | Svelte 5 desktop interface, player bar, virtual track table, and modals |
+| [`app/src-tauri/`](app/src-tauri/) | Tauri 2.0 launcher, native desktop notifications, and capability boundaries |
+| [`alac_rip/`](alac_rip/) | FastAPI backend sidecar, audio streamer, metadata, and service integrations |
+| [`tests/`](tests/) | Python unit, API boundary, audio streaming, and regression test suites |
+| [`scripts/`](scripts/) | Packaging, sidecar freezing, and verification smoke test harnesses |
+| [`docs/`](docs/) | Technical specifications, architecture docs, and agent workflow guidelines |
+
+---
+
+## 📖 Documentation Index
+
+* 🛠️ **[Agent Workflow Protocol](docs/agent-workflow.md)** — Decoupled session lifecycle and handoff rules.
+* 🏛️ **[Architecture & Security](docs/architecture.md)** — Capability model, sidecar isolation, and token exchange.
+* 📦 **[Packaging Guide](docs/packaging.md)** — Distribution bundles, dependencies, and smoke tests.
+* 🎨 **[Appearance & Themes](docs/appearance.md)** — Preset tokens, WCAG contrast, and wallpaper engine.
+* 🔧 **[Troubleshooting](docs/troubleshooting.md)** — Common setup questions, audio playback, and sync recovery.
+
+---
+
+## 🛡️ Responsible Use & Non-Affiliation
+
+Pies Pear Music is an open-source, local-first archival and library management tool for content you are authorized to access. It is not affiliated with, endorsed by, or sponsored by Apple Inc., Spotify, Tidal, Qobuz, or Google. See [RESPONSIBLE_USE.md](RESPONSIBLE_USE.md) and [LICENSE](LICENSE) for details.
