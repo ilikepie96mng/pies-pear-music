@@ -96,10 +96,12 @@ def generate_smart_playlist(
         except Exception:
             pass
 
+    count_instruction = f"Aim for {track_count} tracks." if track_count > 0 else "Select a comprehensive, well-paced track count (e.g. 15 to 40 tracks) that best fulfills the prompt."
+
     system_instruction = (
         "You are an expert audiophile and music curator for a bit-perfect lossless music workstation. "
         "When given a prompt, generate a cohesive, exceptional tracklist matching the mood, genre, and aesthetic. "
-        f"Aim for {track_count} tracks. Provide your output strictly as a valid JSON object with the following schema: "
+        f"{count_instruction} Provide your output strictly as a valid JSON object with the following schema: "
         "{\"playlist_title\": string, \"description\": string, \"vibe_tags\": [string], \"tracks\": [{\"title\": string, \"artist\": string, \"album\": string, \"rationale\": string}]}"
     )
 
