@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import Any, Optional
+from pydantic import BaseModel, Field, ValidationError
 import requests
 from alac_rip.am_api import search_apple_music_tracks
 from alac_rip.state import StateManager
@@ -18,19 +19,37 @@ DEFAULT_GEMINI_MODELS = [
     "gemini-1.5-pro",
 ]
 
+_MAX_PROMPT_LENGTH = 1000
+_MAX_TRACK_COUNT = 100
+
+
+class GeminiTrackItem(BaseModel):
+    title: str = Field(..., max_length=200)
+    artist: str = Field(..., max_length=200)
+    album: str = Field(default="", max_length=200)
+    rationale: str = Field(default="", max_length=500)
+
+
+class GeminiPlaylistSchema(BaseModel):
+    playlist_title: str = Field(default="AI Curated Mix", max_length=200)
+    description: str = Field(default="", max_length=1000)
+    vibe_tags: list[str] = Field(default_factory=list, max_length=20)
+    tracks: list[GeminiTrackItem] = Field(default_factory=list, max_length=_MAX_TRACK_COUNT)
+
 
 def list_available_gemini_models(api_key: str, timeout: float = 10.0) -> list[str]:
     """
     Queries Google Generative Language API to discover available models for this key.
-    Returns a sorted list of model names supporting generateContent.
+    Sends API key in x-goog-api-key header to prevent URL leak in logs/proxies.
     """
     if not api_key:
         return DEFAULT_GEMINI_MODELS
 
+    headers = {"x-goog-api-key": api_key}
     for api_version in ("v1beta", "v1"):
-        url = f"https://generativelanguage.googleapis.com/{api_version}/models?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/{api_version}/models"
         try:
-            resp = requests.get(url, timeout=timeout)
+            resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=False)
             if resp.status_code == 200:
                 data = resp.json()
                 models = data.get("models", [])
@@ -39,11 +58,9 @@ def list_available_gemini_models(api_key: str, timeout: float = 10.0) -> list[st
                     methods = m.get("supportedGenerationMethods", [])
                     if "generateContent" in methods:
                         name = m.get("name", "")
-                        # name is usually 'models/gemini-2.0-flash'
                         clean_name = name.replace("models/", "")
                         valid_models.append(clean_name)
                 if valid_models:
-                    # Sort flash / lite models first for cost-effectiveness
                     def _sort_key(m: str) -> int:
                         m_low = m.lower()
                         if "flash-lite" in m_low or "flash-8b" in m_low:
@@ -76,13 +93,15 @@ def generate_smart_playlist(
 ) -> dict[str, Any]:
     """
     Uses Gemini API to curate a thematic playlist with musical rationale.
-    Optionally enriches results by searching Apple Music if bearer_token is provided.
-    Dynamically discovers available models to guarantee 100% compatibility.
+    Passes API key securely via x-goog-api-key header and validates output against Pydantic schema.
     """
     if not prompt or not prompt.strip():
         return {"error": "Prompt cannot be empty", "tracks": []}
     if not api_key:
         return {"error": "Gemini API key not configured", "tracks": []}
+
+    cleaned_prompt = prompt.strip()[:_MAX_PROMPT_LENGTH]
+    clamped_track_count = max(0, min(track_count, _MAX_TRACK_COUNT))
 
     # Extract user taste context from library if available
     library_context = ""
@@ -96,7 +115,7 @@ def generate_smart_playlist(
         except Exception:
             pass
 
-    count_instruction = f"Aim for {track_count} tracks." if track_count > 0 else "Select a comprehensive, well-paced track count (e.g. 15 to 40 tracks) that best fulfills the prompt."
+    count_instruction = f"Aim for {clamped_track_count} tracks." if clamped_track_count > 0 else "Select a comprehensive, well-paced track count (e.g. 15 to 40 tracks) that best fulfills the prompt."
 
     system_instruction = (
         "You are an expert audiophile and music curator for a bit-perfect lossless music workstation. "
@@ -105,7 +124,7 @@ def generate_smart_playlist(
         "{\"playlist_title\": string, \"description\": string, \"vibe_tags\": [string], \"tracks\": [{\"title\": string, \"artist\": string, \"album\": string, \"rationale\": string}]}"
     )
 
-    user_query = f"{library_context}\n\nPrompt: {prompt.strip()}"
+    user_query = f"{library_context}\n\nPrompt: {cleaned_prompt}"
 
     payload = {
         "contents": [
@@ -141,16 +160,22 @@ def generate_smart_playlist(
 
     last_error = "No response from Gemini"
     playlist_obj = None
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+
     for target_model in candidate_models:
         for api_version in ("v1beta", "v1"):
-            url = f"https://generativelanguage.googleapis.com/{api_version}/models/{target_model}:generateContent?key={api_key}"
+            url = f"https://generativelanguage.googleapis.com/{api_version}/models/{target_model}:generateContent"
             try:
-                resp = requests.post(url, json=payload, headers={"Content-Type": "application/json"}, timeout=timeout)
+                resp = requests.post(url, json=payload, headers=headers, timeout=timeout, allow_redirects=False)
                 if resp.status_code == 404:
                     last_error = f"Model {target_model} not found on {api_version}"
                     continue
                 if resp.status_code != 200:
-                    return {"error": f"Gemini API returned HTTP {resp.status_code}: {resp.text}", "tracks": []}
+                    # Sanitize error message to avoid key/URL leak
+                    return {"error": f"Gemini API returned status code {resp.status_code}", "tracks": []}
 
                 res_data = resp.json()
                 candidates = res_data.get("candidates", [])
@@ -158,10 +183,18 @@ def generate_smart_playlist(
                     return {"error": "No response generated by Gemini", "tracks": []}
 
                 content_part = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                playlist_obj = json.loads(content_part)
+                raw_json = json.loads(content_part)
+                # Schema validation
+                validated = GeminiPlaylistSchema.model_validate(raw_json)
+                playlist_obj = validated.model_dump()
                 break
+            except ValidationError as ve:
+                logger.warning(f"Gemini output failed schema validation on {target_model}: {ve}")
+                last_error = "Model generated invalid schema"
+                continue
             except Exception as e:
-                last_error = str(e)
+                logger.debug(f"Gemini request failed on {target_model}/{api_version}: {type(e).__name__}")
+                last_error = "Network or parsing error"
                 continue
         if playlist_obj is not None:
             break
@@ -194,4 +227,4 @@ def generate_smart_playlist(
         return playlist_obj
     except Exception as e:
         logger.error(f"Gemini playlist post-processing failed: {e}")
-        return {"error": str(e), "tracks": []}
+        return {"error": "Failed to process playlist recommendations", "tracks": []}

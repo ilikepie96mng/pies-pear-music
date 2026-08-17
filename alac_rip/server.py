@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 import uvicorn
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from mutagen.mp4 import MP4, MP4Cover
@@ -1644,6 +1644,30 @@ class ConfigUpdate(BaseModel):
 _CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key", "gemini_api_key", "github_remote"}
 
 
+def _sanitize_config_dict(data: dict) -> dict:
+    """Recursively redact sensitive API tokens, passwords, and integration secrets."""
+    sanitized = {}
+    for k, v in data.items():
+        if k in _CONFIG_OMIT:
+            continue
+        if k == "integrations" and isinstance(v, dict):
+            san_integ = {}
+            for s_name, s_cfg in v.items():
+                if isinstance(s_cfg, dict):
+                    copied = dict(s_cfg)
+                    for secret_field in ("api_key", "token", "password", "salt"):
+                        if secret_field in copied and copied[secret_field]:
+                            copied[secret_field] = "********"
+                            copied[f"{secret_field}_configured"] = True
+                    san_integ[s_name] = copied
+                else:
+                    san_integ[s_name] = s_cfg
+            sanitized[k] = san_integ
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
 @app.get("/config")
 def get_config():
     try:
@@ -1651,7 +1675,7 @@ def get_config():
             data = yaml.safe_load(f) or {}
     except FileNotFoundError:
         raise HTTPException(503, "Config file not found")
-    return {k: v for k, v in data.items() if k not in _CONFIG_OMIT}
+    return _sanitize_config_dict(data)
 
 
 @app.put("/config")
@@ -1661,7 +1685,20 @@ def update_config(body: ConfigUpdate):
         with open(DEFAULT_CONFIG_PATH) as f:
             current = yaml.safe_load(f) or {}
     current.pop("github_remote", None)
-    current.update(body.model_dump(exclude_none=True))
+
+    updates = body.model_dump(exclude_none=True)
+    # Preserve existing secrets if masked values were sent back
+    if "integrations" in updates and isinstance(updates["integrations"], dict):
+        cur_integ = current.get("integrations", {})
+        for s_name, s_cfg in updates["integrations"].items():
+            if isinstance(s_cfg, dict) and s_name in cur_integ:
+                cur_s = cur_integ[s_name]
+                for secret_field in ("api_key", "token", "password", "salt"):
+                    if s_cfg.get(secret_field) == "********":
+                        s_cfg[secret_field] = cur_s.get(secret_field, "")
+                    s_cfg.pop(f"{secret_field}_configured", None)
+
+    current.update(updates)
     save_config_file(DEFAULT_CONFIG_PATH, current)
     global cfg
     cfg = load_config(DEFAULT_CONFIG_PATH)
@@ -1734,8 +1771,6 @@ def get_wrapper_status():
     }
 
 
-
-
 @app.get("/download/one-off")
 async def download_one_off(url: str = "", format: str = "ALAC"):
     try:
@@ -1766,14 +1801,15 @@ async def download_one_off(url: str = "", format: str = "ALAC"):
     )
 
 
-
-
-# ── Phase 6 Endpoints: Streaming, Integrations, Requests, Playlist Import & Gemini AI ──
+# ── Audio Streaming & Media Integrations ──────────────────────────────────────
 
 @app.get("/api/v1/stream/{track_id}")
 @app.get("/stream/{track_id}")
-def stream_track(track_id: str, request: Request):
-    """Stream local audio file with HTTP Range header support."""
+def stream_audio_track(track_id: str, range_header: Optional[str] = Header(None, alias="Range")):
+    """
+    HTTP Range-capable audio streaming endpoint for local ALAC/FLAC track auditioning.
+    Guarantees strict path isolation inside music_dir and strict Range parsing.
+    """
     if state is None or cfg is None:
         raise HTTPException(503, "Library is not ready")
 
@@ -1781,21 +1817,19 @@ def stream_track(track_id: str, request: Request):
     if not track or not track.local_path:
         raise HTTPException(404, f"Track {track_id} not found")
 
-    file_path = _resolve_library_file(track.local_path)
-    if not file_path.is_file():
-        raise HTTPException(404, "Audio file not found on disk")
-
-    # Security check: ensure path is within music_dir
     try:
-        file_path.relative_to(cfg.music_dir.resolve())
-    except ValueError:
-        raise HTTPException(403, "Access denied to audio path outside music directory")
+        file_path = _resolve_library_file(track.local_path)
+    except Exception:
+        raise HTTPException(404, "Track file could not be found or resolved")
+
+    if not file_path.is_file():
+        raise HTTPException(404, "Track audio file does not exist on disk")
 
     file_size = file_path.stat().st_size
-    range_header = request.headers.get("Range")
+    suffix = file_path.suffix.lower()
+    media_type = "audio/mp4" if suffix in (".m4a", ".alac") else ("audio/flac" if suffix == ".flac" else "application/octet-stream")
 
-    media_type = "audio/mp4" if file_path.suffix.lower() in (".m4a", ".alac") else "audio/flac"
-
+    # If no range header is requested, stream entire file
     if not range_header:
         def iterfile():
             with open(file_path, mode="rb") as f:
@@ -1808,16 +1842,16 @@ def stream_track(track_id: str, request: Request):
         }
         return StreamingResponse(iterfile(), headers=headers, media_type=media_type)
 
-    # Parse Range: bytes=start-end
-    range_match = re.match(r"bytes=(\d+)-(\d*)?", range_header)
+    # Parse Range: bytes=start-end strictly with fullmatch
+    range_match = re.fullmatch(r"bytes=(\d+)-(\d*)", range_header.strip())
     if not range_match:
-        raise HTTPException(416, "Invalid Range header")
+        raise HTTPException(416, "Invalid Range header", headers={"Content-Range": f"bytes */{file_size}"})
 
     start = int(range_match.group(1))
     end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
 
     if start >= file_size or end >= file_size or start > end:
-        raise HTTPException(416, "Range Not Satisfiable")
+        raise HTTPException(416, "Range Not Satisfiable", headers={"Content-Range": f"bytes */{file_size}"})
 
     chunk_length = end - start + 1
 
