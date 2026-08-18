@@ -690,7 +690,7 @@ export const api = {
   },
 
   async getTrackLyrics(trackId: string): Promise<TrackLyrics> {
-    const r = await request(`/tracks/${encodeURIComponent(trackId)}/lyrics`);
+    const r = await request(`/api/v1/tracks/lyrics?track_id=${encodeURIComponent(trackId)}`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to load lyrics (${r.status})`);
@@ -700,7 +700,7 @@ export const api = {
 
   async getStreamUrl(trackId: string): Promise<string> {
     const conn = await getConnection();
-    return `http://127.0.0.1:${conn.port}/api/v1/stream/${encodeURIComponent(trackId)}?token=${encodeURIComponent(conn.capability)}`;
+    return `http://127.0.0.1:${conn.port}/api/v1/stream?track_id=${encodeURIComponent(trackId)}&token=${encodeURIComponent(conn.capability)}`;
   },
 
   async getPlaylistDuplicates(playlistName: string): Promise<{ playlist_name: string; duplicates: DuplicateTrackInfo[]; count: number }> {

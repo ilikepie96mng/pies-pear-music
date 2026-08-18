@@ -1544,11 +1544,15 @@ def get_streaming_graveyard(playlist_name: Optional[str] = None):
     return {"tracks": tracks, "count": len(tracks)}
 
 
-@app.get("/tracks/{track_id}/lyrics")
+@app.get("/tracks/{track_id:path}/lyrics")
+@app.get("/api/v1/tracks/lyrics")
 @app.get("/track-lyrics")
-def get_track_lyrics(track_id: str):
+def get_track_lyrics(track_id: Optional[str] = None):
     if state is None:
         raise HTTPException(503, "Library is not ready")
+
+    if not track_id:
+        raise HTTPException(400, "Missing track_id parameter")
 
     track = state.get_track(track_id)
     if not track:
@@ -1846,15 +1850,20 @@ async def download_one_off(url: str = "", format: str = "ALAC"):
 
 # ── Audio Streaming & Media Integrations ──────────────────────────────────────
 
-@app.get("/api/v1/stream/{track_id}")
-@app.get("/stream/{track_id}")
-def stream_audio_track(track_id: str, range_header: Optional[str] = Header(None, alias="Range")):
+@app.get("/api/v1/stream/{track_id:path}")
+@app.get("/api/v1/stream")
+@app.get("/stream/{track_id:path}")
+@app.get("/stream")
+def stream_audio_track(track_id: Optional[str] = None, range_header: Optional[str] = Header(None, alias="Range")):
     """
     HTTP Range-capable audio streaming endpoint for local ALAC/FLAC track auditioning.
     Guarantees strict path isolation inside music_dir and strict Range parsing.
     """
     if state is None or cfg is None:
         raise HTTPException(503, "Library is not ready")
+
+    if not track_id:
+        raise HTTPException(400, "Missing track_id parameter")
 
     track = state.get_track(track_id)
     if not track or not track.local_path:

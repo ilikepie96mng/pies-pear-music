@@ -18,15 +18,17 @@
 
 ## 2. Phase 7: Accomplishments & Completed Features
 
-1. **Playlist Creator Workstation (`PlaylistCreator.svelte`)**:
-   - Dual-pane playlist studio with multi-select across Tracks, Albums, Artists, and Existing Playlists.
-   - Live search, multi-selection batching with "Skip Duplicates & Add", track re-ordering (↑ / ↓ / ✕), estimated duration & size, Save to Library via `api.saveGeminiPlaylist`, and `.m3u8` export.
-2. **Playlist Duplicate Engine & Cleanup**:
+1. **Playlist Creator Workstation & AI Assistant (`PlaylistCreator.svelte`)**:
+   - Dual-pane playlist studio with multi-select across Tracks, Albums, Artists, Existing Playlists, and **✨ AI Assistant**.
+   - Gemini AI mix generator with prompt, target track count, and direct 1-click "Stage Mix" integration.
+   - Native OS destination folder selection on `.m3u8` export using `saveDialog` from `@tauri-apps/plugin-dialog`.
+   - Batch selection with "Skip Duplicates & Add", track re-ordering (↑ / ↓ / ✕), estimated duration & size, and Save to Library via `api.saveGeminiPlaylist`.
+2. **Audio Streaming & Lyrics Routing Refactor**:
+   - Routes updated in `alac_rip/server.py` to support path converters and query parameters (`{track_id:path}`, `/api/v1/tracks/lyrics?track_id=...`, `/api/v1/stream?track_id=...&token=...`).
+   - Dynamic URL generation in `app/src/api.ts` utilizing `?track_id=...` parameters to prevent slash-encoding 404s.
+3. **Playlist Duplicate Engine & Cleanup**:
    - Backend `GET /playlists/{name}/duplicates` & `POST /playlists/{name}/deduplicate` in `server.py` and `state.py`.
    - "🔍 Check Duplicates" modal in `PlaylistDetail.svelte` with track preview, count badges, and 1-click duplicate removal (keeping the first occurrence).
-3. **Audio Player Authentication & Query Capability Token**:
-   - Updated `require_api_capability` middleware in `server.py` to validate `token` query parameters for HTML5 `<audio>` playback.
-   - Dynamic authenticated stream URLs generated via `api.getStreamUrl(trackId)` in `player.svelte.ts`.
 4. **Multi-Tier Resilient Lyrics Search & Real-Time Karaoke Mode**:
    - 3-Tier LRCLIB fallback in `lyrics.py` (strict metadata $\rightarrow$ tag query $\rightarrow$ fuzzy search `/api/search`).
    - Real-time Karaoke view mode in `LyricsModal.svelte` with active line glow, past line dimming, and smooth auto-scrolling synced to `player.currentTime`.
@@ -43,7 +45,7 @@
    - Added `format="original"` mode in `dap_export.py` using `shutil.copy2` for bit-perfect export without transcoding.
    - 3-column codec selector in `DapExportModal.svelte` (Opus, AAC, Original Lossless).
 9. **UI Contrast & Column Truncation Overhaul**:
-   - High-contrast themes meeting WCAG AAA guidelines in `themes.ts`.
+   - High-contrast button styles (`bg-amber-400 text-black font-bold`) across `PlaylistCreator.svelte`, `Library.svelte`, and `Sidebar.svelte`.
    - Table columns styled with `min-w-0` and `truncate` to guarantee robust layout across all window sizes.
 
 ---
@@ -51,7 +53,7 @@
 ## 3. Verification Suite Results
 
 All tests passing cleanly:
-- `.venv/bin/pytest`: **277 passing tests** (11.28s).
-- `cd app && npm run check`: **0 errors**.
+- `.venv/bin/pytest`: **277 passing tests** (11.48s).
+- `cd app && npm run check`: **0 errors, 0 warnings**.
 - `cd app && npm run build`: **Vite production build completed successfully**.
 - `cd app/src-tauri && cargo test --locked`: **2 passing tests**.

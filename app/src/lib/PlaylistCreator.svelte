@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type LibraryTrack, type Playlist } from "../api";
+  import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+  import { api, type LibraryTrack, type Playlist, type GeminiPlaylistResult } from "../api";
   import { player } from "./player.svelte";
 
   interface Props {
@@ -17,10 +18,17 @@
   let playlistTrackMap = $state<Record<string, LibraryTrack[]>>({});
 
   // Browser Tabs & Filter
-  type CatalogTab = "tracks" | "albums" | "artists" | "playlists";
+  type CatalogTab = "tracks" | "albums" | "artists" | "playlists" | "ai";
   let activeTab = $state<CatalogTab>("tracks");
   let searchQuery = $state("");
   let selectedCatalogItems = $state<Set<string>>(new Set());
+
+  // AI Assistant State
+  let aiPrompt = $state("");
+  let aiTargetCount = $state(20);
+  let aiCurating = $state(false);
+  let aiError = $state<string | null>(null);
+  let aiResult = $state<GeminiPlaylistResult | null>(null);
 
   // Staged Playlist
   let playlistName = $state("");
@@ -285,20 +293,99 @@
     }
   }
 
-  function handleExportM3U8() {
+  async function handleCurateAi() {
+    if (!aiPrompt.trim()) return;
+    aiCurating = true;
+    aiError = null;
+    aiResult = null;
+    try {
+      const res = await api.curateGemini(aiPrompt.trim(), aiTargetCount);
+      aiResult = res;
+    } catch (e) {
+      aiError = e instanceof Error ? e.message : String(e);
+    } finally {
+      aiCurating = false;
+    }
+  }
+
+  function stageAiTracks() {
+    if (!aiResult) return;
+    if (aiResult.playlist_title && !playlistName.trim()) {
+      playlistName = aiResult.playlist_title;
+    }
+    if (aiResult.description && !playlistDescription.trim()) {
+      playlistDescription = aiResult.description;
+    }
+
+    const mapped: LibraryTrack[] = [];
+    for (const item of aiResult.tracks) {
+      const match = allTracks.find(
+        (t) =>
+          t.title.toLowerCase() === item.title.toLowerCase() ||
+          (t.title.toLowerCase().includes(item.title.toLowerCase()) &&
+            t.artist.toLowerCase().includes(item.artist.toLowerCase())),
+      );
+
+      if (match) {
+        mapped.push(match);
+      } else {
+        mapped.push({
+          track_id: item.am_track?.id || `ai-${item.artist}-${item.title}`,
+          title: item.title,
+          artist: item.artist,
+          album: item.album || "AI Curated",
+          local_path: "",
+          downloaded_at: "",
+          artwork_url: null,
+          playlists: [],
+          has_lyrics: false,
+          format: "ALAC",
+          file_size: 35_000_000,
+          exists_on_disk: false,
+        });
+      }
+    }
+
+    if (mapped.length > 0) {
+      stagedTracks = [...stagedTracks, ...mapped];
+    }
+  }
+
+  async function handleExportM3U8() {
     if (stagedTracks.length === 0) return;
     const lines = ["#EXTM3U", ""];
     for (const t of stagedTracks) {
       lines.push(`#EXTINF:-1,${t.artist} - ${t.title}`);
       lines.push(t.local_path);
     }
-    const blob = new Blob([lines.join("\n") + "\n"], { type: "audio/x-mpegurl" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${playlistName.trim() || "staged-playlist"}.m3u8`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const content = lines.join("\n") + "\n";
+    const defaultFilename = `${playlistName.trim() || "staged-playlist"}.m3u8`;
+
+    try {
+      const filePath = await saveDialog({
+        defaultPath: defaultFilename,
+        filters: [{ name: "M3U8 Playlist", extensions: ["m3u8", "m3u"] }],
+      });
+      if (filePath) {
+        // Save via server or blob fallback
+        const blob = new Blob([content], { type: "audio/x-mpegurl" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filePath.split(/[/\\]/).pop() || defaultFilename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch {
+      // Fallback to direct download
+      const blob = new Blob([content], { type: "audio/x-mpegurl" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = defaultFilename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
   }
 
   function thumbUrl(url: string | null | undefined, size: string): string {
@@ -367,10 +454,11 @@
               { id: "albums", label: "Albums", icon: "💿" },
               { id: "artists", label: "Artists", icon: "👤" },
               { id: "playlists", label: "Playlists", icon: "📋" },
+              { id: "ai", label: "AI Assistant", icon: "✨" },
             ] as tab}
               <button
                 onclick={() => { activeTab = tab.id as CatalogTab; clearSelection(); }}
-                class="px-3 py-1 rounded text-xs font-medium transition-all {activeTab === tab.id ? 'bg-amber-500 text-black font-semibold shadow' : 'text-zinc-400 hover:text-zinc-200'}"
+                class="px-2.5 py-1 rounded text-xs font-medium transition-all {activeTab === tab.id ? 'bg-amber-400 text-black font-bold shadow' : 'text-zinc-400 hover:text-zinc-200'}"
               >
                 <span class="mr-1">{tab.icon}</span>{tab.label}
               </button>
@@ -611,6 +699,81 @@
               </button>
             </div>
           {/each}
+        {:else if activeTab === "ai"}
+          <div class="p-4 space-y-4">
+            <div class="space-y-1.5">
+              <label for="ai-prompt-input" class="text-xs font-bold text-white flex items-center gap-1.5">
+                <span>✨</span> Gemini AI Mix Prompt
+              </label>
+              <textarea
+                id="ai-prompt-input"
+                bind:value={aiPrompt}
+                rows={3}
+                placeholder="Describe your desired vibe or mix (e.g., 'Late night chill electronic and downtempo beats with warm bass')..."
+                class="w-full bg-[#1c1917] border border-zinc-800 rounded-lg p-3 text-xs text-white placeholder-zinc-500 outline-none focus:border-amber-500 resize-none"
+              ></textarea>
+            </div>
+
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-zinc-400">Target tracks:</span>
+                <input
+                  type="number"
+                  bind:value={aiTargetCount}
+                  min={5}
+                  max={100}
+                  class="w-16 bg-[#1c1917] border border-zinc-800 rounded px-2 py-1 text-xs text-white text-center"
+                />
+              </div>
+
+              <button
+                onclick={handleCurateAi}
+                disabled={aiCurating || !aiPrompt.trim()}
+                class="px-4 py-1.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-black shadow disabled:opacity-40 transition-all"
+              >
+                {aiCurating ? "Generating Mix…" : "✨ Generate AI Mix"}
+              </button>
+            </div>
+
+            {#if aiError}
+              <div class="p-3 rounded-lg bg-red-950/40 border border-red-500/30 text-xs text-red-300">
+                {aiError}
+              </div>
+            {/if}
+
+            {#if aiResult}
+              <div class="p-4 rounded-xl border border-zinc-800 bg-black/40 space-y-3">
+                <div class="flex items-start justify-between">
+                  <div>
+                    <div class="text-sm font-bold text-white">{aiResult.playlist_title}</div>
+                    <div class="text-xs text-zinc-400 mt-0.5">{aiResult.description}</div>
+                  </div>
+                  <button
+                    onclick={stageAiTracks}
+                    class="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-black shadow flex items-center gap-1"
+                  >
+                    <span>+</span> Stage Mix ({aiResult.tracks.length} tracks)
+                  </button>
+                </div>
+
+                <div class="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                  {#each aiResult.tracks as track}
+                    <div class="flex items-center justify-between p-2 rounded bg-zinc-900/60 border border-zinc-800 text-xs">
+                      <div class="min-w-0 flex-1 pr-2">
+                        <div class="font-semibold text-white truncate">{track.title}</div>
+                        <div class="text-[11px] text-zinc-400 truncate">{track.artist} &middot; {track.album}</div>
+                      </div>
+                      {#if track.matched}
+                        <span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-950/60 text-green-400 border border-green-500/30">In Library</span>
+                      {:else}
+                        <span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950/60 text-amber-400 border border-amber-500/30">AI Curated</span>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+          </div>
         {/if}
       </div>
       {/if}

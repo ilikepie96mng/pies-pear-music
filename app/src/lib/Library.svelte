@@ -397,10 +397,7 @@
       ] as tab}
         <button
           onclick={() => (activeTab = tab.id as Tab)}
-          class="px-4 py-2 text-xs font-semibold rounded-lg transition-colors flex items-center gap-2"
-          style={activeTab === tab.id
-            ? "background:var(--accent);color:black;"
-            : "background:transparent;color:var(--text-secondary);"}
+          class="px-4 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-2 {activeTab === tab.id ? 'bg-amber-400 text-black shadow-sm' : 'bg-transparent text-[var(--text-secondary)] hover:text-white hover:bg-[var(--surface)]'}"
         >
           <span>{tab.label}</span>
           {#if tab.count !== undefined && activeTab !== tab.id}
