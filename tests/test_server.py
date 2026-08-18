@@ -462,3 +462,27 @@ def test_playlist_duplicates_and_deduplicate(client):
     assert resp_after.json()["count"] == 0
 
 
+def test_post_gemini_curate_endpoint(client, monkeypatch):
+    from alac_rip import gemini_ai
+    monkeypatch.setattr(
+        gemini_ai,
+        "generate_smart_playlist",
+        lambda **kwargs: {
+            "playlist_title": "Synthwave Sunset",
+            "description": "Retro drive",
+            "vibe_tags": ["synthwave"],
+            "tracks": [{"title": "Nightcall", "artist": "Kavinsky", "album": "OutRun", "rationale": "Classic"}]
+        }
+    )
+    # Set mock api key on config
+    server_mod.cfg.gemini_api_key = "test-key"
+
+    resp = client.post("/gemini/curate", json={"prompt": "retro synthwave", "track_count": 10})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["playlist_title"] == "Synthwave Sunset"
+    assert len(data["tracks"]) == 1
+    assert data["tracks"][0]["title"] == "Nightcall"
+
+
+

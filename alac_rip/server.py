@@ -2277,6 +2277,8 @@ def post_gemini_curate(req: GeminiCurateRequest):
     if result.get("error"):
         raise HTTPException(500, f"Gemini curation error: {result['error']}")
 
+    return result
+
 @app.get("/gemini/models")
 def get_gemini_models():
     """Returns available Gemini models for the configured API key, sorted cheapest first."""
