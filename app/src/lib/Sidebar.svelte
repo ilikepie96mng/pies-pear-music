@@ -89,32 +89,65 @@
     </div>
   </div>
 
-  <!-- Nav -->
-  <nav style="padding:8px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:2px;">
-    {#each [
-      { label: "⌂ Home", action: onopenHome },
-      { label: "♫ Library", action: onopenLibrary },
-      { label: "🔀 Playlist Creator", action: onopenCreator },
-      { label: "⚡ Streaming Import", action: onopenImport },
-      { label: "✨ Gemini AI", action: onopenGemini },
-      { label: "▦ Dashboard", action: onopenDashboard },
-      { label: "🏛 Graveyard", action: onopenGraveyard },
-      { label: "⊕ Diagnostics", action: onopenDiagnostics },
-      { label: "⚙ Settings", action: onopenSettings },
-      { label: "◈ Data & recs", action: onopenData },
-      { label: "◆ Setup", action: onopenSetup },
-      { label: "↓ Download", action: onopenDownload },
-      { label: "ⓘ About", action: onopenAbout },
-    ] as item}
-      {#if item.action}
-        <button
-          onclick={item.action}
-          style="width:100%;text-align:left;padding:6px 10px;border-radius:6px;font-size:13px;color:var(--text-secondary);background:transparent;border:none;cursor:pointer;transition:color .15s,background .15s;"
-          onmouseenter={e => { (e.currentTarget as HTMLElement).style.color='var(--text-primary)'; (e.currentTarget as HTMLElement).style.background='var(--surface)'; }}
-          onmouseleave={e => { (e.currentTarget as HTMLElement).style.color='var(--text-secondary)'; (e.currentTarget as HTMLElement).style.background='transparent'; }}
-        >{item.label}</button>
-      {/if}
-    {/each}
+  <!-- Nav Groups -->
+  <nav class="p-2 border-b border-[var(--border)] flex flex-col gap-3 overflow-y-auto max-h-[50vh]">
+    <!-- Collection Section -->
+    <div class="flex flex-col gap-0.5">
+      <div class="px-2.5 py-1 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Library</div>
+      {#each [
+        { label: "⌂ Home", action: onopenHome },
+        { label: "♫ Library", action: onopenLibrary },
+        { label: "🔀 Playlist Creator", action: onopenCreator },
+      ] as item}
+        {#if item.action}
+          <button
+            onclick={item.action}
+            type="button"
+            class="w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface)] transition-colors"
+          >{item.label}</button>
+        {/if}
+      {/each}
+    </div>
+
+    <!-- Intelligence Section -->
+    <div class="flex flex-col gap-0.5">
+      <div class="px-2.5 py-1 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Discovery</div>
+      {#each [
+        { label: "✨ Gemini AI", action: onopenGemini },
+        { label: "⚡ Streaming Import", action: onopenImport },
+        { label: "◈ Data & Recs", action: onopenData },
+      ] as item}
+        {#if item.action}
+          <button
+            onclick={item.action}
+            type="button"
+            class="w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface)] transition-colors"
+          >{item.label}</button>
+        {/if}
+      {/each}
+    </div>
+
+    <!-- Management Section -->
+    <div class="flex flex-col gap-0.5">
+      <div class="px-2.5 py-1 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">System</div>
+      {#each [
+        { label: "▦ Dashboard", action: onopenDashboard },
+        { label: "🏛 Graveyard", action: onopenGraveyard },
+        { label: "↓ Downloads", action: onopenDownload },
+        { label: "⚙ Settings", action: onopenSettings },
+        { label: "⊕ Diagnostics", action: onopenDiagnostics },
+        { label: "◆ Setup", action: onopenSetup },
+        { label: "ⓘ About", action: onopenAbout },
+      ] as item}
+        {#if item.action}
+          <button
+            onclick={item.action}
+            type="button"
+            class="w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--surface)] transition-colors"
+          >{item.label}</button>
+        {/if}
+      {/each}
+    </div>
   </nav>
 
   <!-- Playlists label -->

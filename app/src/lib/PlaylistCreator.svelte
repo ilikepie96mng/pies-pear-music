@@ -33,7 +33,23 @@
   let saveSuccess = $state(false);
   let saveError = $state<string | null>(null);
 
+  // 60fps Virtual Scrolling for Catalog Tracks
+  let trackContainerEl = $state<HTMLDivElement | null>(null);
+  let trackScrollTop = $state(0);
+  let trackViewportHeight = $state(600);
+  const trackRowHeight = 52;
+  const trackBuffer = 8;
+
   onMount(async () => {
+    if (trackContainerEl) {
+      trackViewportHeight = trackContainerEl.clientHeight;
+      const ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          trackViewportHeight = entry.contentRect.height;
+        }
+      });
+      ro.observe(trackContainerEl);
+    }
     loading = true;
     try {
       const [trackList, plList, libMap] = await Promise.all([
@@ -62,6 +78,17 @@
         t.album.toLowerCase().includes(q),
     );
   });
+
+  let currentTracksList = $derived(filteredTracks());
+  let totalTrackListHeight = $derived(currentTracksList.length * trackRowHeight);
+  let trackStartIndex = $derived(Math.max(0, Math.floor(trackScrollTop / trackRowHeight) - trackBuffer));
+  let trackEndIndex = $derived(Math.min(currentTracksList.length, Math.ceil((trackScrollTop + trackViewportHeight) / trackRowHeight) + trackBuffer));
+  let visibleTrackSlice = $derived(
+    currentTracksList.slice(trackStartIndex, trackEndIndex).map((track, i) => ({
+      track,
+      top: (trackStartIndex + i) * trackRowHeight,
+    }))
+  );
 
   let albumGroups = $derived(() => {
     const map = new Map<string, { artist: string; album: string; tracks: LibraryTrack[]; artwork_url?: string | null }>();
@@ -406,60 +433,71 @@
       {/if}
 
       <!-- Catalog List -->
-      <div class="flex-1 overflow-y-auto p-4 space-y-1">
-        {#if loading}
-          <div class="h-48 flex items-center justify-center text-xs text-zinc-500">
-            Loading library tracks…
-          </div>
-        {:else if activeTab === "tracks"}
-          {#each filteredTracks() as track (track.track_id)}
-            {@const isSelected = selectedCatalogItems.has(track.track_id)}
-            <div
-              role="button"
-              tabindex="0"
-              class="group flex items-center justify-between p-2 rounded-lg border transition-all cursor-pointer {isSelected ? 'bg-amber-950/20 border-amber-500/40' : 'bg-black/20 border-zinc-800/60 hover:border-zinc-700'}"
-              onclick={() => toggleItemSelection(track.track_id)}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleItemSelection(track.track_id); } }}
-            >
-              <div class="flex items-center gap-3 min-w-0 flex-1">
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  class="accent-amber-500 rounded"
-                  onclick={(e) => e.stopPropagation()}
-                  onchange={() => toggleItemSelection(track.track_id)}
-                />
-                {#if track.artwork_url}
-                  <img
-                    src={thumbUrl(track.artwork_url, "64x64")}
-                    alt=""
-                    class="w-8 h-8 rounded object-cover flex-shrink-0 bg-zinc-900"
+      {#if loading}
+        <div class="flex-1 flex items-center justify-center text-xs text-zinc-500">
+          Loading library tracks…
+        </div>
+      {:else if activeTab === "tracks"}
+        <div
+          bind:this={trackContainerEl}
+          onscroll={(e) => (trackScrollTop = (e.currentTarget as HTMLDivElement).scrollTop)}
+          class="flex-1 overflow-y-auto p-4 relative"
+        >
+          <div style="height: {totalTrackListHeight}px; position: relative; width: 100%;">
+            {#each visibleTrackSlice as item (item.track.track_id)}
+              {@const track = item.track}
+              {@const isSelected = selectedCatalogItems.has(track.track_id)}
+              <div
+                role="button"
+                tabindex="0"
+                style="position: absolute; top: {item.top}px; left: 0; right: 0; height: 48px;"
+                class="group flex items-center justify-between px-3 py-1.5 rounded-lg border transition-all cursor-pointer {isSelected ? 'bg-amber-950/20 border-amber-500/40' : 'bg-black/20 border-zinc-800/60 hover:border-zinc-700'}"
+                onclick={() => toggleItemSelection(track.track_id)}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleItemSelection(track.track_id); } }}
+              >
+                <div class="flex items-center gap-3 min-w-0 flex-1">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    class="accent-amber-500 rounded"
+                    onclick={(e) => e.stopPropagation()}
+                    onchange={() => toggleItemSelection(track.track_id)}
                   />
-                {:else}
-                  <div class="w-8 h-8 rounded bg-zinc-800 flex items-center justify-center text-xs text-zinc-500 flex-shrink-0">
-                    ♫
+                  {#if track.artwork_url}
+                    <img
+                      src={thumbUrl(track.artwork_url, "64x64")}
+                      alt=""
+                      class="w-8 h-8 rounded object-cover flex-shrink-0 bg-zinc-900"
+                    />
+                  {:else}
+                    <div class="w-8 h-8 rounded bg-zinc-800 flex items-center justify-center text-xs text-zinc-500 flex-shrink-0">
+                      ♫
+                    </div>
+                  {/if}
+                  <div class="min-w-0 flex-1">
+                    <div class="text-xs font-semibold text-white truncate">{track.title}</div>
+                    <div class="text-[11px] text-zinc-400 truncate">{track.artist} &middot; {track.album}</div>
                   </div>
-                {/if}
-                <div class="min-w-0 flex-1">
-                  <div class="text-xs font-semibold text-white truncate">{track.title}</div>
-                  <div class="text-[11px] text-zinc-400 truncate">{track.artist} &middot; {track.album}</div>
+                </div>
+
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onclick={(e) => { e.stopPropagation(); addSingleTrack(track); }}
+                    class="px-2 py-1 rounded text-[11px] font-semibold bg-zinc-800 hover:bg-amber-500 hover:text-black text-zinc-300 opacity-0 group-hover:opacity-100 transition-all"
+                    title="Stage single track"
+                  >
+                    + Add
+                  </button>
                 </div>
               </div>
-
-              <div class="flex items-center gap-2">
-                <button
-                  type="button"
-                  onclick={(e) => { e.stopPropagation(); addSingleTrack(track); }}
-                  class="px-2 py-1 rounded text-[11px] font-semibold bg-zinc-800 hover:bg-amber-500 hover:text-black text-zinc-300 opacity-0 group-hover:opacity-100 transition-all"
-                  title="Stage single track"
-                >
-                  + Add
-                </button>
-              </div>
-            </div>
-          {/each}
-        {:else if activeTab === "albums"}
-          {#each albumGroups() as album}
+            {/each}
+          </div>
+        </div>
+      {:else}
+        <div class="flex-1 overflow-y-auto p-4 space-y-1">
+          {#if activeTab === "albums"}
+            {#each albumGroups() as album}
             {@const id = `${album.artist} — ${album.album}`}
             {@const isSelected = selectedCatalogItems.has(id)}
             <div
@@ -575,6 +613,7 @@
           {/each}
         {/if}
       </div>
+      {/if}
     </div>
 
     <!-- RIGHT PANE: Staged Playlist Workstation -->

@@ -127,7 +127,7 @@
         <GeminiCurator />
       {:else if view === "creator"}
         <PlaylistCreator
-          onplaylistSaved={(pl) => {
+          onplaylistSaved={(pl: Playlist) => {
             onPlaylistAdded(pl);
             selectedName = pl.name;
             view = "playlist";
