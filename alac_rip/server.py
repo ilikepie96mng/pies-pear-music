@@ -680,7 +680,7 @@ def _run_job(job: dict) -> None:
     skip_file_path: Optional[Path] = None
     _artwork_map: dict[str, str] = {}  # saved for post-manifest artwork backfill
 
-    if playlist_name:
+    if playlist_name and "music.apple.com" in url and "/playlist/gemini-" not in url:
         try:
             emit_log("preflight", "Checking playlist for new tracks…")
             bearer = am_api.fetch_bearer_token()
@@ -2349,12 +2349,31 @@ def post_gemini_download_tracks(req: GeminiDownloadTracksRequest):
     queued_count = 0
     job_ids = []
 
+    bearer = ""
+    try:
+        bearer = am_api.fetch_bearer_token()
+    except Exception:
+        pass
+
     for t in req.tracks:
         # Extract Apple Music song URL
         am = t.get("am_track") or {}
         url = am.get("url") or t.get("url") or ""
-        if not url and am.get("id"):
-            url = f"https://music.apple.com/us/song/{am['id']}"
+        tid = str(t.get("track_id") or "")
+        if not url and tid and not tid.startswith("ai-"):
+            url = f"https://music.apple.com/us/song/{tid}"
+
+        # If still no URL, search catalog on-the-fly using artist + title
+        if not url and bearer:
+            title = t.get("title") or ""
+            artist = t.get("artist") or ""
+            if title and artist:
+                try:
+                    matches = am_api.search_apple_music_tracks(f"{artist} {title}", bearer, limit=1)
+                    if matches and matches[0].get("url"):
+                        url = matches[0]["url"]
+                except Exception:
+                    pass
 
         if not url:
             continue
