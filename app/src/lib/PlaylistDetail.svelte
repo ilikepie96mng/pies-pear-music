@@ -29,6 +29,27 @@
   let deduplicating = $state(false);
   let deduplicateMsg = $state<string | null>(null);
 
+  // Missing / Unowned tracks download
+  let downloadingMissing = $state(false);
+  let downloadMissingMsg = $state<string | null>(null);
+
+  let unownedTracks = $derived(tracks.filter((t) => !t.local_path || t.local_path === ""));
+
+  async function handleDownloadMissingTracks() {
+    if (unownedTracks.length === 0) return;
+    downloadingMissing = true;
+    downloadMissingMsg = null;
+    try {
+      const res = await api.downloadGeminiTracks(unownedTracks as any);
+      downloadMissingMsg = `Queued ${res.queued} unowned track(s) for background download!`;
+      setTimeout(() => (downloadMissingMsg = null), 6000);
+    } catch (e) {
+      downloadMissingMsg = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      downloadingMissing = false;
+    }
+  }
+
   async function checkDuplicates() {
     checkingDuplicates = true;
     try {
@@ -377,6 +398,12 @@
             style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(196,181,253,0.12);color:var(--accent-2);border:1px solid rgba(196,181,253,0.25);cursor:pointer;opacity:{exporting?'.5':'1'};">
             {exporting ? "…" : "🍓 Strawberry"}
           </button>
+          {#if unownedTracks.length > 0}
+            <button onclick={handleDownloadMissingTracks} disabled={downloadingMissing} title="Download unowned / AI curated tracks in this playlist"
+              style="padding:6px 14px;border-radius:6px;font-size:11px;font-weight:700;background:rgba(252,211,77,0.15);color:var(--accent);border:1px solid rgba(252,211,77,0.35);cursor:pointer;opacity:{downloadingMissing?'.5':'1'};">
+              {downloadingMissing ? "Queuing…" : `⚡ Download Missing (${unownedTracks.length})`}
+            </button>
+          {/if}
           <button onclick={() => onstartSync(playlist.name)} disabled={playlist.paused}
             style="padding:6px 16px;border-radius:6px;font-size:11px;font-weight:700;background:var(--accent);color:black;border:none;cursor:pointer;opacity:{playlist.paused?'.4':'1'};">
             ↻ Sync
@@ -384,6 +411,11 @@
         {/if}
       </div>
     </div>
+    {#if downloadMissingMsg}
+      <div style="position:relative;z-index:1;margin-top:10px;padding:6px 10px;border-radius:6px;font-size:11px;background:rgba(252,211,77,0.1);color:var(--accent);border:1px solid rgba(252,211,77,0.25);">
+        {downloadMissingMsg}
+      </div>
+    {/if}
     {#if exportMsg}
       <div style="position:relative;z-index:1;margin-top:10px;padding:6px 10px;border-radius:6px;font-size:11px;
         {exportMsg.kind === 'ok' ? 'background:rgba(94,234,212,0.1);color:#5eead4;border:1px solid rgba(94,234,212,0.25);'

@@ -133,11 +133,18 @@ def generate_smart_playlist(
 
     count_instruction = f"Aim for {clamped_track_count} tracks." if clamped_track_count > 0 else "Select a comprehensive, well-paced track count (e.g. 15 to 40 tracks) that best fulfills the prompt."
 
+    version_rule = (
+        "VERSION RULE: Always choose the canonical original studio album version of each song. "
+        "Do NOT include alternate versions (such as Instrumental, Acoustic, Live, Remix, Remastered variation, Karaoke, or Demo) "
+        "UNLESS the user's prompt explicitly asks for that specific variation (e.g. 'acoustic versions', 'instrumentals only', 'live concert')."
+    )
+
     if library_only:
         system_instruction = (
             "You are an expert audiophile and music curator for a bit-perfect lossless music workstation. "
             "MANDATORY INVENTORY CONSTRAINT: You MUST select tracks ONLY from the provided AVAILABLE LOCAL LIBRARY INVENTORY. "
             "Do NOT invent, hallucinate, or suggest any track or artist that does not appear in the inventory list. "
+            f"{version_rule} "
             f"{count_instruction} Provide your output strictly as a valid JSON object with the following schema: "
             "{\"playlist_title\": string, \"description\": string, \"vibe_tags\": [string], \"tracks\": [{\"title\": string, \"artist\": string, \"album\": string, \"rationale\": string}]}"
         )
@@ -145,6 +152,7 @@ def generate_smart_playlist(
         system_instruction = (
             "You are an expert audiophile and music curator for a bit-perfect lossless music workstation. "
             "When given a prompt, generate a cohesive, exceptional tracklist matching the mood, genre, and aesthetic. "
+            f"{version_rule} "
             f"{count_instruction} Provide your output strictly as a valid JSON object with the following schema: "
             "{\"playlist_title\": string, \"description\": string, \"vibe_tags\": [string], \"tracks\": [{\"title\": string, \"artist\": string, \"album\": string, \"rationale\": string}]}"
         )

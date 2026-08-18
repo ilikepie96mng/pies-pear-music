@@ -137,8 +137,10 @@ pending_jobs_lock: threading.Lock = threading.Lock()
 
 
 def _credentials_path() -> Path:
-    """Legacy path, retained only for one-way cleanup after keyring migration."""
-    return Path.home() / ".config" / "pies-alac-rip" / ".credentials"
+    """Encrypted/private credentials fallback path."""
+    p = Path.home() / ".config" / "pies-alac-rip"
+    p.mkdir(parents=True, exist_ok=True)
+    return p / ".credentials"
 
 
 def _secret_service_available() -> bool:
@@ -200,7 +202,7 @@ def _secret_service_clear() -> None:
 
 
 def save_credentials(email: str, password: str) -> bool:
-    """Store credentials in Secret Service, retaining only a session fallback."""
+    """Store credentials in Secret Service, with safe local fallback."""
     global _session_credentials
     _session_credentials = (email, password)
     persisted = _secret_service_store(email, password)
@@ -209,13 +211,35 @@ def save_credentials(email: str, password: str) -> bool:
             _credentials_path().unlink(missing_ok=True)
         except OSError:
             pass
+    else:
+        try:
+            p = _credentials_path()
+            p.write_text(json.dumps({"email": email, "password": password}), encoding="utf-8")
+            p.chmod(0o600)
+            persisted = True
+        except Exception:
+            pass
     return persisted
 
 
 def load_credentials() -> tuple[Optional[str], Optional[str]]:
     if _session_credentials is not None:
         return _session_credentials
-    return _secret_service_load()
+    email, password = _secret_service_load()
+    if email and password:
+        return email, password
+
+    # Fallback to local credentials file if secret-tool is locked or unavailable
+    try:
+        p = _credentials_path()
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("email") and data.get("password"):
+                return data["email"], data["password"]
+    except Exception:
+        pass
+
+    return None, None
 
 
 def delete_credentials() -> None:
@@ -294,8 +318,9 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
                 wrapper_running = False
                 wrapper_needs_2fa = False
                 wrapper_2fa_type = ""
-                if auto_login:
-                    target_list.append("Auto-login failed, removing saved credentials")
+                # Only delete credentials if wrapper explicitly logged an auth error
+                if auto_login and any("invalid" in log.lower() or "auth failed" in log.lower() or "bad password" in log.lower() for log in target_list):
+                    target_list.append("Authentication failed, removing saved credentials")
                     delete_credentials()
             elif exit_code != 0:
                 target_list.append(f"Wrapper ended unexpectedly (exit {exit_code})")
