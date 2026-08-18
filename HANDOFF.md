@@ -1,60 +1,83 @@
-# Handoff — pies-alac-rip-tool
+# Handoff — Pies Pear Music (`pies-alac-rip-tool`)
 
-**Last Updated:** 2026-08-16  
-**Status:** Phase 6 Completed, Audited & Verified (`docs/plans/phase-6-spec.md`)  
-**Release Readiness:** Production Ready (268 passing unit tests, 0 frontend diagnostics, multi-platform packaging verified)
+**Last Updated:** 2026-08-17  
+**Current Branch:** `release/2` (Latest Commit: `a0673ca`)  
+**Status:** Phases 1–6 Completed, Security Audited & Verified (274 passing backend tests, 0 Svelte diagnostics). Ready for **Phase 7: Full Library Manager Supercharged**.
 
 ---
 
-## 1. Project Overview & Architecture
-* **Frontend**: Svelte 5 / SvelteKit / Vite desktop interface (`app/src/lib/`).
-* **Shell**: Tauri desktop wrapper (`app/src-tauri/`).
-* **Backend**: FastAPI sidecar (`alac_rip/server.py`). Communicates with Tauri via ephemeral stdin capability token (`X-Pies-Api-Token`).
+## 1. Project Overview & Core Architecture
+* **Frontend**: Svelte 5 (Runes `$state`, `$derived`, `$props`) / SvelteKit / Vite desktop interface (`app/src/lib/`).
+* **Desktop Shell**: Tauri v2 desktop wrapper (`app/src-tauri/`) with native Linux and Windows support.
+* **Backend**: FastAPI sidecar (`alac_rip/server.py`) communicating with Tauri via ephemeral 256-bit stdin capability token (`X-Pies-Api-Token` & query token auth).
 * **Downloader**: External Go binary (`apple-music-downloader`), deployed at `~/.local/share/pies-alac-rip/amd-main`.
-* **State**: SQLite database (`state_dir / "downloaded.db"`), tracked via `alac_rip/state.py`.
-* **Target Platforms**: Linux (Ubuntu 22.04+, Fedora Workstation mandatory, Arch/Bazzite via AppImage) + Windows 10/11 native support.
+* **Database State**: SQLite (`~/.local/share/pies-alac-rip/downloaded.db`), managed via `alac_rip/state.py`.
+* **Audio Engine**: Range-capable local audio streaming (`/api/v1/stream/{track_id}`) supporting ALAC, FLAC, AAC, and MP3.
 
 ---
 
-## 2. Completed Milestones & Phase Progress
-* [x] **Phase 1**: Core architecture, sidecar lifecycle, FastAPI bridge & initial Svelte interface.
-* [x] **Phase 2**: Dual-pane Library UI, interactive track selection, status polling & progress tracking.
-* [x] **Phase 3**: Enhanced metadata enrichment, cover art pipeline, album/playlist view optimizations.
-* [x] **Phase 4**: Library stewardship, file deduplication, custom directory structures & DAP export.
-* [x] **Phase 5**: Packaging pipeline (Linux RPM/DEB/AppImage + Windows), cross-platform native desktop notifications, capability security boundaries, and automated packaging smoke verification harness.
-* [x] **Phase 6**: High-performance virtual windowing, visual contrast & wallpaper engine, embedded mini-player, LRCLIB synchronized lyrics fallback, Jellyfin/Navidrome integration, universal playlist matching (Spotify/Tidal/Qobuz/CSV), and Gemini AI music intelligence.
+## 2. Phase 7: Scope & Blueprint (Ready for Execution)
+
+### Target Feature Set:
+
+1. **Playlist Creator Tab (`PlaylistCreator.svelte`)**:
+   - Split-pane creation workstation:
+     - **Left Pane (Library Browser)**: Browse and multi-select by Tracks, Albums, Artists, and Existing Playlists. Real-time search and filter. Checkbox batch selection.
+     - **Right Pane (Staged Playlist)**: Re-orderable tracklist with duration/size calculations, drag reordering, and duplicate detection.
+     - **Actions**: Save to Library, Export M3U8, or 1-Click Sync/Download unripped tracks.
+2. **Playlist Duplicate Engine & Cleanup**:
+   - Add **"Check Duplicates"** button to all playlist views (`PlaylistDetail.svelte`).
+   - Modal prompt: "Remove Duplicates (Keep First)" vs "Keep All".
+   - Backend endpoint: `POST /playlists/{name}/deduplicate`.
+3. **Audio Player Authentication & Port Fix**:
+   - Update `player.svelte.ts` to fetch authenticated dynamic stream URLs via `api.getStreamUrl(trackId)`.
+   - Update `require_api_capability` middleware in `server.py` to accept capability tokens via query parameter `?token=...` for native HTML5 `<audio>` playback.
+4. **Multi-Tier Resilient Lyrics Search & Karaoke Mode**:
+   - 3-Tier LRCLIB fallback in `lyrics.py`: Strict `/api/get` $\rightarrow$ Relaxed tag query $\rightarrow$ Full `/api/search?q={artist} {title}`.
+   - **Karaoke View** in `LyricsModal.svelte`: Synchronized line highlighting with real-time playback position, glowing current lyric line, dim past lines, and auto-scrolling.
+   - **Strawberry Player MPRIS Support**: Query `org.mpris.MediaPlayer2.strawberry` to track playback position from external Strawberry sessions.
+5. **Configurable Dashboard & Integration Health Status**:
+   - Live Integration Health Card on Dashboard (`Dashboard.svelte`) showing connection status for Gemini AI, Last.fm, Jellyfin, Navidrome, and Strawberry.
+   - Widget Customizer: Toggle card visibility (Stats, Integration Health, Quick Mixes, Sync History, Graveyard Alerts).
+6. **Last.fm Shared Secret & Secure Settings Display**:
+   - Add `lastfm_shared_secret` and `lastfm_username` to `Config`, `lastfm_api.py`, and `Settings.svelte`.
+   - Stored credentials display bullet dots (`••••••••••••••••••••••••••••••••`) and a "Stored Securely" badge.
+7. **Streaming Service Discovery**:
+   - Promote **"Streaming Import"** (Universal Matcher for Spotify/Tidal/Qobuz/CSV/M3U8) directly to the main Sidebar navigation.
+   - Redesign Data & Recs into **"Music Intelligence"** with a direct toggle between **✨ Gemini AI** and **📻 Last.fm Profile**.
+8. **DAP Export Uncompressed Mode**:
+   - Add **"Original Lossless (Bit-Perfect Copy / No Transcoding)"** to `dap_export.py` and `DapExportModal.svelte`.
+9. **UI Contrast & Column Truncation Overhaul**:
+   - Fix Cherry/Wine and dark theme contrast to meet WCAG AAA guidelines.
+   - Refactor track table grid layout with `min-w-0` and `truncate` to prevent long titles from overlapping adjacent columns.
 
 ---
 
-## 3. Phase 6 Implementation Highlights
+## 3. Key Files & Structure for Phase 7
 
-1. **Virtual Windowing & 60fps Library Performance**:
-   - Implemented [`VirtualTrackTable.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/VirtualTrackTable.svelte) with dynamic DOM recycling, buffer windowing, and smooth scrolling for libraries with 10,000+ tracks.
-   - Integrated with [`Library.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/Library.svelte).
-
-2. **Visual Contrast Overhaul & Custom Wallpaper Engine**:
-   - Refined theme tokens in [`themes.ts`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/themes.ts) ensuring WCAG AAA standards.
-   - Added user wallpaper upload engine with live background dimming and backdrop blur sliders in [`Settings.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/Settings.svelte) and [`app.css`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/app.css).
-
-3. **Embedded Audio Mini-Player & LRCLIB Lyrics Fallback**:
-   - Added HTTP Range audio streaming endpoint `GET /api/v1/stream/{track_id}` in [`server.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/server.py).
-   - Built global persistent [`PlayerBar.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/PlayerBar.svelte) and [`player.svelte.ts`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/player.svelte.ts) with Media Session API support.
-   - Implemented LRCLIB API fallback in [`lyrics.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/lyrics.py) that fetches missing synchronized lyrics and persists `.lrc` sidecars next to tracks.
-
-4. **Home Media Server Integrations & DAP Hub**:
-   - Automated Jellyfin (`/Library/Refresh`) and Navidrome (`/rest/startScan.view`) webhook dispatching upon sync completion in [`integrations.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/integrations.py).
-   - Direct DAP Export and Universal Import action buttons added directly to the Library header toolbar.
-   - Archival download request queue backend in [`requests.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/requests.py).
-
-5. **Universal Playlist Matcher (Match-and-Rip)**:
-   - Spotify / Tidal / Qobuz / CSV / M3U8 parser and Apple Music catalog matcher in [`playlist_import.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/playlist_import.py) and [`PlaylistImportModal.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/PlaylistImportModal.svelte).
-
-6. **Gemini AI Music Intelligence Engine**:
-   - Natural language playlist curation module [`gemini_ai.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/gemini_ai.py) and [`GeminiCurator.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/GeminiCurator.svelte) resolving AI recommendations directly against Apple Lossless IDs.
+| Area | Primary Files |
+|---|---|
+| **Audio & Player** | [`alac_rip/server.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/server.py), [`app/src/lib/player.svelte.ts`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/player.svelte.ts), [`app/src/lib/PlayerBar.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/PlayerBar.svelte) |
+| **Lyrics & Karaoke** | [`alac_rip/lyrics.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/lyrics.py), [`app/src/lib/LyricsModal.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/LyricsModal.svelte) |
+| **Playlist Creator & Deduplication** | [`app/src/lib/PlaylistCreator.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/PlaylistCreator.svelte), [`app/src/lib/PlaylistDetail.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/PlaylistDetail.svelte), [`alac_rip/state.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/state.py) |
+| **Dashboard & Settings** | [`app/src/lib/Dashboard.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/Dashboard.svelte), [`app/src/lib/Settings.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/Settings.svelte), [`alac_rip/config.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/config.py), [`alac_rip/lastfm_api.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/lastfm_api.py) |
+| **DAP Export & Streaming Import** | [`alac_rip/dap_export.py`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/alac_rip/dap_export.py), [`app/src/lib/DapExportModal.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/DapExportModal.svelte), [`app/src/lib/Sidebar.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/Sidebar.svelte) |
+| **Theme & Tables** | [`app/src/lib/themes.ts`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/themes.ts), [`app/src/lib/VirtualTrackTable.svelte`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/lib/VirtualTrackTable.svelte), [`app/src/app.css`](file:///var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src/app.css) |
 
 ---
 
-## 4. Verification & Test Suite Passing State
-* **Python Test Suite**: `268 passed in 6.00s` (`.venv/bin/pytest`)
-* **Svelte Diagnostics**: `0 errors, 0 warnings` (`cd app && npm run check`)
-* **Frontend Build**: Production bundle generated successfully (`cd app && npm run build`)
+## 4. Verification Commands
+
+```bash
+# Backend pytest suite
+.venv/bin/pytest
+
+# Svelte diagnostic check
+cd app && npm run check
+
+# Vite static production build
+cd app && npm run build
+
+# Tauri Rust native tests
+cd app/src-tauri && cargo test --locked
+```
