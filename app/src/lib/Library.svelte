@@ -7,11 +7,13 @@
     type LibraryAuditReport,
     type LibraryIntegrityReport,
     type LibraryRepairResult,
+    type SmartPlaylist,
   } from "../api";
   import LyricsModal from "./LyricsModal.svelte";
   import DapExportModal from "./DapExportModal.svelte";
   import VirtualTrackTable from "./VirtualTrackTable.svelte";
   import PlaylistImportModal from "./PlaylistImportModal.svelte";
+  import SmartPlaylistModal from "./SmartPlaylistModal.svelte";
   import { notifyIntegrityCompleted } from "./notifications";
 
   interface Props {
@@ -21,7 +23,7 @@
 
   let { onselectPlaylist, onstartSync }: Props = $props();
 
-  type Tab = "tracks" | "albums" | "artists" | "health";
+  type Tab = "tracks" | "albums" | "artists" | "smart" | "health";
   let activeTab = $state<Tab>("tracks");
 
   // State
@@ -29,6 +31,10 @@
   let error = $state<string | null>(null);
   let tracks = $state<LibraryTrack[]>([]);
   let stats = $state<LibraryStats | null>(null);
+  let smartPlaylists = $state<SmartPlaylist[]>([]);
+  let selectedSmartPlaylist = $state<SmartPlaylist | null>(null);
+  let smartPlaylistTracks = $state<LibraryTrack[]>([]);
+  let smartLoading = $state(false);
 
   // Search & Filters
   let searchQuery = $state("");
@@ -45,6 +51,8 @@
   let dapExportPlaylist = $state<string | null>(null);
   let dapExportTrackCount = $state<number>(0);
   let showPlaylistImportModal = $state(false);
+  let showSmartPlaylistModal = $state(false);
+  let editingSmartPlaylist = $state<SmartPlaylist | null>(null);
 
   // Health Audit & Repair State
   let auditLoading = $state(false);
@@ -75,17 +83,60 @@
     loading = true;
     error = null;
     try {
-      const [tracksData, statsData] = await Promise.all([
+      const [tracksData, statsData, smartData] = await Promise.all([
         api.allLibraryTracks(),
         api.libraryStats(),
+        api.getSmartPlaylists().catch(() => []),
       ]);
       tracks = tracksData;
       stats = statsData;
+      smartPlaylists = smartData;
+      if (selectedSmartPlaylist) {
+        const found = smartPlaylists.find((s) => s.id === selectedSmartPlaylist!.id);
+        if (found) selectSmartPlaylist(found);
+      }
     } catch (e) {
       error = String(e);
     } finally {
       loading = false;
     }
+  }
+
+  async function selectSmartPlaylist(sp: SmartPlaylist) {
+    selectedSmartPlaylist = sp;
+    smartLoading = true;
+    try {
+      const detail = await api.getSmartPlaylist(sp.id);
+      smartPlaylistTracks = detail.tracks || [];
+    } catch (err) {
+      console.error("Failed to load smart playlist tracks:", err);
+    } finally {
+      smartLoading = false;
+    }
+  }
+
+  async function handleDeleteSmartPlaylist(sp: SmartPlaylist) {
+    if (!confirm(`Are you sure you want to delete smart playlist "${sp.name}"?`)) return;
+    try {
+      await api.deleteSmartPlaylist(sp.id);
+      if (selectedSmartPlaylist?.id === sp.id) {
+        selectedSmartPlaylist = null;
+        smartPlaylistTracks = [];
+      }
+      await loadLibraryData();
+    } catch (err) {
+      alert(`Error deleting smart playlist: ${err}`);
+    }
+  }
+
+  function handleOpenCreateSmart() {
+    editingSmartPlaylist = null;
+    showSmartPlaylistModal = true;
+  }
+
+  function handleOpenEditSmart(sp: SmartPlaylist) {
+    editingSmartPlaylist = sp;
+    showSmartPlaylistModal = true;
   }
 
   onMount(() => {
@@ -393,6 +444,7 @@
         { id: "tracks", label: "Tracks", count: tracks.length },
         { id: "albums", label: "Albums", count: albumGroups.length },
         { id: "artists", label: "Artists", count: artistGroups.length },
+        { id: "smart", label: "⚡ Smart Playlists", count: smartPlaylists.length },
         { id: "health", label: "Health & Diagnostics", badge: auditReport?.summary.missing_files_count ? `! ${auditReport.summary.missing_files_count}` : null },
       ] as tab}
         <button
@@ -590,6 +642,145 @@
           {/each}
         </div>
       {/if}
+    {/if}
+
+    <!-- TAB: SMART PLAYLISTS -->
+    {#if activeTab === "smart"}
+      <div class="flex flex-col gap-6">
+        <!-- Top Toolbar -->
+        <div class="flex items-center justify-between bg-zinc-900/60 p-4 rounded-xl border border-zinc-800">
+          <div>
+            <h2 class="text-sm font-bold text-white flex items-center gap-2">
+              <span>⚡</span> Dynamic Smart Playlists
+            </h2>
+            <p class="text-xs text-zinc-400 mt-0.5">
+              Live queries that automatically update as your lossless library expands.
+            </p>
+          </div>
+          <button
+            onclick={handleOpenCreateSmart}
+            class="px-3.5 py-1.5 bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold rounded-lg shadow flex items-center gap-1.5 transition"
+          >
+            <span>＋</span> New Smart Playlist
+          </button>
+        </div>
+
+        {#if smartPlaylists.length === 0}
+          <div class="text-center py-16 px-4 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/40">
+            <div class="text-3xl mb-2">⚡</div>
+            <div class="text-sm font-bold text-zinc-300">No Smart Playlists Created</div>
+            <p class="text-xs text-zinc-500 max-w-sm mx-auto mt-1 mb-4">
+              Create rules to automatically group tracks by artist, format, tags, date added, or existing playlists.
+            </p>
+            <button
+              onclick={handleOpenCreateSmart}
+              class="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold rounded-lg transition"
+            >
+              Create Your First Smart Playlist
+            </button>
+          </div>
+        {:else}
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Playlists List -->
+            <div class="flex flex-col gap-2.5">
+              {#each smartPlaylists as sp}
+                <div
+                  role="button"
+                  tabindex="0"
+                  onclick={() => selectSmartPlaylist(sp)}
+                  onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') selectSmartPlaylist(sp); }}
+                  class="p-4 rounded-xl border text-left transition flex flex-col gap-2 cursor-pointer {selectedSmartPlaylist?.id === sp.id ? 'border-amber-400 bg-amber-400/5' : 'border-zinc-800 bg-zinc-900/40 hover:border-zinc-700'}"
+                >
+                  <div class="flex items-center justify-between w-full">
+                    <div class="font-bold text-xs text-zinc-100 flex items-center gap-2">
+                      <span class="text-amber-400">⚡</span>
+                      <span>{sp.name}</span>
+                    </div>
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-800 text-zinc-300 border border-zinc-700">
+                      {sp.track_count ?? 0} tracks
+                    </span>
+                  </div>
+                  {#if sp.description}
+                    <p class="text-[11px] text-zinc-400 line-clamp-1">{sp.description}</p>
+                  {/if}
+                  <div class="flex items-center justify-between text-[10px] text-zinc-500 pt-2 border-t border-zinc-800/80 w-full mt-1">
+                    <span>Updated {new Date(sp.updated_at).toLocaleDateString()}</span>
+                    <div class="flex items-center gap-2">
+                      <button
+                        onclick={(e) => { e.stopPropagation(); handleOpenEditSmart(sp); }}
+                        class="hover:text-amber-400 transition"
+                        title="Edit Rules"
+                      >
+                        ✏️ Edit
+                      </button>
+                      <button
+                        onclick={(e) => { e.stopPropagation(); handleDeleteSmartPlaylist(sp); }}
+                        class="hover:text-red-400 transition"
+                        title="Delete Smart Playlist"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              {/each}
+            </div>
+
+            <!-- Detail & Track View -->
+            <div class="lg:col-span-2 border border-zinc-800 rounded-xl bg-zinc-950 p-4 flex flex-col min-h-[400px]">
+              {#if !selectedSmartPlaylist}
+                <div class="flex-1 flex flex-col items-center justify-center text-center p-8 text-zinc-500 text-xs">
+                  <span>Select a smart playlist from the left to view matching tracks.</span>
+                </div>
+              {:else}
+                <div class="flex items-center justify-between pb-3 mb-3 border-b border-zinc-800">
+                  <div>
+                    <h3 class="text-sm font-bold text-zinc-100 flex items-center gap-2">
+                      <span class="text-amber-400">⚡</span> {selectedSmartPlaylist.name}
+                    </h3>
+                    {#if selectedSmartPlaylist.description}
+                      <p class="text-xs text-zinc-400 mt-0.5">{selectedSmartPlaylist.description}</p>
+                    {/if}
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <button
+                      onclick={() => handleOpenEditSmart(selectedSmartPlaylist!)}
+                      class="px-2.5 py-1 text-xs font-semibold rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition"
+                    >
+                      Edit Query
+                    </button>
+                    <button
+                      onclick={() => { dapExportPlaylist = selectedSmartPlaylist!.name; dapExportTrackCount = smartPlaylistTracks.length; }}
+                      class="px-2.5 py-1 text-xs font-semibold rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 transition"
+                    >
+                      Export to DAP
+                    </button>
+                  </div>
+                </div>
+
+                {#if smartLoading}
+                  <div class="flex-1 flex items-center justify-center text-xs text-zinc-500">
+                    Evaluating dynamic query...
+                  </div>
+                {:else if smartPlaylistTracks.length === 0}
+                  <div class="flex-1 flex items-center justify-center text-xs text-zinc-500">
+                    No tracks in your library currently match this rule.
+                  </div>
+                {:else}
+                  <div class="flex-1 overflow-y-auto">
+                    <VirtualTrackTable
+                      tracks={smartPlaylistTracks}
+                      onopenLyrics={(t: LibraryTrack) => (activeLyricsTrack = t)}
+                      onfilterArtist={(a: string) => filterByArtist(a)}
+                      onfilterAlbum={(al: string) => filterByAlbum(al)}
+                    />
+                  </div>
+                {/if}
+              {/if}
+            </div>
+          </div>
+        {/if}
+      </div>
     {/if}
 
     <!-- TAB: HEALTH & REPAIR WORKSTATION -->
@@ -845,5 +1036,16 @@
   <PlaylistImportModal
     onclose={() => (showPlaylistImportModal = false)}
     onstartRip={() => loadLibraryData()}
+  />
+{/if}
+
+{#if showSmartPlaylistModal}
+  <SmartPlaylistModal
+    editingPlaylist={editingSmartPlaylist}
+    onclose={() => (showSmartPlaylistModal = false)}
+    onsaved={(sp) => {
+      loadLibraryData();
+      selectSmartPlaylist(sp);
+    }}
   />
 {/if}

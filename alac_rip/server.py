@@ -16,7 +16,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 import uvicorn
@@ -27,7 +27,7 @@ from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from mutagen.mp4 import MP4, MP4Cover
 from pydantic import BaseModel, field_validator
 
-from alac_rip import am_api, audit, gemini_ai, integrations, lastfm_api, lyrics, playlist_import, strawberry_sync
+from alac_rip import am_api, audit, gemini_ai, integrations, lastfm_api, lyrics, playlist_import, smart_playlists, strawberry_sync
 from alac_rip.requests import RequestStore
 from alac_rip.am_api import AMApiError
 from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config, save_config_file
@@ -2188,6 +2188,147 @@ def post_gemini_save_playlist(req: GeminiSavePlaylistRequest):
     from alac_rip.state import Playlist
     playlist = Playlist(name=name, url=f"https://music.apple.com/us/playlist/gemini-{prompt_tag}", last_synced=None, paused=False)
     return _playlist_dict(playlist)
+
+
+# ── Smart Dynamic Playlists Endpoints ─────────────────────────────────────────
+
+class SmartPlaylistCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    rules: dict[str, Any] = {}
+
+
+class SmartPlaylistUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    rules: Optional[dict[str, Any]] = None
+
+
+class SmartPlaylistEvaluateRequest(BaseModel):
+    rules: dict[str, Any]
+
+
+@app.get("/smart-playlists")
+def get_smart_playlists():
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+    playlists = state.get_smart_playlists()
+    result = []
+    for sp in playlists:
+        try:
+            rules_cfg = json.loads(sp["rules_json"])
+        except Exception:
+            rules_cfg = {}
+        # Calculate dynamic count
+        all_tracks = state.get_all_tracks_with_provenance()
+        matched = smart_playlists.evaluate_rules(all_tracks, rules_cfg)
+        result.append({
+            **sp,
+            "rules": rules_cfg,
+            "track_count": len(matched),
+        })
+    return result
+
+
+@app.post("/smart-playlists", status_code=201)
+def create_smart_playlist(req: SmartPlaylistCreateRequest):
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+    name = _validate_playlist_name(req.name)
+    existing = state.get_smart_playlist_by_name(name)
+    if existing:
+        raise HTTPException(409, f"Smart playlist '{name}' already exists")
+
+    rules_json = json.dumps(req.rules)
+    created = state.create_smart_playlist(name, req.description, rules_json)
+    all_tracks = state.get_all_tracks_with_provenance()
+    matched = smart_playlists.evaluate_rules(all_tracks, req.rules)
+    return {
+        **created,
+        "rules": req.rules,
+        "track_count": len(matched),
+    }
+
+
+@app.get("/smart-playlists/{sp_id}")
+def get_smart_playlist_details(sp_id: int):
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+    try:
+        eval_result = smart_playlists.evaluate_smart_playlist(state, sp_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+    sp = eval_result["smart_playlist"]
+    try:
+        rules_cfg = json.loads(sp["rules_json"])
+    except Exception:
+        rules_cfg = {}
+
+    return {
+        **sp,
+        "rules": rules_cfg,
+        "tracks": eval_result["tracks"],
+        "track_count": eval_result["count"],
+    }
+
+
+@app.patch("/smart-playlists/{sp_id}")
+def update_smart_playlist(sp_id: int, req: SmartPlaylistUpdateRequest):
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+    existing = state.get_smart_playlist(sp_id)
+    if not existing:
+        raise HTTPException(404, f"Smart playlist {sp_id} not found")
+
+    new_name = None
+    if req.name is not None:
+        new_name = _validate_playlist_name(req.name)
+        if new_name != existing["name"]:
+            other = state.get_smart_playlist_by_name(new_name)
+            if other and other["id"] != sp_id:
+                raise HTTPException(409, f"Smart playlist '{new_name}' already exists")
+
+    rules_json = json.dumps(req.rules) if req.rules is not None else None
+    updated = state.update_smart_playlist(sp_id, name=new_name, description=req.description, rules_json=rules_json)
+    if not updated:
+        raise HTTPException(404, f"Smart playlist {sp_id} not found")
+
+    try:
+        rules_cfg = json.loads(updated["rules_json"])
+    except Exception:
+        rules_cfg = {}
+
+    all_tracks = state.get_all_tracks_with_provenance()
+    matched = smart_playlists.evaluate_rules(all_tracks, rules_cfg)
+
+    return {
+        **updated,
+        "rules": rules_cfg,
+        "track_count": len(matched),
+    }
+
+
+@app.delete("/smart-playlists/{sp_id}", status_code=204)
+def delete_smart_playlist(sp_id: int):
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+    deleted = state.delete_smart_playlist(sp_id)
+    if not deleted:
+        raise HTTPException(404, f"Smart playlist {sp_id} not found")
+    return None
+
+
+@app.post("/smart-playlists/preview")
+def preview_smart_playlist(req: SmartPlaylistEvaluateRequest):
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+    all_tracks = state.get_all_tracks_with_provenance()
+    matched = smart_playlists.evaluate_rules(all_tracks, req.rules)
+    return {
+        "tracks": matched,
+        "track_count": len(matched),
+    }
 
 
 def _read_sidecar_handshake(value: str) -> tuple[int, str]:

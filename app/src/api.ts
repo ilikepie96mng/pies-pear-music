@@ -138,7 +138,32 @@ export interface DuplicateTrackInfo {
   album: string;
   count: number;
   track_ids: string[];
-  tracks: Track[];
+}
+
+export interface SmartPlaylistRule {
+  field: "title" | "artist" | "album" | "local_path" | "downloaded_at" | "playlist" | "format";
+  operator: "equals" | "not_equals" | "contains" | "not_contains" | "starts_with" | "ends_with" | "regex" | "in_past_days" | "before_date" | "after_date" | "is_empty" | "is_not_empty";
+  value?: string | number;
+}
+
+export interface SmartPlaylistRulesConfig {
+  match?: "all" | "any";
+  rules: SmartPlaylistRule[];
+  sort_by?: "downloaded_at" | "title" | "artist" | "album" | "random";
+  sort_order?: "asc" | "desc";
+  limit?: number;
+}
+
+export interface SmartPlaylist {
+  id: number;
+  name: string;
+  description: string | null;
+  rules_json: string;
+  rules?: SmartPlaylistRulesConfig;
+  track_count?: number;
+  tracks?: LibraryTrack[];
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DeduplicateResult {
@@ -722,6 +747,56 @@ export const api = {
     if (!r.ok) {
       return { gemini: false, lastfm: false, jellyfin: false, navidrome: false, strawberry: false };
     }
+    return r.json();
+  },
+
+  async getSmartPlaylists(): Promise<SmartPlaylist[]> {
+    const r = await request("/smart-playlists");
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async createSmartPlaylist(name: string, description: string = "", rules: SmartPlaylistRulesConfig): Promise<SmartPlaylist> {
+    const r = await request("/smart-playlists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, description, rules }),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async getSmartPlaylist(id: number): Promise<SmartPlaylist> {
+    const r = await request(`/smart-playlists/${id}`);
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async updateSmartPlaylist(
+    id: number,
+    data: { name?: string; description?: string; rules?: SmartPlaylistRulesConfig }
+  ): Promise<SmartPlaylist> {
+    const r = await request(`/smart-playlists/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async deleteSmartPlaylist(id: number): Promise<void> {
+    const r = await request(`/smart-playlists/${id}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(await r.text());
+  },
+
+  async previewSmartPlaylist(rules: SmartPlaylistRulesConfig): Promise<{ tracks: LibraryTrack[]; track_count: number }> {
+    const r = await request("/smart-playlists/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rules }),
+    });
+    if (!r.ok) throw new Error(await r.text());
     return r.json();
   },
 

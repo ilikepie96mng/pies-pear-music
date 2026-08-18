@@ -129,6 +129,111 @@ class StateManager:
                     PRIMARY KEY (playlist_name, track_id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS smart_playlists (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name          TEXT UNIQUE NOT NULL,
+                    description   TEXT,
+                    rules_json    TEXT NOT NULL,
+                    created_at    TEXT NOT NULL,
+                    updated_at    TEXT NOT NULL
+                )
+            """)
+
+    def create_smart_playlist(self, name: str, description: Optional[str], rules_json: str) -> dict:
+        now = datetime.now().isoformat()
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO smart_playlists (name, description, rules_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (name, description, rules_json, now, now),
+            )
+            sp_id = cur.lastrowid
+        return {
+            "id": sp_id,
+            "name": name,
+            "description": description,
+            "rules_json": rules_json,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def get_smart_playlists(self) -> list[dict]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT id, name, description, rules_json, created_at, updated_at FROM smart_playlists ORDER BY name ASC"
+            ).fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "rules_json": r[3],
+                    "created_at": r[4],
+                    "updated_at": r[5],
+                }
+                for r in rows
+            ]
+
+    def get_smart_playlist(self, sp_id: int) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT id, name, description, rules_json, created_at, updated_at FROM smart_playlists WHERE id = ?",
+                (sp_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "name": row[1],
+                "description": row[2],
+                "rules_json": row[3],
+                "created_at": row[4],
+                "updated_at": row[5],
+            }
+
+    def get_smart_playlist_by_name(self, name: str) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT id, name, description, rules_json, created_at, updated_at FROM smart_playlists WHERE name = ?",
+                (name,),
+            ).fetchone()
+            if not row:
+                return None
+            return {
+                "id": row[0],
+                "name": row[1],
+                "description": row[2],
+                "rules_json": row[3],
+                "created_at": row[4],
+                "updated_at": row[5],
+            }
+
+    def update_smart_playlist(self, sp_id: int, name: Optional[str] = None, description: Optional[str] = None, rules_json: Optional[str] = None) -> Optional[dict]:
+        existing = self.get_smart_playlist(sp_id)
+        if not existing:
+            return None
+        new_name = name if name is not None else existing["name"]
+        new_desc = description if description is not None else existing["description"]
+        new_rules = rules_json if rules_json is not None else existing["rules_json"]
+        now = datetime.now().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE smart_playlists SET name = ?, description = ?, rules_json = ?, updated_at = ? WHERE id = ?",
+                (new_name, new_desc, new_rules, now, sp_id),
+            )
+        return {
+            "id": sp_id,
+            "name": new_name,
+            "description": new_desc,
+            "rules_json": new_rules,
+            "created_at": existing["created_at"],
+            "updated_at": now,
+        }
+
+    def delete_smart_playlist(self, sp_id: int) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM smart_playlists WHERE id = ?", (sp_id,))
+            return cur.rowcount > 0
 
     def record_delisted_track(self, playlist_name: str, track_id: str, delisted_at: str) -> None:
         with self._conn() as conn:
