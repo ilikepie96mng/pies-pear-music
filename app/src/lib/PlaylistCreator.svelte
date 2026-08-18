@@ -281,7 +281,13 @@
       const name = playlistName.trim();
       const res = await api.saveGeminiPlaylist(
         name,
-        stagedTracks.map((t) => ({ track_id: t.track_id })),
+        stagedTracks.map((t) => ({
+          track_id: t.track_id,
+          title: t.title,
+          artist: t.artist,
+          album: t.album,
+          artwork_url: t.artwork_url,
+        })),
         playlistDescription.trim() || "Created in Playlist Workstation",
       );
       saveSuccess = true;

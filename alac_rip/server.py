@@ -2373,7 +2373,27 @@ def post_gemini_save_playlist(req: GeminiSavePlaylistRequest):
     for t in req.tracks:
         am = t.get("am_track") or {}
         tid = str(am.get("id") or am.get("track_id") or t.get("track_id") or "")
+        title = t.get("title") or am.get("title") or "Unknown Title"
+        artist = t.get("artist") or am.get("artist") or "Unknown Artist"
+        album = t.get("album") or am.get("album") or "AI Curated"
+        artwork = t.get("artwork_url") or am.get("artwork_url")
+
         if tid:
+            # If track record does not exist yet in DB, record metadata placeholder
+            existing_track = state.get_track(tid)
+            if not existing_track:
+                from alac_rip.state import Track
+                state.add_track(
+                    Track(
+                        track_id=tid,
+                        title=title,
+                        artist=artist,
+                        album=album,
+                        local_path="",
+                        downloaded_at=datetime.now().isoformat(),
+                        artwork_url=artwork,
+                    )
+                )
             state.add_track_to_playlist(name, tid)
 
     from alac_rip.state import Playlist
