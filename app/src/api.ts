@@ -118,7 +118,14 @@ export interface TrackLyrics {
   lyrics: string;
   synced: boolean;
   source: "lrc" | "embedded" | "am_api" | "lrclib" | "none";
-  lines: LyricLine[];
+  lines?: LyricLine[];
+}
+
+export interface AudioWaveform {
+  track_id: string;
+  points: number;
+  duration: number;
+  peaks: number[];
 }
 
 export interface SyncEvent {
@@ -227,6 +234,41 @@ export interface RecentTrack {
   local_path: string;
   artwork_url: string | null;
   downloaded_at: string;
+}
+
+export interface BatchTagFields {
+  title?: string;
+  artist?: string;
+  album?: string;
+  album_artist?: string;
+  genre?: string;
+  year?: string;
+  track_num?: number;
+  disc_num?: number;
+  lyrics?: string;
+  comment?: string;
+}
+
+export interface BatchTagRequest {
+  track_ids: string[];
+  fields: BatchTagFields;
+  cover_art_base64?: string | null;
+  cover_art_mime?: string;
+  remove_cover?: boolean;
+  reorganize_files?: boolean;
+}
+
+export interface BatchTagResponse {
+  updated: number;
+  total_requested: number;
+  errors: string[];
+  tracks: Array<{
+    track_id: string;
+    title: string;
+    artist: string;
+    album: string;
+    local_path: string;
+  }>;
 }
 
 export interface Recommendation {
@@ -728,6 +770,15 @@ export const api = {
     return `http://127.0.0.1:${conn.port}/api/v1/stream?track_id=${encodeURIComponent(trackId)}&token=${encodeURIComponent(conn.capability)}`;
   },
 
+  async getWaveform(trackId: string, points: number = 100): Promise<AudioWaveform> {
+    const r = await request(`/api/v1/waveform?track_id=${encodeURIComponent(trackId)}&points=${points}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to load waveform (${r.status})`);
+    }
+    return r.json();
+  },
+
   async getPlaylistDuplicates(playlistName: string): Promise<{ playlist_name: string; duplicates: DuplicateTrackInfo[]; count: number }> {
     const r = await request(`/playlists/${encodeURIComponent(playlistName)}/duplicates`);
     if (!r.ok) throw new Error(await r.text());
@@ -798,6 +849,24 @@ export const api = {
     });
     if (!r.ok) throw new Error(await r.text());
     return r.json();
+  },
+
+  async batchTagTracks(payload: BatchTagRequest): Promise<BatchTagResponse> {
+    const r = await request("/api/v1/tracks/batch-tag", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Batch tagging failed (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async getTrackCoverUrl(trackId: string): Promise<string> {
+    const conn = await getConnection();
+    return `http://127.0.0.1:${conn.port}/api/v1/tracks/cover?track_id=${encodeURIComponent(trackId)}&token=${encodeURIComponent(conn.capability)}`;
   },
 
   wrapper: {

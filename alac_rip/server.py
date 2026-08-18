@@ -27,7 +27,7 @@ from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from mutagen.mp4 import MP4, MP4Cover
 from pydantic import BaseModel, field_validator
 
-from alac_rip import am_api, audit, gemini_ai, integrations, lastfm_api, lyrics, playlist_import, smart_playlists, strawberry_sync
+from alac_rip import am_api, audit, gemini_ai, integrations, lastfm_api, lyrics, metadata_editor, playlist_import, smart_playlists, strawberry_sync, waveform
 from alac_rip.requests import RequestStore
 from alac_rip.am_api import AMApiError
 from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config, save_config_file
@@ -1926,6 +1926,138 @@ def stream_audio_track(track_id: Optional[str] = None, range_header: Optional[st
         "Content-Type": media_type,
     }
     return StreamingResponse(iter_range(start, chunk_length), status_code=206, headers=headers, media_type=media_type)
+
+
+@app.get("/api/v1/waveform/{track_id:path}")
+@app.get("/api/v1/waveform")
+@app.get("/waveform/{track_id:path}")
+@app.get("/waveform")
+def get_track_waveform(track_id: Optional[str] = None, points: int = Query(100, ge=10, le=1000)):
+    """
+    Returns downsampled audio waveform amplitude peaks and duration for a library track.
+    Cached in SQLite state for instant retrieval on repeat plays.
+    """
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+
+    if not track_id:
+        raise HTTPException(400, "Missing track_id parameter")
+
+    track = state.get_track(track_id)
+    if not track or not track.local_path:
+        raise HTTPException(404, f"Track {track_id} not found")
+
+    try:
+        file_path = _resolve_library_file(track.local_path)
+    except Exception:
+        raise HTTPException(404, "Track file could not be found or resolved")
+
+    if not file_path.is_file():
+        raise HTTPException(404, "Track audio file does not exist on disk")
+
+    try:
+        result = waveform.get_or_extract_waveform(
+            track_id=track_id,
+            file_path=file_path,
+            state_mgr=state,
+            points=points,
+        )
+        return result
+    except waveform.WaveformExtractionError as e:
+        raise HTTPException(500, f"Waveform extraction error: {e}")
+    except Exception as e:
+        raise HTTPException(500, f"Failed to extract waveform: {e}")
+
+
+# ── Metadata Editing & Batch Tagging ──────────────────────────────────────────
+
+class BatchTagFields(BaseModel):
+    title: Optional[str] = None
+    artist: Optional[str] = None
+    album: Optional[str] = None
+    album_artist: Optional[str] = None
+    genre: Optional[str] = None
+    year: Optional[str] = None
+    track_num: Optional[int] = None
+    disc_num: Optional[int] = None
+    lyrics: Optional[str] = None
+    comment: Optional[str] = None
+
+
+class BatchTagRequest(BaseModel):
+    track_ids: list[str]
+    fields: BatchTagFields
+    cover_art_base64: Optional[str] = None
+    cover_art_mime: Optional[str] = "image/jpeg"
+    remove_cover: bool = False
+    reorganize_files: bool = True
+
+
+@app.post("/api/v1/tracks/batch-tag")
+@app.post("/tracks/batch-tag")
+def post_batch_tag_tracks(req: BatchTagRequest):
+    """
+    Applies batch metadata updates and/or cover art replacement across multiple tracks.
+    Safely reorganizes directories and synchronizes SQLite database state records.
+    """
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+
+    if not req.track_ids:
+        raise HTTPException(400, "No track_ids specified")
+
+    # Validate that track_ids exist in library and resolve music directory
+    fields_dict = req.fields.model_dump(exclude_unset=True, exclude_none=True)
+
+    try:
+        result = metadata_editor.batch_update_tracks(
+            state=state,
+            music_dir=cfg.music_dir,
+            track_ids=req.track_ids,
+            fields=fields_dict,
+            cover_art_base64=req.cover_art_base64,
+            cover_art_mime=req.cover_art_mime or "image/jpeg",
+            remove_cover=req.remove_cover,
+            reorganize_files=req.reorganize_files,
+        )
+        return result
+    except metadata_editor.MetadataEditorError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Batch metadata update failed: {e}")
+
+
+@app.get("/api/v1/tracks/cover")
+@app.get("/tracks/{track_id:path}/cover")
+@app.get("/tracks/cover")
+def get_track_embedded_cover(track_id: Optional[str] = None):
+    """Extract and return embedded cover artwork for a track."""
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+
+    if not track_id:
+        raise HTTPException(400, "Missing track_id parameter")
+
+    track = state.get_track(track_id)
+    if not track or not track.local_path:
+        raise HTTPException(404, f"Track {track_id} not found")
+
+    file_path = Path(track.local_path).expanduser().resolve()
+    if not file_path.is_file():
+        raise HTTPException(404, f"Audio file not found on disk for track {track_id}")
+
+    # Check path isolation
+    try:
+        file_path.relative_to(cfg.music_dir)
+    except ValueError:
+        raise HTTPException(403, "Access denied: audio file outside library root")
+
+    cover_info = metadata_editor.extract_embedded_cover(file_path)
+    if not cover_info:
+        raise HTTPException(404, "No embedded cover artwork found")
+
+    cover_bytes, mime = cover_info
+    return Response(content=cover_bytes, media_type=mime)
 
 
 class JellyfinTestRequest(BaseModel):

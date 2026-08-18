@@ -139,6 +139,15 @@ class StateManager:
                     updated_at    TEXT NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS audio_waveforms (
+                    track_id    TEXT PRIMARY KEY,
+                    points      INTEGER NOT NULL,
+                    duration    REAL NOT NULL,
+                    peaks_json  TEXT NOT NULL,
+                    updated_at  TEXT NOT NULL
+                )
+            """)
 
     def create_smart_playlist(self, name: str, description: Optional[str], rules_json: str) -> dict:
         now = datetime.now().isoformat()
@@ -475,6 +484,35 @@ class StateManager:
                 (artwork_url, track_id),
             )
 
+    def update_track_metadata(
+        self,
+        track_id: str,
+        title: str,
+        artist: str,
+        album: str,
+        local_path: Optional[str] = None,
+    ) -> None:
+        with self._conn() as conn:
+            if local_path:
+                conn.execute(
+                    """
+                    UPDATE tracks
+                    SET title = ?, artist = ?, album = ?, local_path = ?
+                    WHERE track_id = ?
+                    """,
+                    (title, artist, album, local_path, track_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE tracks
+                    SET title = ?, artist = ?, album = ?
+                    WHERE track_id = ?
+                    """,
+                    (title, artist, album, track_id),
+                )
+
+
     def get_playlist_tracks_without_am_id(self, playlist_name: str) -> list[Track]:
         """Return tracks in a playlist that have no AM track ID yet."""
         with self._conn() as conn:
@@ -744,4 +782,54 @@ class StateManager:
                 cur = conn.execute(f"DELETE FROM tracks WHERE track_id IN ({placeholders})", chunk)
                 deleted_count += cur.rowcount
         return deleted_count
+
+    def get_waveform(self, track_id: str, points: int = 100) -> Optional[dict]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT points, duration, peaks_json FROM audio_waveforms WHERE track_id = ?",
+                (track_id,),
+            ).fetchone()
+            if not row:
+                return None
+            cached_points, duration, peaks_json = row
+            if cached_points == points:
+                try:
+                    peaks = json.loads(peaks_json)
+                    return {
+                        "track_id": track_id,
+                        "points": cached_points,
+                        "duration": duration,
+                        "peaks": peaks,
+                    }
+                except Exception:
+                    return None
+            return None
+
+    def save_waveform(self, track_id: str, points: int, duration: float, peaks: list[float]) -> dict:
+        now = datetime.now().isoformat()
+        peaks_json = json.dumps(peaks)
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO audio_waveforms (track_id, points, duration, peaks_json, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(track_id) DO UPDATE SET
+                    points = excluded.points,
+                    duration = excluded.duration,
+                    peaks_json = excluded.peaks_json,
+                    updated_at = excluded.updated_at
+                """,
+                (track_id, points, duration, peaks_json, now),
+            )
+        return {
+            "track_id": track_id,
+            "points": points,
+            "duration": duration,
+            "peaks": peaks,
+        }
+
+    def delete_waveform(self, track_id: str) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM audio_waveforms WHERE track_id = ?", (track_id,))
+            return cur.rowcount > 0
 

@@ -6,6 +6,9 @@
   interface Props {
     tracks: LibraryTrack[];
     rowHeight?: number;
+    selectedTrackIds?: Set<string>;
+    ontoggleSelect?: (trackId: string, shiftKey: boolean) => void;
+    ontoggleSelectAll?: () => void;
     onfilterArtist?: (artist: string) => void;
     onfilterAlbum?: (album: string) => void;
     onfilterPlaylist?: (playlist: string) => void;
@@ -16,6 +19,9 @@
   let {
     tracks,
     rowHeight = 52,
+    selectedTrackIds = new Set(),
+    ontoggleSelect,
+    ontoggleSelectAll,
     onfilterArtist,
     onfilterAlbum,
     onfilterPlaylist,
@@ -70,6 +76,9 @@
     }))
   );
 
+  let isAllSelected = $derived(tracks.length > 0 && tracks.every((t) => selectedTrackIds.has(t.track_id)));
+  let isSomeSelected = $derived(selectedTrackIds.size > 0 && !isAllSelected);
+
   function playTrack(track: LibraryTrack) {
     player.playTrack({
       track_id: track.track_id,
@@ -91,10 +100,23 @@
 >
   <!-- Table Header Sticky -->
   <div
-    class="sticky top-0 z-10 grid grid-cols-12 gap-2 py-3 px-4 text-zinc-400 font-medium uppercase text-[10px] tracking-wider border-b backdrop-blur-md"
+    class="sticky top-0 z-10 grid grid-cols-12 gap-2 py-3 px-4 text-zinc-400 font-medium uppercase text-[10px] tracking-wider border-b backdrop-blur-md items-center"
     style="border-color:var(--border);background:rgba(18,16,22,0.92);"
   >
-    <div class="col-span-1 text-center">#</div>
+    <div class="col-span-1 flex items-center justify-center gap-1.5">
+      {#if ontoggleSelectAll}
+        <input
+          type="checkbox"
+          checked={isAllSelected}
+          indeterminate={isSomeSelected}
+          onchange={() => ontoggleSelectAll?.()}
+          class="rounded accent-amber-400 cursor-pointer"
+          title="Select all / Deselect all"
+        />
+      {:else}
+        <span>#</span>
+      {/if}
+    </div>
     <div class="col-span-4">Title & Artist</div>
     <div class="col-span-3 hidden md:block">Album</div>
     <div class="col-span-2">Format</div>
@@ -104,16 +126,29 @@
   <!-- Virtual Scroll Content Area -->
   <div class="relative w-full" style="height:{totalHeight}px;">
     {#each visibleTracks as item (item.track.track_id)}
+      {@const isSelected = selectedTrackIds.has(item.track.track_id)}
       <div
         role="row"
         tabindex="0"
         onkeydown={(e) => { if (e.key === "Enter") playTrack(item.track); }}
         ondblclick={() => playTrack(item.track)}
-        class="absolute left-0 right-0 grid grid-cols-12 gap-2 items-center px-4 hover:bg-white/[0.04] transition-colors border-b text-xs select-none group cursor-pointer"
+        class="absolute left-0 right-0 grid grid-cols-12 gap-2 items-center px-4 hover:bg-white/[0.04] transition-colors border-b text-xs select-none group cursor-pointer {isSelected ? 'bg-amber-400/10' : ''}"
         style="top:{item.top}px;height:{rowHeight}px;border-color:var(--border);"
       >
-        <!-- Index & Artwork -->
-        <div class="col-span-1 flex items-center justify-center">
+        <!-- Selection Checkbox / Index & Artwork -->
+        <div class="col-span-1 flex items-center justify-center gap-2">
+          {#if ontoggleSelect}
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onclick={(e) => {
+                e.stopPropagation();
+                ontoggleSelect?.(item.track.track_id, (e as MouseEvent).shiftKey);
+              }}
+              class="rounded accent-amber-400 cursor-pointer flex-shrink-0"
+            />
+          {/if}
+
           <div class="w-8 h-8 rounded overflow-hidden bg-black/40 flex items-center justify-center flex-shrink-0 relative">
             {#if item.track.artwork_url}
               <img
@@ -138,7 +173,7 @@
 
         <!-- Title & Artist -->
         <div class="col-span-4 min-w-0 pr-2">
-          <div class="font-semibold text-white truncate">{item.track.title}</div>
+          <div class="font-semibold text-white truncate {isSelected ? 'text-amber-300' : ''}">{item.track.title}</div>
           <button
             onclick={(e) => { e.stopPropagation(); onfilterArtist?.(item.track.artist); }}
             class="text-zinc-400 text-[11px] truncate text-left hover:text-amber-400 transition-colors"

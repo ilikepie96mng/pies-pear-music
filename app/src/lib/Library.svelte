@@ -14,6 +14,7 @@
   import VirtualTrackTable from "./VirtualTrackTable.svelte";
   import PlaylistImportModal from "./PlaylistImportModal.svelte";
   import SmartPlaylistModal from "./SmartPlaylistModal.svelte";
+  import BatchTagModal from "./BatchTagModal.svelte";
   import { notifyIntegrityCompleted } from "./notifications";
 
   interface Props {
@@ -35,6 +36,12 @@
   let selectedSmartPlaylist = $state<SmartPlaylist | null>(null);
   let smartPlaylistTracks = $state<LibraryTrack[]>([]);
   let smartLoading = $state(false);
+
+  // Multi-Selection for Batch Operations
+  let selectedTrackIds = $state<Set<string>>(new Set());
+  let lastSelectedTrackId = $state<string | null>(null);
+  let showBatchTagModal = $state(false);
+  let batchTagCoverFocus = $state(false);
 
   // Search & Filters
   let searchQuery = $state("");
@@ -204,6 +211,42 @@
       return sortAsc ? comp : -comp;
     })
   );
+
+  let selectedTracksList = $derived(
+    tracks.filter((t) => selectedTrackIds.has(t.track_id))
+  );
+
+  function toggleTrackSelect(trackId: string, shiftKey: boolean) {
+    const next = new Set(selectedTrackIds);
+    if (shiftKey && lastSelectedTrackId && sortedTracks.length > 0) {
+      const prevIndex = sortedTracks.findIndex((t) => t.track_id === lastSelectedTrackId);
+      const currIndex = sortedTracks.findIndex((t) => t.track_id === trackId);
+      if (prevIndex !== -1 && currIndex !== -1) {
+        const [start, end] = prevIndex < currIndex ? [prevIndex, currIndex] : [currIndex, prevIndex];
+        for (let i = start; i <= end; i++) {
+          next.add(sortedTracks[i].track_id);
+        }
+        selectedTrackIds = next;
+        lastSelectedTrackId = trackId;
+        return;
+      }
+    }
+    if (next.has(trackId)) {
+      next.delete(trackId);
+    } else {
+      next.add(trackId);
+    }
+    selectedTrackIds = next;
+    lastSelectedTrackId = trackId;
+  }
+
+  function toggleSelectAllTracks() {
+    if (selectedTrackIds.size === sortedTracks.length) {
+      selectedTrackIds = new Set();
+    } else {
+      selectedTrackIds = new Set(sortedTracks.map((t) => t.track_id));
+    }
+  }
 
   // Album Groupings
   interface AlbumGroup {
@@ -565,15 +608,47 @@
           {/if}
         </div>
       {:else}
-        <div class="h-[600px] w-full">
+        <div class="h-[600px] w-full relative">
           <VirtualTrackTable
             tracks={sortedTracks}
+            selectedTrackIds={selectedTrackIds}
+            ontoggleSelect={toggleTrackSelect}
+            ontoggleSelectAll={toggleSelectAllTracks}
             onfilterArtist={filterByArtist}
             onfilterAlbum={filterByAlbum}
             onfilterPlaylist={filterByPlaylist}
             onopenLyrics={(t) => (activeLyricsTrack = t)}
             onrevealTrack={(p) => api.revealTrack(p).catch(console.error)}
           />
+
+          {#if selectedTrackIds.size > 0}
+            <div class="fixed bottom-24 left-1/2 -translate-x-1/2 z-30 px-5 py-3 rounded-2xl border shadow-2xl backdrop-blur-xl flex items-center gap-4 bg-[rgba(24,24,27,0.95)] border-amber-400/40 text-white animate-fade-in">
+              <span class="text-xs font-bold text-amber-300">
+                {selectedTrackIds.size} track{selectedTrackIds.size === 1 ? "" : "s"} selected
+              </span>
+              <div class="h-4 w-px bg-zinc-700"></div>
+              <button
+                onclick={() => { batchTagCoverFocus = false; showBatchTagModal = true; }}
+                class="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-400 text-black hover:bg-amber-300 transition-colors flex items-center gap-1.5 shadow"
+              >
+                <span>🏷️</span>
+                <span>Edit Tags</span>
+              </button>
+              <button
+                onclick={() => { batchTagCoverFocus = true; showBatchTagModal = true; }}
+                class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition-colors flex items-center gap-1.5 border border-zinc-700"
+              >
+                <span>🖼️</span>
+                <span>Replace Cover</span>
+              </button>
+              <button
+                onclick={() => (selectedTrackIds = new Set())}
+                class="text-xs text-zinc-400 hover:text-white transition-colors ml-2"
+              >
+                ✕ Clear
+              </button>
+            </div>
+          {/if}
         </div>
       {/if}
     {/if}
@@ -1046,6 +1121,18 @@
     onsaved={(sp) => {
       loadLibraryData();
       selectSmartPlaylist(sp);
+    }}
+  />
+{/if}
+
+{#if showBatchTagModal && selectedTracksList.length > 0}
+  <BatchTagModal
+    tracks={selectedTracksList}
+    initialCoverFocus={batchTagCoverFocus}
+    onclose={() => (showBatchTagModal = false)}
+    onupdated={() => {
+      selectedTrackIds = new Set();
+      loadLibraryData();
     }}
   />
 {/if}
