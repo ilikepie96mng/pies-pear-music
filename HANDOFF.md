@@ -2,7 +2,8 @@
 
 **Last Updated:** 2026-08-17  
 **Current Branch:** `release/2`  
-**Status:** Phases 1–7 Completed, Fully Implemented, Security Audited & Verified (277 passing backend tests, 0 Svelte errors, full Vite production build, 2 passing Cargo tests). Ready for Session 3 or Release Merge.
+**Latest Commit:** `e4eda4d` (`feat(phase7): finalize playlist creator studio, audio routing, and UI contrast polish`)  
+**Status:** Phases 1–7 Completed, Fully Implemented, Security Audited & Verified (277 passing backend tests, 0 Svelte errors, full Vite production build, 2 passing Cargo tests). Ready for Release Merge / Package Distribution.
 
 ---
 
@@ -12,11 +13,11 @@
 * **Backend**: FastAPI sidecar (`alac_rip/server.py`) communicating with Tauri via ephemeral 256-bit stdin capability token (`X-Pies-Api-Token` & query token auth `?token=...`).
 * **Downloader**: External Go binary (`apple-music-downloader`), deployed at `~/.local/share/pies-alac-rip/amd-main`.
 * **Database State**: SQLite (`~/.local/share/pies-alac-rip/downloaded.db`), managed via `alac_rip/state.py`.
-* **Audio Engine**: Range-capable local audio streaming (`/api/v1/stream/{track_id}`) supporting ALAC, FLAC, AAC, and MP3 with dynamic capability URLs.
+* **Audio Engine**: Range-capable local audio streaming (`/api/v1/stream?track_id=...`) supporting ALAC, FLAC, AAC, and MP3 with dynamic capability URLs.
 
 ---
 
-## 2. Phase 7: Accomplishments & Completed Features
+## 2. Phase Accomplishments & Completed Features
 
 1. **Playlist Creator Workstation & AI Assistant (`PlaylistCreator.svelte`)**:
    - Dual-pane playlist studio with multi-select across Tracks, Albums, Artists, Existing Playlists, and **✨ AI Assistant**.
@@ -53,7 +54,15 @@
 ## 3. Verification Suite Results
 
 All tests passing cleanly:
-- `.venv/bin/pytest`: **277 passing tests** (11.48s).
+- `.venv/bin/pytest`: **277 passing tests** (12.05s).
 - `cd app && npm run check`: **0 errors, 0 warnings**.
 - `cd app && npm run build`: **Vite production build completed successfully**.
 - `cd app/src-tauri && cargo test --locked`: **2 passing tests**.
+
+---
+
+## 4. Approved Future Roadmap (v2.1+)
+
+1. **Smart Dynamic Playlists**: Rule-based dynamic auto-evaluating queries saved in SQLite with live filters.
+2. **Interactive Audio Waveform Visualizer**: Server-side peak downsampling with Canvas scrubber.
+3. **Batch Metadata Mass-Tagging & Cover Art Replacer**: Mutagen/FFmpeg atomic multi-track tag editor in Library.
