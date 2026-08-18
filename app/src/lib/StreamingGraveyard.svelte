@@ -105,7 +105,7 @@
           style="padding:7px 14px;border-radius:8px;font-size:12px;font-weight:600;background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .15s;"
         >
           {#if loading}
-            <span style="width:12px;height:12px;border:2px solid #555;border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;"></span>
+            <span class="w-3 h-3 border-2 border-zinc-600 border-t-amber-400 rounded-full animate-spin"></span>
           {:else}
             <span>↺</span>
           {/if}
@@ -156,9 +156,9 @@
   <!-- Main Content -->
   <div style="flex:1;overflow-y:auto;padding:0;">
     {#if loading && tracks.length === 0}
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:240px;gap:12px;color:var(--text-muted);">
-        <span style="width:24px;height:24px;border:2px solid #333;border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;"></span>
-        <span style="font-size:13px;">Scanning digital preservation records…</span>
+      <div class="flex flex-col items-center justify-center h-60 gap-3 text-zinc-400">
+        <span class="w-6 h-6 border-2 border-zinc-700 border-t-amber-400 rounded-full animate-spin"></span>
+        <span class="text-xs">Scanning digital preservation records…</span>
       </div>
     {:else if error}
       <div style="margin:24px;padding:18px;border-radius:12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);color:#f87171;font-size:13px;">
@@ -264,9 +264,3 @@
     onclose={() => (activeLyricsTrack = null)}
   />
 {/if}
-
-<style>
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-</style>
