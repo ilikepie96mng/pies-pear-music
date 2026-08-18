@@ -18,7 +18,6 @@
     onopenGraveyard: () => void;
     onopenAbout: () => void;
     onopenData: () => void;
-    onopenGemini?: () => void;
     onopenCreator?: () => void;
     onopenImport?: () => void;
     onopenSync?: () => void;
@@ -28,7 +27,7 @@
   let {
     playlists, selectedName,
     onselectPlaylist, onstartSync,
-    onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenLibrary, onopenDashboard, onopenDownload, onopenGraveyard, onopenAbout, onopenData, onopenGemini, onopenCreator, onopenImport,
+    onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenLibrary, onopenDashboard, onopenDownload, onopenGraveyard, onopenAbout, onopenData, onopenCreator, onopenImport,
     onplaylistAdded, onopenSync,
   }: Props = $props();
 
@@ -113,7 +112,6 @@
     <div class="flex flex-col gap-0.5">
       <div class="px-2.5 py-1 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Discovery</div>
       {#each [
-        { label: "✨ Gemini AI", action: onopenGemini },
         { label: "⚡ Streaming Import", action: onopenImport },
         { label: "◈ Data & Recs", action: onopenData },
       ] as item}

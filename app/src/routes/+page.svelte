@@ -13,13 +13,12 @@
   import DataControls from "$lib/DataControls.svelte";
   import StreamingGraveyard from "$lib/StreamingGraveyard.svelte";
   import Library from "$lib/Library.svelte";
-  import GeminiCurator from "$lib/GeminiCurator.svelte";
   import PlaylistCreator from "$lib/PlaylistCreator.svelte";
   import PlaylistImportModal from "$lib/PlaylistImportModal.svelte";
   import PlayerBar from "$lib/PlayerBar.svelte";
   import { api, type Playlist } from "../api";
 
-  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data" | "graveyard" | "library" | "gemini" | "creator" | "import";
+  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data" | "graveyard" | "library" | "creator" | "import";
 
   let view = $state<View>("home");
   let playlists = $state<Playlist[]>([]);
@@ -91,7 +90,6 @@
     onopenDiagnostics={() => (view = "diagnostics")}
     onopenHome={() => (view = "home")}
     onopenLibrary={() => (view = "library")}
-    onopenGemini={() => (view = "gemini")}
     onopenCreator={() => (view = "creator")}
     onopenImport={() => (showImportModal = true)}
     onopenDashboard={() => (view = "dashboard")}
@@ -123,8 +121,6 @@
           onselectPlaylist={selectPlaylist}
           onstartSync={startSync}
         />
-      {:else if view === "gemini"}
-        <GeminiCurator />
       {:else if view === "creator"}
         <PlaylistCreator
           onplaylistSaved={(pl: Playlist) => {
