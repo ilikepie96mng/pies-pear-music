@@ -241,34 +241,34 @@
     <!-- Content Area -->
     <div style="flex:1;overflow-y:auto;padding:24px 28px;">
       {#if loading}
-        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:240px;gap:12px;color:var(--text-muted);">
-          <span style="width:24px;height:24px;border:2px solid #333;border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;"></span>
-          <span style="font-size:13px;">Reading synchronized lyrics…</span>
+        <div class="flex flex-col items-center justify-center h-60 gap-3 text-zinc-400">
+          <span class="w-6 h-6 border-2 border-zinc-700 border-t-amber-400 rounded-full animate-spin"></span>
+          <span class="text-xs">Reading synchronized lyrics…</span>
         </div>
       {:else if error}
-        <div style="padding:20px;border-radius:12px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);color:#f87171;font-size:13px;text-align:center;">
+        <div class="p-5 rounded-xl bg-red-950/20 border border-red-800/40 text-red-400 text-xs text-center">
           {error}
         </div>
       {:else if !lyricsData?.lyrics}
-        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:260px;text-align:center;color:var(--text-muted);gap:8px;">
-          <span style="font-size:28px;">🎤</span>
-          <div style="font-size:14px;font-weight:600;color:var(--text-secondary);">No Lyrics Available</div>
-          <div style="font-size:12px;max-width:320px;">
-            This track does not have an associated <span style="font-family:monospace;color:var(--accent);">.lrc</span> sidecar or embedded tags in the library archive.
+        <div class="flex flex-col items-center justify-center h-64 text-center text-zinc-400 gap-2">
+          <span class="text-3xl">🎤</span>
+          <div class="text-sm font-semibold text-zinc-200">No Lyrics Available</div>
+          <div class="text-xs max-w-xs text-zinc-400">
+            This track does not have an associated <span class="font-mono text-amber-400">.lrc</span> sidecar or embedded tags in the library archive.
           </div>
         </div>
       {:else if viewMode === "karaoke" && lyricsData.synced}
         <!-- Real-Time Karaoke Synchronized View -->
-        <div style="display:flex;flex-direction:column;gap:16px;max-width:540px;margin:40px auto;text-align:center;" role="list">
+        <div class="flex flex-col gap-4 max-w-lg my-10 mx-auto text-center" role="list">
           {#each lyricsData.lines as line, idx}
             {@const isActive = idx === activeLineIndex()}
             {@const isPast = idx < activeLineIndex()}
             <div
               id={`karaoke-line-${idx}`}
-              class="karaoke-line {isActive ? 'karaoke-active' : isPast ? 'karaoke-past' : 'karaoke-future'}"
+              class="p-2.5 rounded-xl transition-all duration-200 ease-out {isActive ? 'text-amber-300 text-xl font-bold scale-105 drop-shadow-[0_0_20px_rgba(251,191,36,0.5)]' : isPast ? 'text-zinc-500 text-sm opacity-50' : 'text-zinc-300 text-sm opacity-80'}"
               role="listitem"
             >
-              <div class="karaoke-text">
+              <div class="leading-relaxed">
                 {line.text}
               </div>
             </div>
@@ -276,17 +276,17 @@
         </div>
       {:else if viewMode === "synced" && lyricsData.synced}
         <!-- Synced Table View -->
-        <div style="display:flex;flex-direction:column;gap:6px;max-width:540px;margin:0 auto;" role="list">
+        <div class="flex flex-col gap-1.5 max-w-lg mx-auto" role="list">
           {#each filteredLines() as line, idx}
-            <div class="lyric-line" role="listitem">
+            <div class="flex items-baseline gap-3.5 px-2.5 py-1.5 rounded-lg hover:bg-white/[0.04] transition-colors" role="listitem">
               {#if line.timestamp}
-                <span class="lyric-time">
+                <span class="font-mono text-[11px] text-amber-400/90 tabular-nums min-w-[54px] flex-shrink-0">
                   {line.timestamp}
                 </span>
               {:else}
-                <span class="lyric-time-empty"></span>
+                <span class="min-w-[54px] flex-shrink-0"></span>
               {/if}
-              <span class="lyric-text">
+              <span class="text-sm font-medium text-zinc-100 leading-snug">
                 {line.text}
               </span>
             </div>
@@ -294,81 +294,10 @@
         </div>
       {:else}
         <!-- Plain Text / Raw View -->
-        <div style="max-width:540px;margin:0 auto;">
-          <pre style="font-family:inherit;font-size:14px;line-height:1.8;color:var(--text-primary);white-space:pre-wrap;margin:0;">{lyricsData.lyrics}</pre>
+        <div class="max-w-lg mx-auto">
+          <pre class="font-sans text-sm leading-relaxed text-zinc-200 whitespace-pre-wrap m-0">{lyricsData.lyrics}</pre>
         </div>
       {/if}
     </div>
   </div>
 </div>
-
-<style>
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  .karaoke-line {
-    padding: 8px 12px;
-    border-radius: 12px;
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  .karaoke-line.karaoke-active {
-    color: var(--accent);
-    font-size: 20px;
-    font-weight: 700;
-    transform: scale(1.06);
-    text-shadow: 0 0 24px rgba(252, 211, 77, 0.4);
-  }
-
-  .karaoke-line.karaoke-past {
-    color: var(--text-muted);
-    font-size: 15px;
-    opacity: 0.5;
-  }
-
-  .karaoke-line.karaoke-future {
-    color: var(--text-secondary);
-    font-size: 15px;
-    opacity: 0.8;
-  }
-
-  .karaoke-text {
-    line-height: 1.4;
-  }
-
-  .lyric-line {
-    display: flex;
-    align-items: baseline;
-    gap: 14px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    transition: background 0.15s ease;
-  }
-
-  .lyric-line:hover {
-    background: rgba(255, 255, 255, 0.04);
-  }
-
-  .lyric-time {
-    font-family: monospace;
-    font-size: 11px;
-    color: var(--accent);
-    font-variant-numeric: tabular-nums;
-    opacity: 0.8;
-    min-width: 54px;
-    flex-shrink: 0;
-  }
-
-  .lyric-time-empty {
-    min-width: 54px;
-    flex-shrink: 0;
-  }
-
-  .lyric-text {
-    font-size: 15px;
-    line-height: 1.5;
-    color: var(--text-primary);
-    font-weight: 500;
-  }
-</style>

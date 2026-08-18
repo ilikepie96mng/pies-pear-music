@@ -331,7 +331,7 @@
             style="padding:8px 20px;border-radius:8px;background:var(--accent);border:none;color:black;font-size:12px;font-weight:700;cursor:pointer;opacity:{exporting || !targetDir.trim() ? '.5' : '1'};display:flex;align-items:center;gap:8px;"
           >
             {#if exporting}
-              <span style="width:14px;height:14px;border:2px solid black;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></span>
+              <span class="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin"></span>
               Transcoding & Exporting…
             {:else}
               Start DAP Export
@@ -342,9 +342,3 @@
     </div>
   </div>
 </div>
-
-<style>
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-</style>
