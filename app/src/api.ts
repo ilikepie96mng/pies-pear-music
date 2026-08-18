@@ -408,23 +408,28 @@ export interface ImportMatchResult {
   } | null;
 }
 
+export interface GeminiTrackItem {
+  title: string;
+  artist: string;
+  album: string;
+  rationale: string;
+  matched?: boolean;
+  in_library?: boolean;
+  local_track?: LibraryTrack | null;
+  am_track?: {
+    id: string;
+    title: string;
+    artist: string;
+    album: string;
+    url?: string;
+  } | null;
+}
+
 export interface GeminiPlaylistResult {
   playlist_title: string;
   description: string;
   vibe_tags: string[];
-  tracks: {
-    title: string;
-    artist: string;
-    album: string;
-    rationale: string;
-    matched?: boolean;
-    am_track?: {
-      id: string;
-      title: string;
-      artist: string;
-      album: string;
-    } | null;
-  }[];
+  tracks: GeminiTrackItem[];
 }
 
 export const api = {
@@ -586,15 +591,41 @@ export const api = {
     return r.json();
   },
 
-  async curateGemini(prompt: string, trackCount: number = 20, model?: string): Promise<GeminiPlaylistResult> {
+  async curateGemini(
+    prompt: string,
+    trackCount: number = 20,
+    model?: string,
+    libraryOnly: boolean = false,
+  ): Promise<GeminiPlaylistResult> {
     const r = await request("/gemini/curate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, track_count: trackCount, model: model || undefined }),
+      body: JSON.stringify({
+        prompt,
+        track_count: trackCount,
+        model: model || undefined,
+        library_only: libraryOnly,
+      }),
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       throw new Error(err.detail || "Gemini curation failed");
+    }
+    return r.json();
+  },
+
+  async downloadGeminiTracks(
+    tracks: Array<{ url?: string; am_track?: { url?: string; id?: string } | null; title?: string; artist?: string }>,
+    format: string = "ALAC",
+  ): Promise<{ queued: number; job_ids: string[] }> {
+    const r = await request("/gemini/download-tracks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tracks, format }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to queue track downloads");
     }
     return r.json();
   },

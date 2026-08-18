@@ -26,9 +26,12 @@
   // AI Assistant State
   let aiPrompt = $state("");
   let aiTargetCount = $state(20);
+  let aiLibraryOnly = $state(false);
   let aiCurating = $state(false);
   let aiError = $state<string | null>(null);
   let aiResult = $state<GeminiPlaylistResult | null>(null);
+  let aiDownloadingBatch = $state(false);
+  let aiDownloadMessage = $state<string | null>(null);
 
   // Staged Playlist
   let playlistName = $state("");
@@ -298,13 +301,30 @@
     aiCurating = true;
     aiError = null;
     aiResult = null;
+    aiDownloadMessage = null;
     try {
-      const res = await api.curateGemini(aiPrompt.trim(), aiTargetCount);
+      const res = await api.curateGemini(aiPrompt.trim(), aiTargetCount, undefined, aiLibraryOnly);
       aiResult = res;
     } catch (e) {
       aiError = e instanceof Error ? e.message : String(e);
     } finally {
       aiCurating = false;
+    }
+  }
+
+  async function handleAiDownloadMissing() {
+    if (!aiResult || !aiResult.tracks) return;
+    const missing = aiResult.tracks.filter((t) => !t.in_library);
+    if (missing.length === 0) return;
+
+    aiDownloadingBatch = true;
+    try {
+      const res = await api.downloadGeminiTracks(missing);
+      aiDownloadMessage = `Queued ${res.queued} track(s) for download!`;
+    } catch (e) {
+      aiError = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      aiDownloadingBatch = false;
     }
   }
 
@@ -715,15 +735,26 @@
             </div>
 
             <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <span class="text-xs text-zinc-400">Target tracks:</span>
-                <input
-                  type="number"
-                  bind:value={aiTargetCount}
-                  min={5}
-                  max={100}
-                  class="w-16 bg-[#1c1917] border border-zinc-800 rounded px-2 py-1 text-xs text-white text-center"
-                />
+              <div class="flex items-center gap-3">
+                <label class="flex items-center gap-1.5 text-xs font-semibold text-amber-300 cursor-pointer bg-amber-400/10 px-2.5 py-1 rounded border border-amber-400/30 hover:bg-amber-400/20 transition-colors">
+                  <input
+                    type="checkbox"
+                    bind:checked={aiLibraryOnly}
+                    class="accent-amber-400 rounded"
+                  />
+                  <span>📚 Library Only</span>
+                </label>
+
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-zinc-400">Target tracks:</span>
+                  <input
+                    type="number"
+                    bind:value={aiTargetCount}
+                    min={5}
+                    max={100}
+                    class="w-16 bg-[#1c1917] border border-zinc-800 rounded px-2 py-1 text-xs text-white text-center"
+                  />
+                </div>
               </div>
 
               <button
@@ -741,19 +772,43 @@
               </div>
             {/if}
 
+            {#if aiDownloadMessage}
+              <div class="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs flex items-center justify-between">
+                <span>{aiDownloadMessage}</span>
+                <button onclick={() => (aiDownloadMessage = null)} class="text-xs text-zinc-400 hover:text-white">✕</button>
+              </div>
+            {/if}
+
             {#if aiResult}
               <div class="p-4 rounded-xl border border-zinc-800 bg-black/40 space-y-3">
-                <div class="flex items-start justify-between">
+                <div class="flex items-start justify-between gap-2">
                   <div>
                     <div class="text-sm font-bold text-white">{aiResult.playlist_title}</div>
                     <div class="text-xs text-zinc-400 mt-0.5">{aiResult.description}</div>
                   </div>
-                  <button
-                    onclick={stageAiTracks}
-                    class="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-black shadow flex items-center gap-1"
-                  >
-                    <span>+</span> Stage Mix ({aiResult.tracks.length} tracks)
-                  </button>
+                  <div class="flex items-center gap-2 flex-shrink-0">
+                    {#if aiResult.tracks.some((t) => !t.in_library)}
+                      {@const missingCount = aiResult.tracks.filter((t) => !t.in_library).length}
+                      <button
+                        onclick={handleAiDownloadMissing}
+                        disabled={aiDownloadingBatch}
+                        class="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 shadow flex items-center gap-1 disabled:opacity-50"
+                      >
+                        {#if aiDownloadingBatch}
+                          <span class="w-3 h-3 border-2 border-amber-300 border-t-transparent rounded-full animate-spin"></span>
+                          <span>Queuing...</span>
+                        {:else}
+                          <span>⚡ Download ({missingCount})</span>
+                        {/if}
+                      </button>
+                    {/if}
+                    <button
+                      onclick={stageAiTracks}
+                      class="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-400 hover:bg-amber-300 text-black shadow flex items-center gap-1"
+                    >
+                      <span>+</span> Stage Mix ({aiResult.tracks.length})
+                    </button>
+                  </div>
                 </div>
 
                 <div class="space-y-1.5 max-h-60 overflow-y-auto pr-1">
@@ -763,7 +818,7 @@
                         <div class="font-semibold text-white truncate">{track.title}</div>
                         <div class="text-[11px] text-zinc-400 truncate">{track.artist} &middot; {track.album}</div>
                       </div>
-                      {#if track.matched}
+                      {#if track.in_library}
                         <span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-green-950/60 text-green-400 border border-green-500/30">In Library</span>
                       {:else}
                         <span class="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-950/60 text-amber-400 border border-amber-500/30">AI Curated</span>

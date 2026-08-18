@@ -89,6 +89,7 @@ def generate_smart_playlist(
     bearer_token: Optional[str] = None,
     storefront: str = "us",
     model: Optional[str] = None,
+    library_only: bool = False,
     timeout: float = 25.0,
 ) -> dict[str, Any]:
     """
@@ -103,26 +104,50 @@ def generate_smart_playlist(
     cleaned_prompt = prompt.strip()[:_MAX_PROMPT_LENGTH]
     clamped_track_count = max(0, min(track_count, _MAX_TRACK_COUNT))
 
-    # Extract user taste context from library if available
+    # Extract user taste context or inventory from library if available
     library_context = ""
     if state is not None:
         try:
             stats = state.get_library_stats()
             tracks = state.get_all_tracks_with_provenance()
-            artists = list({t["artist"] for t in tracks if t.get("artist")})[:20]
-            if artists:
-                library_context = f"User's local library contains {stats.get('total_tracks', 0)} tracks across artists like: {', '.join(artists[:10])}."
+            if library_only:
+                # Build an inventory list for Gemini to strictly choose from
+                inventory_lines = []
+                for i, t in enumerate(tracks[:600], start=1):
+                    t_title = t.get("title", "")
+                    t_artist = t.get("artist", "")
+                    t_album = t.get("album", "")
+                    if t_title and t_artist:
+                        inventory_lines.append(f"{i}. Title: \"{t_title}\" | Artist: \"{t_artist}\" | Album: \"{t_album}\"")
+                inventory_str = "\n".join(inventory_lines)
+                library_context = (
+                    f"AVAILABLE LOCAL LIBRARY INVENTORY ({len(tracks)} total tracks in collection):\n"
+                    f"{inventory_str}\n"
+                )
+            else:
+                artists = list({t["artist"] for t in tracks if t.get("artist")})[:20]
+                if artists:
+                    library_context = f"User's local library contains {stats.get('total_tracks', 0)} tracks across artists like: {', '.join(artists[:10])}."
         except Exception:
             pass
 
     count_instruction = f"Aim for {clamped_track_count} tracks." if clamped_track_count > 0 else "Select a comprehensive, well-paced track count (e.g. 15 to 40 tracks) that best fulfills the prompt."
 
-    system_instruction = (
-        "You are an expert audiophile and music curator for a bit-perfect lossless music workstation. "
-        "When given a prompt, generate a cohesive, exceptional tracklist matching the mood, genre, and aesthetic. "
-        f"{count_instruction} Provide your output strictly as a valid JSON object with the following schema: "
-        "{\"playlist_title\": string, \"description\": string, \"vibe_tags\": [string], \"tracks\": [{\"title\": string, \"artist\": string, \"album\": string, \"rationale\": string}]}"
-    )
+    if library_only:
+        system_instruction = (
+            "You are an expert audiophile and music curator for a bit-perfect lossless music workstation. "
+            "MANDATORY INVENTORY CONSTRAINT: You MUST select tracks ONLY from the provided AVAILABLE LOCAL LIBRARY INVENTORY. "
+            "Do NOT invent, hallucinate, or suggest any track or artist that does not appear in the inventory list. "
+            f"{count_instruction} Provide your output strictly as a valid JSON object with the following schema: "
+            "{\"playlist_title\": string, \"description\": string, \"vibe_tags\": [string], \"tracks\": [{\"title\": string, \"artist\": string, \"album\": string, \"rationale\": string}]}"
+        )
+    else:
+        system_instruction = (
+            "You are an expert audiophile and music curator for a bit-perfect lossless music workstation. "
+            "When given a prompt, generate a cohesive, exceptional tracklist matching the mood, genre, and aesthetic. "
+            f"{count_instruction} Provide your output strictly as a valid JSON object with the following schema: "
+            "{\"playlist_title\": string, \"description\": string, \"vibe_tags\": [string], \"tracks\": [{\"title\": string, \"artist\": string, \"album\": string, \"rationale\": string}]}"
+        )
 
     user_query = f"{library_context}\n\nPrompt: {cleaned_prompt}"
 
@@ -202,25 +227,41 @@ def generate_smart_playlist(
         return {"error": f"Gemini curation failed across candidate models: {last_error}", "tracks": []}
 
     try:
-        # Enrich with Apple Music matching if bearer token is supplied
-        if bearer_token and "tracks" in playlist_obj and isinstance(playlist_obj["tracks"], list):
+        # Enrich with local library matching and Apple Music catalog matching
+        if "tracks" in playlist_obj and isinstance(playlist_obj["tracks"], list):
+            local_tracks = state.get_all_tracks_with_provenance() if state else []
             enriched_tracks = []
             for item in playlist_obj["tracks"]:
-                t_name = item.get("title", "")
-                a_name = item.get("artist", "")
+                t_name = (item.get("title") or "").strip()
+                a_name = (item.get("artist") or "").strip()
+
+                # 1. Check if track already exists in local library
+                local_match = next(
+                    (
+                        lt for lt in local_tracks
+                        if lt.get("title", "").lower() == t_name.lower()
+                        and (not a_name or lt.get("artist", "").lower() == a_name.lower() or a_name.lower() in lt.get("artist", "").lower())
+                    ),
+                    None,
+                )
+
+                # 2. Search Apple Music catalog if bearer token is available
                 q = f"{a_name} {t_name}".strip()
                 am_match = None
-                if q:
+                if bearer_token and q:
                     try:
                         matches = search_apple_music_tracks(q, bearer_token, storefront=storefront, limit=3)
                         if matches:
                             am_match = matches[0]
                     except Exception:
                         pass
+
                 enriched_tracks.append({
                     **item,
+                    "local_track": local_match,
+                    "in_library": local_match is not None,
                     "am_track": am_match,
-                    "matched": am_match is not None,
+                    "matched": local_match is not None or am_match is not None,
                 })
             playlist_obj["tracks"] = enriched_tracks
 

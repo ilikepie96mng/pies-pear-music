@@ -477,12 +477,37 @@ def test_post_gemini_curate_endpoint(client, monkeypatch):
     # Set mock api key on config
     server_mod.cfg.gemini_api_key = "test-key"
 
-    resp = client.post("/gemini/curate", json={"prompt": "retro synthwave", "track_count": 10})
+    resp = client.post("/gemini/curate", json={"prompt": "retro synthwave", "track_count": 10, "library_only": True})
     assert resp.status_code == 200
     data = resp.json()
     assert data["playlist_title"] == "Synthwave Sunset"
     assert len(data["tracks"]) == 1
     assert data["tracks"][0]["title"] == "Nightcall"
+
+
+def test_post_gemini_download_tracks(client, monkeypatch):
+    monkeypatch.setattr(server_mod, "wrapper_running", True)
+
+    resp = client.post("/gemini/download-tracks", json={
+        "tracks": [
+            {
+                "title": "Song One",
+                "artist": "Artist One",
+                "am_track": {"url": "https://music.apple.com/us/album/song-one/123?i=456"}
+            },
+            {
+                "title": "Song Two",
+                "artist": "Artist Two",
+                "url": "https://music.apple.com/us/album/song-two/789?i=101"
+            }
+        ],
+        "format": "ALAC"
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["queued"] == 2
+    assert len(data["job_ids"]) == 2
+
 
 
 

@@ -6,6 +6,7 @@
   let prompt = $state("");
   let trackCount = $state(25);
   let autoTrackCount = $state(false);
+  let libraryOnly = $state(false);
   let availableModels = $state<string[]>([]);
   let selectedModel = $state("gemini-2.5-flash");
   let customModel = $state("");
@@ -15,6 +16,11 @@
   let result = $state<GeminiPlaylistResult | null>(null);
   let savingPlaylist = $state(false);
   let savedSuccess = $state(false);
+
+  // Downloading State
+  let downloadingBatch = $state(false);
+  let downloadMessage = $state<string | null>(null);
+  let downloadingTrackMap = $state<Record<string, boolean>>({});
 
   onMount(async () => {
     loadingModels = true;
@@ -45,14 +51,44 @@
     curating = true;
     error = null;
     savedSuccess = false;
+    downloadMessage = null;
     const modelToUse = selectedModel === "custom" ? customModel.trim() : selectedModel;
     const targetCount = autoTrackCount ? 0 : trackCount;
     try {
-      result = await api.curateGemini(prompt.trim(), targetCount, modelToUse || undefined);
+      result = await api.curateGemini(prompt.trim(), targetCount, modelToUse || undefined, libraryOnly);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       curating = false;
+    }
+  }
+
+  async function handleDownloadTrack(track: any) {
+    const key = `${track.artist} - ${track.title}`;
+    downloadingTrackMap = { ...downloadingTrackMap, [key]: true };
+    try {
+      await api.downloadGeminiTracks([track]);
+      downloadMessage = `Queued "${track.title}" for download in background.`;
+    } catch (e) {
+      error = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      downloadingTrackMap = { ...downloadingTrackMap, [key]: false };
+    }
+  }
+
+  async function handleDownloadAllMissing() {
+    if (!result || !result.tracks) return;
+    const missing = result.tracks.filter((t) => !t.in_library);
+    if (missing.length === 0) return;
+
+    downloadingBatch = true;
+    try {
+      const res = await api.downloadGeminiTracks(missing);
+      downloadMessage = `Queued ${res.queued} missing tracks for download! Check the Downloads tab for progress.`;
+    } catch (e) {
+      error = `Batch download failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      downloadingBatch = false;
     }
   }
 
@@ -152,6 +188,16 @@
           />
         {/if}
 
+        <!-- Library Only Filter -->
+        <label class="flex items-center gap-1.5 text-xs font-semibold text-amber-300 cursor-pointer bg-amber-400/10 px-2.5 py-1.5 rounded-lg border border-amber-400/30 hover:bg-amber-400/20 transition-colors">
+          <input
+            type="checkbox"
+            bind:checked={libraryOnly}
+            class="accent-amber-400 rounded"
+          />
+          <span>📚 Library Only</span>
+        </label>
+
         <!-- Track Count Setting -->
         <div class="flex items-center gap-3">
           <label class="flex items-center gap-1.5 text-xs text-zinc-300 font-medium cursor-pointer">
@@ -238,6 +284,22 @@
         </div>
 
         <div class="flex items-center gap-2">
+          {#if result.tracks && result.tracks.some((t) => !t.in_library)}
+            {@const missingCount = result.tracks.filter((t) => !t.in_library).length}
+            <button
+              onclick={handleDownloadAllMissing}
+              disabled={downloadingBatch}
+              class="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-400 hover:bg-amber-300 text-black shadow transition-all flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {#if downloadingBatch}
+                <span class="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin"></span>
+                <span>Queuing...</span>
+              {:else}
+                <span>⚡ Download {missingCount} Missing</span>
+              {/if}
+            </button>
+          {/if}
+
           {#if savedSuccess}
             <span class="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1.5">
               ✓ Saved to Library
@@ -254,9 +316,18 @@
         </div>
       </div>
 
+      {#if downloadMessage}
+        <div class="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs flex items-center justify-between">
+          <span>{downloadMessage}</span>
+          <button onclick={() => (downloadMessage = null)} class="text-xs text-zinc-400 hover:text-white">✕</button>
+        </div>
+      {/if}
+
       <!-- Tracks list -->
       <div class="border rounded-xl overflow-hidden divide-y" style="border-color:var(--border);">
         {#each (result.tracks || []) as track, idx}
+          {@const trackKey = `${track.artist} - ${track.title}`}
+          {@const isDownloading = downloadingTrackMap[trackKey]}
           <div class="p-3.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition-colors">
             <div class="flex items-center gap-3 min-w-0 pr-4">
               <span class="text-zinc-500 font-mono text-[10px] w-5 text-right flex-shrink-0">{idx + 1}</span>
@@ -270,11 +341,31 @@
             </div>
 
             <div class="flex items-center gap-2 flex-shrink-0">
-              {#if track.matched}
+              {#if track.in_library}
                 <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-800/80">
+                  ✓ In Library
+                </span>
+              {:else if track.matched}
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-800/80">
                   Lossless Match
                 </span>
               {/if}
+
+              {#if !track.in_library}
+                <button
+                  onclick={() => handleDownloadTrack(track)}
+                  disabled={isDownloading}
+                  title="Download Lossless Track"
+                  class="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-semibold transition-colors flex items-center gap-1 disabled:opacity-50"
+                >
+                  {#if isDownloading}
+                    <span class="w-2.5 h-2.5 border-2 border-amber-300 border-t-transparent rounded-full animate-spin"></span>
+                  {:else}
+                    <span>⬇ Download</span>
+                  {/if}
+                </button>
+              {/if}
+
               <button
                 onclick={() => playPreview(track.title, track.artist)}
                 class="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold transition-colors flex items-center gap-1"

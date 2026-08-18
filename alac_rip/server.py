@@ -2237,6 +2237,7 @@ class GeminiCurateRequest(BaseModel):
     prompt: str
     track_count: int = 20
     model: Optional[str] = None
+    library_only: bool = False
 
 
 @app.post("/gemini/curate")
@@ -2272,6 +2273,7 @@ def post_gemini_curate(req: GeminiCurateRequest):
         track_count=req.track_count,
         bearer_token=bearer,
         model=req.model,
+        library_only=req.library_only,
     )
 
     if result.get("error"):
@@ -2300,6 +2302,61 @@ class GeminiSavePlaylistRequest(BaseModel):
     name: str
     tracks: list[dict[str, Any]] = []
     prompt: Optional[str] = ""
+
+
+class GeminiDownloadTracksRequest(BaseModel):
+    tracks: list[dict[str, Any]]
+    format: str = "ALAC"
+
+
+@app.post("/gemini/download-tracks")
+def post_gemini_download_tracks(req: GeminiDownloadTracksRequest):
+    """Queue one-off lossless downloads for missing AI-curated tracks."""
+    if not wrapper_running:
+        raise HTTPException(409, "Downloader wrapper is not running — please log in to Apple Music first.")
+
+    format_ = "ALAC"
+    try:
+        format_ = _validate_download_format(req.format)
+    except Exception:
+        pass
+
+    queued_count = 0
+    job_ids = []
+
+    for t in req.tracks:
+        # Extract Apple Music song URL
+        am = t.get("am_track") or {}
+        url = am.get("url") or t.get("url") or ""
+        if not url and am.get("id"):
+            url = f"https://music.apple.com/us/song/{am['id']}"
+
+        if not url:
+            continue
+
+        try:
+            valid_url = _validate_apple_music_url(url)
+        except Exception:
+            continue
+
+        job_id = str(uuid.uuid4())
+        job: dict = {
+            "id": job_id,
+            "type": "one-off",
+            "url": valid_url,
+            "format": format_,
+            "playlist_name": None,
+            "log_q": queue.Queue(),
+            "started": threading.Event(),
+        }
+        with pending_jobs_lock:
+            pending_jobs.append(job)
+        job_queue.put(job)
+
+        queued_count += 1
+        job_ids.append(job_id)
+
+    return {"queued": queued_count, "job_ids": job_ids}
 
 
 @app.post("/gemini/save-playlist", status_code=201)
