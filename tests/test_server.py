@@ -418,3 +418,47 @@ def test_track_lyrics_with_lrc(client, tmp_path, monkeypatch):
     assert data["lines"][0]["time_ms"] == 12340
     assert data["lines"][1]["text"] == "Second line"
 
+
+def test_integrations_health(client):
+    resp = client.get("/system/integrations-health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "gemini" in data
+    assert "lastfm" in data
+    assert "jellyfin" in data
+    assert "navidrome" in data
+    assert "strawberry" in data
+
+
+def test_playlist_duplicates_and_deduplicate(client):
+    from alac_rip.state import Track
+    server_mod.state.add_track(Track("d1", "Duplicate Song", "Band", "Album 1", "/fake/1.flac", "2026-08-17T00:00:00"))
+    server_mod.state.add_track(Track("d2", "Duplicate Song", "Band", "Album 2", "/fake/2.flac", "2026-08-17T00:00:00"))
+    server_mod.state.add_track(Track("u1", "Unique Song", "Band", "Album 1", "/fake/3.flac", "2026-08-17T00:00:00"))
+
+    client.post("/playlists", json={"name": "Dedup Test", "url": "https://music.apple.com/us/playlist/dedup/pl.999"})
+    server_mod.state.add_track_to_playlist("Dedup Test", "d1")
+    server_mod.state.add_track_to_playlist("Dedup Test", "d2")
+    server_mod.state.add_track_to_playlist("Dedup Test", "u1")
+
+    # Check duplicates endpoint
+    resp = client.get("/playlists/Dedup Test/duplicates")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 1
+    assert data["duplicates"][0]["title"] == "Duplicate Song"
+    assert data["duplicates"][0]["count"] == 2
+
+    # Deduplicate endpoint
+    resp_dedup = client.post("/playlists/Dedup Test/deduplicate")
+    assert resp_dedup.status_code == 200
+    dedup_data = resp_dedup.json()
+    assert dedup_data["status"] == "ok"
+    assert dedup_data["duplicates_found"] == 1
+    assert dedup_data["removed_count"] == 1
+
+    # Check that duplicates are now 0
+    resp_after = client.get("/playlists/Dedup Test/duplicates")
+    assert resp_after.json()["count"] == 0
+
+

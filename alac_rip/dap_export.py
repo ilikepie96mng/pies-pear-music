@@ -24,6 +24,16 @@ DAP_FORMATS = {
         "codec": "aac",
         "default_bitrate": "256k",
     },
+    "original": {
+        "ext": "original",
+        "codec": "copy",
+        "default_bitrate": "original",
+    },
+    "copy": {
+        "ext": "original",
+        "codec": "copy",
+        "default_bitrate": "original",
+    },
 }
 
 ProgressCallback = Callable[[int, int, str], None]
@@ -51,11 +61,11 @@ def export_dap_playlist(
     state: Optional[StateManager] = None,
     on_progress: Optional[ProgressCallback] = None,
 ) -> dict:
-    """Export and transcode a playlist for DAP / portable players.
+    """Export and transcode or copy a playlist for DAP / portable players.
 
     - Reads tracks for playlist_name from state.
-    - Transcodes tracks to Opus or AAC using ffmpeg into target_dir / playlist_name /
-    - Copies matching .lrc sidecars alongside transcoded audio.
+    - Transcodes tracks to Opus or AAC, or bit-perfect copies original lossless files.
+    - Copies matching .lrc sidecars alongside audio files.
     - Generates relative M3U playlists in target_dir and export_dir.
     """
     if not playlist_name or not playlist_name.strip():
@@ -68,11 +78,12 @@ def export_dap_playlist(
         )
 
     fmt_info = DAP_FORMATS[fmt_key]
-    out_ext = fmt_info["ext"]
-    codec = fmt_info["codec"]
-    chosen_bitrate = (bitrate or fmt_info["default_bitrate"]).strip()
-    if not re.match(r"^[1-9]\d{1,3}k$", chosen_bitrate, re.IGNORECASE):
-        raise DapExportError(f"Invalid bitrate '{chosen_bitrate}'. Format must be e.g. '160k', '256k', '320k'")
+    is_original_copy = fmt_key in ("original", "copy")
+    chosen_bitrate = bitrate or fmt_info["default_bitrate"]
+    if not is_original_copy:
+        chosen_bitrate = (bitrate or fmt_info["default_bitrate"]).strip()
+        if not re.match(r"^[1-9]\d{1,3}k$", chosen_bitrate, re.IGNORECASE):
+            raise DapExportError(f"Invalid bitrate '{chosen_bitrate}'. Format must be e.g. '160k', '256k', '320k'")
 
     resolved_target = validate_dap_target_dir(target_dir)
     resolved_target.mkdir(parents=True, exist_ok=True)
@@ -100,32 +111,38 @@ def export_dap_playlist(
         src_path = Path(track.local_path).resolve()
         clean_artist = re.sub(r"[\r\n\t\x00-\x1f\x7f-\x9f\s]+", " ", track.artist).strip()
         clean_title = re.sub(r"[\r\n\t\x00-\x1f\x7f-\x9f\s]+", " ", track.title).strip()
+        out_ext = src_path.suffix if is_original_copy else fmt_info["ext"]
         out_name = f"{idx:02d} - {sanitize(track.title)}{out_ext}"
         dest_path = export_dir / out_name
 
         if on_progress:
-            on_progress(idx, total, f"Transcoding {track.artist} - {track.title}")
+            action_label = "Copying" if is_original_copy else "Transcoding"
+            on_progress(idx, total, f"{action_label} {track.artist} - {track.title}")
 
         if not src_path.exists():
             error_count += 1
             continue
 
         try:
-            # Transcode audio using ffmpeg with metadata preservation
-            cmd = [
-                "ffmpeg",
-                "-i", str(src_path),
-                "-vn",
-                "-c:a", codec,
-                "-b:a", chosen_bitrate,
-                "-map_metadata", "0",
-                "-y",
-                str(dest_path),
-            ]
-            result = subprocess.run(cmd, capture_output=True)
-            if result.returncode != 0:
-                err_msg = result.stderr.decode(errors="replace")[:300]
-                raise RuntimeError(f"ffmpeg transcode failed: {err_msg}")
+            if is_original_copy:
+                # Bit-perfect copy without re-encoding
+                shutil.copy2(str(src_path), str(dest_path))
+            else:
+                # Transcode audio using ffmpeg with metadata preservation
+                cmd = [
+                    "ffmpeg",
+                    "-i", str(src_path),
+                    "-vn",
+                    "-c:a", fmt_info["codec"],
+                    "-b:a", chosen_bitrate,
+                    "-map_metadata", "0",
+                    "-y",
+                    str(dest_path),
+                ]
+                result = subprocess.run(cmd, capture_output=True)
+                if result.returncode != 0:
+                    err_msg = result.stderr.decode(errors="replace")[:300]
+                    raise RuntimeError(f"ffmpeg transcode failed: {err_msg}")
 
             # Copy .lrc sidecar if present next to source
             src_lrc = src_path.with_suffix(".lrc")

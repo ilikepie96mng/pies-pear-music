@@ -401,7 +401,7 @@ app = FastAPI(title="pies-alac-rip", lifespan=lifespan)
 async def require_api_capability(request: Request, call_next):
     """Require the Tauri-generated capability when running as a sidecar."""
     if request.method != "OPTIONS" and _api_capability:
-        supplied = request.headers.get(_API_CAPABILITY_HEADER)
+        supplied = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
         if not supplied or not secrets.compare_digest(supplied, _api_capability):
             return Response(status_code=401)
     return await call_next(request)
@@ -479,6 +479,19 @@ def get_diagnostics():
             results.append(check(label, False, "Config not loaded"))
 
     return results
+
+
+@app.get("/system/integrations-health")
+def get_integrations_health():
+    jellyfin_cfg = cfg.integrations.get("jellyfin", {}) if cfg and isinstance(cfg.integrations, dict) else {}
+    navidrome_cfg = cfg.integrations.get("navidrome", {}) if cfg and isinstance(cfg.integrations, dict) else {}
+    return {
+        "gemini": bool(cfg.gemini_api_key) if cfg else False,
+        "lastfm": bool(cfg.lastfm_api_key) if cfg else False,
+        "jellyfin": bool(jellyfin_cfg.get("enabled") and jellyfin_cfg.get("server_url")),
+        "navidrome": bool(navidrome_cfg.get("enabled") and navidrome_cfg.get("server_url")),
+        "strawberry": bool(strawberry_sync.find_strawberry_db() is not None),
+    }
 
 
 class PlaylistIn(BaseModel):
@@ -873,7 +886,7 @@ def _queue_worker() -> None:
         active_job = job
         job["started"].set()
         try:
-            _run_job(job)
+            sys.modules[__name__]._run_job(job)
         except Exception as exc:
             job["log_q"].put({"status": "error", "message": _redact_runtime_paths(f"Internal error: {exc}")})
         finally:
@@ -1198,6 +1211,30 @@ def _m3u_save_target(value: str) -> Path:
     if not target.parent.is_dir():
         raise ValueError("The selected folder does not exist")
     return target
+
+
+@app.get("/playlists/{name}/duplicates")
+def get_playlist_duplicates(name: str):
+    try:
+        name = _validate_playlist_name(name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+    duplicates = state.get_duplicate_tracks_in_playlist(name)
+    return {"playlist_name": name, "duplicates": duplicates, "count": len(duplicates)}
+
+
+@app.post("/playlists/{name}/deduplicate")
+def deduplicate_playlist(name: str):
+    try:
+        name = _validate_playlist_name(name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+    result = state.deduplicate_playlist(name)
+    return result
 
 
 @app.get("/playlists/{name}/m3u")
@@ -1618,6 +1655,8 @@ class ConfigUpdate(BaseModel):
     alac_rip_dir: Optional[str] = None
     log_retention_days: Optional[int] = None
     lastfm_api_key: Optional[str] = None
+    lastfm_shared_secret: Optional[str] = None
+    lastfm_username: Optional[str] = None
     gemini_api_key: Optional[str] = None
     integrations: Optional[dict] = None
 
@@ -1641,7 +1680,7 @@ class ConfigUpdate(BaseModel):
         return value
 
 
-_CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key", "gemini_api_key", "github_remote"}
+_CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key", "lastfm_shared_secret", "gemini_api_key", "github_remote"}
 
 
 def _sanitize_config_dict(data: dict) -> dict:
@@ -1675,7 +1714,11 @@ def get_config():
             data = yaml.safe_load(f) or {}
     except FileNotFoundError:
         raise HTTPException(503, "Config file not found")
-    return _sanitize_config_dict(data)
+    sanitized = _sanitize_config_dict(data)
+    sanitized["gemini_api_key_configured"] = bool(data.get("gemini_api_key"))
+    sanitized["lastfm_api_key_configured"] = bool(data.get("lastfm_api_key"))
+    sanitized["lastfm_shared_secret_configured"] = bool(data.get("lastfm_shared_secret"))
+    return sanitized
 
 
 @app.put("/config")

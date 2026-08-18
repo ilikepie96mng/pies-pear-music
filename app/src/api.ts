@@ -132,6 +132,31 @@ export interface SyncEvent {
   log_path?: string;
 }
 
+export interface DuplicateTrackInfo {
+  title: string;
+  artist: string;
+  album: string;
+  count: number;
+  track_ids: string[];
+  tracks: Track[];
+}
+
+export interface DeduplicateResult {
+  status: string;
+  playlist_name: string;
+  duplicates_found: number;
+  removed_count: number;
+  removed_track_ids: string[];
+}
+
+export interface IntegrationsHealth {
+  gemini: boolean;
+  lastfm: boolean;
+  jellyfin: boolean;
+  navidrome: boolean;
+  strawberry: boolean;
+}
+
 export interface QueueJob {
   id: string;
   type: "playlist" | "one-off";
@@ -669,6 +694,33 @@ export const api = {
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to load lyrics (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async getStreamUrl(trackId: string): Promise<string> {
+    const conn = await getConnection();
+    return `http://127.0.0.1:${conn.port}/api/v1/stream/${encodeURIComponent(trackId)}?token=${encodeURIComponent(conn.capability)}`;
+  },
+
+  async getPlaylistDuplicates(playlistName: string): Promise<{ playlist_name: string; duplicates: DuplicateTrackInfo[]; count: number }> {
+    const r = await request(`/playlists/${encodeURIComponent(playlistName)}/duplicates`);
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async deduplicatePlaylist(playlistName: string): Promise<DeduplicateResult> {
+    const r = await request(`/playlists/${encodeURIComponent(playlistName)}/deduplicate`, {
+      method: "POST",
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async getIntegrationsHealth(): Promise<IntegrationsHealth> {
+    const r = await request("/system/integrations-health");
+    if (!r.ok) {
+      return { gemini: false, lastfm: false, jellyfin: false, navidrome: false, strawberry: false };
     }
     return r.json();
   },

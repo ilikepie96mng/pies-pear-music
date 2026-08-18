@@ -15,6 +15,8 @@ class Config:
     alac_rip_dir: Path
     log_retention_days: int = 2
     lastfm_api_key: str = ""
+    lastfm_shared_secret: str = ""
+    lastfm_username: str = ""
     gemini_api_key: str = ""
     integrations: dict[str, Any] = field(default_factory=dict)
 
@@ -33,6 +35,8 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         alac_rip_dir=p("alac_rip_dir", ""),
         log_retention_days=int(data.get("log_retention_days", 2)),
         lastfm_api_key=data.get("lastfm_api_key", ""),
+        lastfm_shared_secret=data.get("lastfm_shared_secret", ""),
+        lastfm_username=data.get("lastfm_username", ""),
         gemini_api_key=data.get("gemini_api_key", ""),
         integrations=data.get("integrations", {}),
     )

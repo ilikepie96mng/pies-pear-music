@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api, type TrackLyrics } from "../api";
+  import { player } from "./player.svelte";
 
   interface TrackInfo {
     track_id: string;
@@ -21,10 +22,11 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let lyricsData = $state<TrackLyrics | null>(null);
-  let viewMode = $state<"synced" | "plain">("synced");
+  let viewMode = $state<"karaoke" | "synced" | "plain">("karaoke");
   let filterQuery = $state("");
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | null = null;
+  let activeLineElement = $state<HTMLElement | null>(null);
 
   function thumbUrl(url: string | null | undefined, size: string): string {
     if (!url) return "";
@@ -38,6 +40,8 @@
       lyricsData = await api.getTrackLyrics(track.track_id);
       if (!lyricsData.synced) {
         viewMode = "plain";
+      } else {
+        viewMode = "karaoke";
       }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -69,6 +73,34 @@
     if (!filterQuery.trim()) return lyricsData.lines;
     const q = filterQuery.toLowerCase();
     return lyricsData.lines.filter(l => l.text.toLowerCase().includes(q));
+  });
+
+  // Calculate active line index based on player current time (in ms)
+  let activeLineIndex = $derived(() => {
+    if (!lyricsData?.lines || !lyricsData.synced) return -1;
+    const currentMs = (player.currentTime || 0) * 1000;
+    const lines = lyricsData.lines;
+    let activeIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const lineTime = lines[i].time_ms;
+      if (lineTime !== undefined && currentMs >= lineTime) {
+        activeIdx = i;
+      } else if (lineTime !== undefined && currentMs < lineTime) {
+        break;
+      }
+    }
+    return activeIdx;
+  });
+
+  // Auto-scroll to active line in Karaoke mode
+  $effect(() => {
+    const idx = activeLineIndex();
+    if (viewMode === "karaoke" && idx >= 0) {
+      const el = document.getElementById(`karaoke-line-${idx}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
   });
 
   function handleKeydown(e: KeyboardEvent) {
@@ -158,6 +190,13 @@
         <div style="display:flex;align-items:center;gap:6px;">
           {#if lyricsData.synced}
             <button
+              onclick={() => (viewMode = "karaoke")}
+              style="padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;border:none;cursor:pointer;transition:all .15s;
+                {viewMode === 'karaoke' ? 'background:var(--accent);color:black;' : 'background:transparent;color:var(--text-muted);'}"
+            >
+              🎤 Karaoke
+            </button>
+            <button
               onclick={() => (viewMode = "synced")}
               style="padding:4px 10px;border-radius:6px;font-size:11px;font-weight:600;border:none;cursor:pointer;transition:all .15s;
                 {viewMode === 'synced' ? 'background:var(--accent);color:black;' : 'background:transparent;color:var(--text-muted);'}"
@@ -218,8 +257,25 @@
             This track does not have an associated <span style="font-family:monospace;color:var(--accent);">.lrc</span> sidecar or embedded tags in the library archive.
           </div>
         </div>
+      {:else if viewMode === "karaoke" && lyricsData.synced}
+        <!-- Real-Time Karaoke Synchronized View -->
+        <div style="display:flex;flex-direction:column;gap:16px;max-width:540px;margin:40px auto;text-align:center;" role="list">
+          {#each lyricsData.lines as line, idx}
+            {@const isActive = idx === activeLineIndex()}
+            {@const isPast = idx < activeLineIndex()}
+            <div
+              id={`karaoke-line-${idx}`}
+              class="karaoke-line {isActive ? 'karaoke-active' : isPast ? 'karaoke-past' : 'karaoke-future'}"
+              role="listitem"
+            >
+              <div class="karaoke-text">
+                {line.text}
+              </div>
+            </div>
+          {/each}
+        </div>
       {:else if viewMode === "synced" && lyricsData.synced}
-        <!-- Synced View -->
+        <!-- Synced Table View -->
         <div style="display:flex;flex-direction:column;gap:6px;max-width:540px;margin:0 auto;" role="list">
           {#each filteredLines() as line, idx}
             <div class="lyric-line" role="listitem">
@@ -249,6 +305,36 @@
 <style>
   @keyframes spin {
     to { transform: rotate(360deg); }
+  }
+
+  .karaoke-line {
+    padding: 8px 12px;
+    border-radius: 12px;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .karaoke-line.karaoke-active {
+    color: var(--accent);
+    font-size: 20px;
+    font-weight: 700;
+    transform: scale(1.06);
+    text-shadow: 0 0 24px rgba(252, 211, 77, 0.4);
+  }
+
+  .karaoke-line.karaoke-past {
+    color: var(--text-muted);
+    font-size: 15px;
+    opacity: 0.5;
+  }
+
+  .karaoke-line.karaoke-future {
+    color: var(--text-secondary);
+    font-size: 15px;
+    opacity: 0.8;
+  }
+
+  .karaoke-text {
+    line-height: 1.4;
   }
 
   .lyric-line {

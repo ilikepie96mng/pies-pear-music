@@ -77,6 +77,34 @@
       <div class="mb-5 rounded-lg border px-3 py-2 text-sm" style="border-color:var(--border);background:var(--surface);color:var(--text-secondary);">{message}</div>
     {/if}
 
+    <!-- Intelligence Provider Preference -->
+    <section class="mb-5 rounded-xl border p-5" style="border-color:var(--border);background:var(--surface);">
+      <h2 class="font-medium">Music Intelligence Engine</h2>
+      <p class="mt-1 text-sm" style="color:var(--text-muted);">Choose your preferred recommendation & discovery provider.</p>
+      
+      <div class="mt-4 grid grid-cols-2 gap-3">
+        <label class="p-3 rounded-lg border cursor-pointer flex items-center gap-3 transition-colors" style="border-color:var(--border);background:var(--bg);">
+          <input type="radio" name="intelligence-provider" value="gemini" checked class="accent-amber-400" />
+          <div>
+            <div class="text-xs font-bold text-white flex items-center gap-1.5">
+              <span>✨</span> Gemini AI
+            </div>
+            <div class="text-[11px] text-zinc-400 mt-0.5">Deep reasoning, contextual & mood playlist curation</div>
+          </div>
+        </label>
+
+        <label class="p-3 rounded-lg border cursor-pointer flex items-center gap-3 transition-colors" style="border-color:var(--border);background:var(--bg);">
+          <input type="radio" name="intelligence-provider" value="lastfm" class="accent-amber-400" />
+          <div>
+            <div class="text-xs font-bold text-white flex items-center gap-1.5">
+              <span>📻</span> Last.fm Scrobble Graph
+            </div>
+            <div class="text-[11px] text-zinc-400 mt-0.5">Crowdsourced similarity tags & community scrobble trends</div>
+          </div>
+        </label>
+      </div>
+    </section>
+
     <section class="mb-5 rounded-xl border p-5" style="border-color:var(--border);background:var(--surface);">
       <h2 class="font-medium">Export listening profile</h2>
       <p class="mt-1 text-sm" style="color:var(--text-muted);">Exports artist, album, and aggregate track counts only—never file paths, Apple Music URLs, tokens, or credentials.</p>

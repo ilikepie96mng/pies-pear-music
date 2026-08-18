@@ -13,18 +13,20 @@
   let { playlistName, trackCount, onclose }: Props = $props();
 
   let targetDir = $state("");
-  let format = $state<"opus" | "aac">("opus");
+  let format = $state<"opus" | "aac" | "original">("opus");
   let bitrate = $state<string>("160k");
   let exporting = $state(false);
   let error = $state<string | null>(null);
   let result = $state<DapExportResult | null>(null);
 
-  function onFormatChange(newFmt: "opus" | "aac") {
+  function onFormatChange(newFmt: "opus" | "aac" | "original") {
     format = newFmt;
     if (newFmt === "opus" && (bitrate === "256k" || !bitrate)) {
       bitrate = "160k";
     } else if (newFmt === "aac" && (bitrate === "160k" || !bitrate)) {
       bitrate = "256k";
+    } else if (newFmt === "original") {
+      bitrate = "";
     }
   }
 
@@ -210,23 +212,23 @@
           <span style="display:block;font-size:12px;font-weight:600;margin-bottom:8px;color:var(--text-secondary);">
             Audio Transcode Codec
           </span>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:8px;">
             <button
               type="button"
               onclick={() => onFormatChange("opus")}
               disabled={exporting}
-              style="padding:12px;border-radius:10px;text-align:left;border:1px solid {format === 'opus' ? 'var(--accent)' : 'var(--border)'};background:{format === 'opus' ? 'rgba(252,211,77,0.08)' : 'var(--surface)'};cursor:pointer;"
+              style="padding:10px 12px;border-radius:10px;text-align:left;border:1px solid {format === 'opus' ? 'var(--accent)' : 'var(--border)'};background:{format === 'opus' ? 'rgba(252,211,77,0.08)' : 'var(--surface)'};cursor:pointer;"
             >
               <div style="display:flex;align-items:center;justify-content:space-between;">
-                <span style="font-size:13px;font-weight:700;color:{format === 'opus' ? 'var(--accent)' : 'var(--text-primary)'};">
+                <span style="font-size:12px;font-weight:700;color:{format === 'opus' ? 'var(--accent)' : 'var(--text-primary)'};">
                   Opus (.opus)
                 </span>
                 {#if format === 'opus'}
-                  <span style="font-size:12px;color:var(--accent);">●</span>
+                  <span style="font-size:11px;color:var(--accent);">●</span>
                 {/if}
               </div>
-              <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
-                State of the art quality at lower bitrates. Best for modern DAPs (Hiby, Sony, FiiO).
+              <div style="font-size:10px;color:var(--text-muted);margin-top:3px;line-height:1.3;">
+                Modern DAPs & high fidelity.
               </div>
             </button>
 
@@ -234,49 +236,70 @@
               type="button"
               onclick={() => onFormatChange("aac")}
               disabled={exporting}
-              style="padding:12px;border-radius:10px;text-align:left;border:1px solid {format === 'aac' ? 'var(--accent)' : 'var(--border)'};background:{format === 'aac' ? 'rgba(252,211,77,0.08)' : 'var(--surface)'};cursor:pointer;"
+              style="padding:10px 12px;border-radius:10px;text-align:left;border:1px solid {format === 'aac' ? 'var(--accent)' : 'var(--border)'};background:{format === 'aac' ? 'rgba(252,211,77,0.08)' : 'var(--surface)'};cursor:pointer;"
             >
               <div style="display:flex;align-items:center;justify-content:space-between;">
-                <span style="font-size:13px;font-weight:700;color:{format === 'aac' ? 'var(--accent)' : 'var(--text-primary)'};">
+                <span style="font-size:12px;font-weight:700;color:{format === 'aac' ? 'var(--accent)' : 'var(--text-primary)'};">
                   AAC (.m4a)
                 </span>
                 {#if format === 'aac'}
-                  <span style="font-size:12px;color:var(--accent);">●</span>
+                  <span style="font-size:11px;color:var(--accent);">●</span>
                 {/if}
               </div>
-              <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">
-                Maximum compatibility with Apple devices, legacy car stereos, and standard players.
+              <div style="font-size:10px;color:var(--text-muted);margin-top:3px;line-height:1.3;">
+                Maximum compatibility.
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onclick={() => onFormatChange("original")}
+              disabled={exporting}
+              style="padding:10px 12px;border-radius:10px;text-align:left;border:1px solid {format === 'original' ? 'var(--accent)' : 'var(--border)'};background:{format === 'original' ? 'rgba(252,211,77,0.08)' : 'var(--surface)'};cursor:pointer;"
+            >
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <span style="font-size:12px;font-weight:700;color:{format === 'original' ? 'var(--accent)' : 'var(--text-primary)'};">
+                  Original Lossless
+                </span>
+                {#if format === 'original'}
+                  <span style="font-size:11px;color:var(--accent);">●</span>
+                {/if}
+              </div>
+              <div style="font-size:10px;color:var(--text-muted);margin-top:3px;line-height:1.3;">
+                Bit-perfect copy / no transcode.
               </div>
             </button>
           </div>
         </div>
 
         <!-- Bitrate Selector -->
-        <div>
-          <label for="bitrate-select" style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text-secondary);">
-            Target Bitrate
-          </label>
-          <select
-            id="bitrate-select"
-            bind:value={bitrate}
-            disabled={exporting}
-            style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px;color:white;outline:none;"
-          >
-            {#if format === "opus"}
-              <option value="96k">96 kbps (Compact)</option>
-              <option value="128k">128 kbps (Standard)</option>
-              <option value="160k">160 kbps (Recommended / Transparent)</option>
-              <option value="192k">192 kbps (High Fidelity)</option>
-              <option value="256k">256 kbps (Ultra)</option>
-              <option value="320k">320 kbps (Maximum)</option>
-            {:else}
-              <option value="128k">128 kbps (Standard)</option>
-              <option value="192k">192 kbps (High Quality)</option>
-              <option value="256k">256 kbps (Recommended / iTunes Plus)</option>
-              <option value="320k">320 kbps (Maximum)</option>
-            {/if}
-          </select>
-        </div>
+        {#if format !== "original"}
+          <div>
+            <label for="bitrate-select" style="display:block;font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text-secondary);">
+              Target Bitrate
+            </label>
+            <select
+              id="bitrate-select"
+              bind:value={bitrate}
+              disabled={exporting}
+              style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:13px;color:white;outline:none;"
+            >
+              {#if format === "opus"}
+                <option value="96k">96 kbps (Compact)</option>
+                <option value="128k">128 kbps (Standard)</option>
+                <option value="160k">160 kbps (Recommended / Transparent)</option>
+                <option value="192k">192 kbps (High Fidelity)</option>
+                <option value="256k">256 kbps (Ultra)</option>
+                <option value="320k">320 kbps (Maximum)</option>
+              {:else}
+                <option value="128k">128 kbps (Standard)</option>
+                <option value="192k">192 kbps (High Quality)</option>
+                <option value="256k">256 kbps (Recommended / iTunes Plus)</option>
+                <option value="320k">320 kbps (Maximum)</option>
+              {/if}
+            </select>
+          </div>
+        {/if}
 
         <!-- Features Info -->
         <div style="padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);font-size:11px;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px;">

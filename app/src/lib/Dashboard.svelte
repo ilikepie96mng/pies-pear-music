@@ -1,20 +1,30 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { api, type Stats, type DiagnosticCheck, type SyncRun } from "../api";
+  import { api, type Stats, type DiagnosticCheck, type SyncRun, type IntegrationsHealth } from "../api";
 
   interface Props {
     onstartSync: (name: string) => void;
     onselectPlaylist: (name: string) => void;
     onopenDiagnostics: () => void;
+    onopenSettings?: () => void;
   }
 
-  let { onstartSync, onselectPlaylist, onopenDiagnostics }: Props = $props();
+  let { onstartSync, onselectPlaylist, onopenDiagnostics, onopenSettings }: Props = $props();
 
   let stats = $state<Stats | null>(null);
   let checks = $state<DiagnosticCheck[]>([]);
   let recentRuns = $state<SyncRun[]>([]);
+  let integrationsHealth = $state<IntegrationsHealth | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
+
+  // Widget customizer toggles
+  let showStatsWidget = $state(true);
+  let showHealthWidget = $state(true);
+  let showAppleMusicWidget = $state(true);
+  let showPlaylistsWidget = $state(true);
+  let showActivityWidget = $state(true);
+  let showCustomizer = $state(false);
 
   const CRITICAL = new Set(["Config file", "Music directory", "State directory"]);
 
@@ -75,11 +85,29 @@
 
   onMount(async () => {
     try {
-      [stats, checks, recentRuns] = await Promise.all([
+      // Load saved widget preferences
+      try {
+        const savedWidgets = localStorage.getItem("pies_dashboard_widgets");
+        if (savedWidgets) {
+          const parsed = JSON.parse(savedWidgets);
+          if (parsed.showStats !== undefined) showStatsWidget = parsed.showStats;
+          if (parsed.showHealth !== undefined) showHealthWidget = parsed.showHealth;
+          if (parsed.showAppleMusic !== undefined) showAppleMusicWidget = parsed.showAppleMusic;
+          if (parsed.showPlaylists !== undefined) showPlaylistsWidget = parsed.showPlaylists;
+          if (parsed.showActivity !== undefined) showActivityWidget = parsed.showActivity;
+        }
+      } catch {}
+
+      const [s, c, r, ih] = await Promise.all([
         api.stats(),
         api.diagnostics(),
         api.syncHistory(undefined, 10),
+        api.getIntegrationsHealth(),
       ]);
+      stats = s;
+      checks = c;
+      recentRuns = r;
+      integrationsHealth = ih;
     } catch (e) {
       error = String(e);
     } finally {
@@ -88,6 +116,21 @@
     pollWrapper();
     pollTimer = setInterval(pollWrapper, 2000);
   });
+
+  function saveWidgetPreferences() {
+    try {
+      localStorage.setItem(
+        "pies_dashboard_widgets",
+        JSON.stringify({
+          showStats: showStatsWidget,
+          showHealth: showHealthWidget,
+          showAppleMusic: showAppleMusicWidget,
+          showPlaylists: showPlaylistsWidget,
+          showActivity: showActivityWidget,
+        }),
+      );
+    } catch {}
+  }
 
   onDestroy(() => {
     if (pollTimer) clearInterval(pollTimer);
@@ -119,12 +162,53 @@
   <div aria-hidden="true" class="pointer-events-none absolute inset-x-0 top-0 h-52"
     style="background:linear-gradient(180deg,transparent 60%,var(--bg) 100%);"></div>
   <div class="relative p-6 pt-5 max-w-3xl">
-    <div class="mb-6">
-      <div class="text-[#5eead4] text-[10px] font-bold tracking-[0.18em] uppercase mb-1.5">Overview</div>
-      <h1 class="text-white text-3xl font-extrabold tracking-tight leading-none"
-        style="background:linear-gradient(135deg,#fff 0%,#a7f3d0 50%,#fde68a 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Dashboard</h1>
-      <p class="text-zinc-400 text-xs mt-2">Your local archive at a glance</p>
+    <div class="mb-6 flex items-start justify-between">
+      <div>
+        <div class="text-[#5eead4] text-[10px] font-bold tracking-[0.18em] uppercase mb-1.5">Overview</div>
+        <h1 class="text-white text-3xl font-extrabold tracking-tight leading-none"
+          style="background:linear-gradient(135deg,#fff 0%,#a7f3d0 50%,#fde68a 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;">Dashboard</h1>
+        <p class="text-zinc-400 text-xs mt-2">Your local archive & connected ecosystem at a glance</p>
+      </div>
+
+      <button
+        onclick={() => (showCustomizer = !showCustomizer)}
+        class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-zinc-800 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 transition-colors flex items-center gap-1.5"
+      >
+        <span>⚙️</span> Customize Widgets
+      </button>
     </div>
+
+    <!-- Widget Visibility Customizer Dropdown -->
+    {#if showCustomizer}
+      <div class="mb-6 p-4 rounded-xl border border-zinc-800 bg-[#141210] space-y-3 animate-fadeIn">
+        <div class="text-xs font-bold text-white flex items-center justify-between">
+          <span>Customize Dashboard Widgets</span>
+          <span class="text-[10px] font-normal text-zinc-500">Changes saved automatically</span>
+        </div>
+        <div class="grid grid-cols-2 gap-2.5 text-xs text-zinc-300">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={showStatsWidget} onchange={saveWidgetPreferences} class="accent-amber-500 rounded" />
+            <span>Library Stats Overview</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={showHealthWidget} onchange={saveWidgetPreferences} class="accent-amber-500 rounded" />
+            <span>Integration Health Status</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={showAppleMusicWidget} onchange={saveWidgetPreferences} class="accent-amber-500 rounded" />
+            <span>Apple Music Session</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={showPlaylistsWidget} onchange={saveWidgetPreferences} class="accent-amber-500 rounded" />
+            <span>Tracked Playlists</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={showActivityWidget} onchange={saveWidgetPreferences} class="accent-amber-500 rounded" />
+            <span>Recent Sync Activity</span>
+          </label>
+        </div>
+      </div>
+    {/if}
 
   {#if loading}
     <div class="flex flex-col gap-4">
@@ -135,6 +219,69 @@
   {:else if error}
     <div class="bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3 text-red-400 text-sm">{error}</div>
   {:else if stats}
+
+    <!-- Live Integration Health Card -->
+    {#if showHealthWidget && integrationsHealth}
+      <div class="border border-[rgba(255,255,255,0.08)] rounded-xl overflow-hidden mb-6 bg-[#12100e]">
+        <div class="px-4 py-2.5 bg-[#171412] border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
+          <span class="text-zinc-300 text-xs uppercase tracking-widest font-semibold flex items-center gap-1.5">
+            <span>🔌</span> Integration Health & Ecosystem
+          </span>
+          {#if onopenSettings}
+            <button onclick={onopenSettings} class="text-[11px] text-amber-400 hover:underline">
+              Configure Settings &rarr;
+            </button>
+          {/if}
+        </div>
+
+        <div class="p-4 grid grid-cols-5 gap-3">
+          <!-- Gemini AI -->
+          <div class="p-3 rounded-lg bg-black/30 border border-zinc-800/80 flex flex-col items-center text-center space-y-1.5">
+            <span class="text-lg">✨</span>
+            <div class="text-xs font-semibold text-white">Gemini AI</div>
+            <span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider {integrationsHealth.gemini ? 'bg-green-950/60 text-green-400 border border-green-500/30' : 'bg-zinc-800 text-zinc-500'}">
+              {integrationsHealth.gemini ? "Connected" : "Unset"}
+            </span>
+          </div>
+
+          <!-- Last.fm -->
+          <div class="p-3 rounded-lg bg-black/30 border border-zinc-800/80 flex flex-col items-center text-center space-y-1.5">
+            <span class="text-lg">📻</span>
+            <div class="text-xs font-semibold text-white">Last.fm</div>
+            <span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider {integrationsHealth.lastfm ? 'bg-green-950/60 text-green-400 border border-green-500/30' : 'bg-zinc-800 text-zinc-500'}">
+              {integrationsHealth.lastfm ? "Connected" : "Unset"}
+            </span>
+          </div>
+
+          <!-- Jellyfin -->
+          <div class="p-3 rounded-lg bg-black/30 border border-zinc-800/80 flex flex-col items-center text-center space-y-1.5">
+            <span class="text-lg">🍇</span>
+            <div class="text-xs font-semibold text-white">Jellyfin</div>
+            <span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider {integrationsHealth.jellyfin ? 'bg-green-950/60 text-green-400 border border-green-500/30' : 'bg-zinc-800 text-zinc-500'}">
+              {integrationsHealth.jellyfin ? "Active" : "Disabled"}
+            </span>
+          </div>
+
+          <!-- Navidrome -->
+          <div class="p-3 rounded-lg bg-black/30 border border-zinc-800/80 flex flex-col items-center text-center space-y-1.5">
+            <span class="text-lg">🚢</span>
+            <div class="text-xs font-semibold text-white">Navidrome</div>
+            <span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider {integrationsHealth.navidrome ? 'bg-green-950/60 text-green-400 border border-green-500/30' : 'bg-zinc-800 text-zinc-500'}">
+              {integrationsHealth.navidrome ? "Active" : "Disabled"}
+            </span>
+          </div>
+
+          <!-- Strawberry -->
+          <div class="p-3 rounded-lg bg-black/30 border border-zinc-800/80 flex flex-col items-center text-center space-y-1.5">
+            <span class="text-lg">🍓</span>
+            <div class="text-xs font-semibold text-white">Strawberry</div>
+            <span class="px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider {integrationsHealth.strawberry ? 'bg-green-950/60 text-green-400 border border-green-500/30' : 'bg-zinc-800 text-zinc-500'}">
+              {integrationsHealth.strawberry ? "Detected" : "Not Found"}
+            </span>
+          </div>
+        </div>
+      </div>
+    {/if}
 
     <!-- Health banner -->
     <div class="rounded-xl px-4 py-3 mb-6 flex items-center justify-between border

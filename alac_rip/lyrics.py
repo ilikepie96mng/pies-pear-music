@@ -20,12 +20,20 @@ def fetch_lrclib_lyrics(
     timeout: float = 10.0,
 ) -> Optional[dict]:
     """
-    Fetch lyrics from LRCLIB API.
+    Fetch lyrics from LRCLIB API with a 3-tier fallback strategy:
+    1. Strict /api/get with track, artist, album, duration
+    2. Relaxed /api/get without album/duration
+    3. Search /api/search?q={artist} {title}
     Returns a dict with 'syncedLyrics', 'plainLyrics', etc., or None if not found/error.
     """
     if not track_title or not artist_name:
         return None
 
+    headers = {
+        "User-Agent": "Pies-ALAC-Rip-Tool/1.0 (https://github.com/ilikepie96mng/pies-alac-rip-tool)",
+    }
+
+    # Step 1: Strict query
     params: dict[str, str | int] = {
         "track_name": track_title.strip()[:200],
         "artist_name": artist_name.strip()[:200],
@@ -35,33 +43,52 @@ def fetch_lrclib_lyrics(
     if duration_seconds and duration_seconds > 0:
         params["duration"] = int(round(duration_seconds))
 
-    headers = {
-        "User-Agent": "Pies-ALAC-Rip-Tool/1.0 (https://github.com/ilikepie96mng/pies-alac-rip-tool)",
-    }
-
     try:
         resp = requests.get(LRCLIB_API_URL, params=params, headers=headers, timeout=timeout, allow_redirects=False)
         if resp.status_code == 200:
-            if len(resp.content) > _MAX_LYRICS_BYTES:
-                return None
-            data = resp.json()
-            if isinstance(data, dict):
-                return data
-        elif resp.status_code == 404:
-            # Try without album name or duration if specific match failed
-            if album_name:
-                params.pop("album_name", None)
-                fallback_resp = requests.get(LRCLIB_API_URL, params=params, headers=headers, timeout=timeout, allow_redirects=False)
-                if fallback_resp.status_code == 200:
-                    if len(fallback_resp.content) > _MAX_LYRICS_BYTES:
-                        return None
-                    data = fallback_resp.json()
+            if len(resp.content) <= _MAX_LYRICS_BYTES:
+                data = resp.json()
+                if isinstance(data, dict):
+                    return data
+    except Exception as e:
+        logger.debug(f"LRCLIB step 1 failed: {e}")
+
+    # Step 2: Relaxed query without album / duration
+    if album_name or duration_seconds:
+        try:
+            relaxed_params = {
+                "track_name": track_title.strip()[:200],
+                "artist_name": artist_name.strip()[:200],
+            }
+            resp = requests.get(LRCLIB_API_URL, params=relaxed_params, headers=headers, timeout=timeout, allow_redirects=False)
+            if resp.status_code == 200:
+                if len(resp.content) <= _MAX_LYRICS_BYTES:
+                    data = resp.json()
                     if isinstance(data, dict):
                         return data
-        else:
-            logger.debug(f"LRCLIB returned status {resp.status_code} for {track_title} - {artist_name}")
+        except Exception as e:
+            logger.debug(f"LRCLIB step 2 failed: {e}")
+
+    # Step 3: Full search fallback
+    try:
+        search_query = f"{artist_name.strip()} {track_title.strip()}"[:200]
+        search_url = "https://lrclib.net/api/search"
+        resp = requests.get(search_url, params={"q": search_query}, headers=headers, timeout=timeout, allow_redirects=False)
+        if resp.status_code == 200:
+            if len(resp.content) <= _MAX_LYRICS_BYTES:
+                results = resp.json()
+                if isinstance(results, list) and results:
+                    # Prefer item with syncedLyrics, else plainLyrics
+                    for item in results:
+                        if isinstance(item, dict) and item.get("syncedLyrics"):
+                            return item
+                    for item in results:
+                        if isinstance(item, dict) and item.get("plainLyrics"):
+                            return item
+                    if isinstance(results[0], dict):
+                        return results[0]
     except Exception as e:
-        logger.debug(f"LRCLIB request failed: {e}")
+        logger.debug(f"LRCLIB step 3 search failed: {e}")
 
     return None
 

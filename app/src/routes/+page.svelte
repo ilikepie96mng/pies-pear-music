@@ -14,16 +14,19 @@
   import StreamingGraveyard from "$lib/StreamingGraveyard.svelte";
   import Library from "$lib/Library.svelte";
   import GeminiCurator from "$lib/GeminiCurator.svelte";
+  import PlaylistCreator from "$lib/PlaylistCreator.svelte";
+  import PlaylistImportModal from "$lib/PlaylistImportModal.svelte";
   import PlayerBar from "$lib/PlayerBar.svelte";
   import { api, type Playlist } from "../api";
 
-  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data" | "graveyard" | "library" | "gemini";
+  type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data" | "graveyard" | "library" | "gemini" | "creator" | "import";
 
   let view = $state<View>("home");
   let playlists = $state<Playlist[]>([]);
   let selectedName = $state<string | null>(null);
   let syncingPlaylist = $state<string | null>(null);
   let dashboardKey = $state(0);
+  let showImportModal = $state(false);
 
   let selectedPlaylist = $derived(playlists.find(p => p.name === selectedName) ?? null);
 
@@ -89,6 +92,8 @@
     onopenHome={() => (view = "home")}
     onopenLibrary={() => (view = "library")}
     onopenGemini={() => (view = "gemini")}
+    onopenCreator={() => (view = "creator")}
+    onopenImport={() => (showImportModal = true)}
     onopenDashboard={() => (view = "dashboard")}
     onopenDownload={() => (view = "download")}
     onopenGraveyard={() => (view = "graveyard")}
@@ -120,12 +125,22 @@
         />
       {:else if view === "gemini"}
         <GeminiCurator />
+      {:else if view === "creator"}
+        <PlaylistCreator
+          onplaylistSaved={(pl) => {
+            onPlaylistAdded(pl);
+            selectedName = pl.name;
+            view = "playlist";
+          }}
+          onopenDownload={() => (view = "download")}
+        />
       {:else if view === "dashboard"}
         {#key dashboardKey}
           <Dashboard
             onstartSync={startSync}
             onselectPlaylist={selectPlaylist}
             onopenDiagnostics={() => (view = "diagnostics")}
+            onopenSettings={() => (view = "settings")}
           />
         {/key}
       {:else if view === "playlist" && selectedPlaylist}
@@ -155,6 +170,16 @@
       {/if}
     </div>
   </main>
+
+  {#if showImportModal}
+    <PlaylistImportModal
+      onclose={() => (showImportModal = false)}
+      onstartRip={(matches) => {
+        showImportModal = false;
+        view = "download";
+      }}
+    />
+  {/if}
 
   <PlayerBar />
 </div>

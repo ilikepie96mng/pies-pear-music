@@ -133,6 +133,31 @@ def test_export_dap_playlist_aac(music_dir, export_target_dir, state):
     assert exported_m4a.exists()
 
 
+def test_export_dap_playlist_original(music_dir, export_target_dir, state):
+    track1_path = music_dir / "artists" / "Queen" / "Opera" / "01 - Bohemian Rhapsody.flac"
+    create_flac_track(track1_path, "Bohemian Rhapsody", "Queen", "Opera", 1, lrc="[00:01.00] Mama")
+
+    state.add_track(Track("t1", "Bohemian Rhapsody", "Queen", "Opera", str(track1_path), datetime.now().isoformat()))
+    state.add_playlist("Lossless Playlist", "https://music.apple.com/us/playlist/lossless/pl.789")
+    state.add_track_to_playlist("Lossless Playlist", "t1")
+
+    result = export_dap_playlist(
+        music_dir=music_dir,
+        playlist_name="Lossless Playlist",
+        target_dir=export_target_dir,
+        format="original",
+        state=state,
+    )
+
+    assert result["status"] == "ok"
+    assert result["exported_count"] == 1
+    exported_flac = export_target_dir / "Lossless Playlist" / "01 - Bohemian Rhapsody.flac"
+    assert exported_flac.exists()
+    exported_lrc = export_target_dir / "Lossless Playlist" / "01 - Bohemian Rhapsody.lrc"
+    assert exported_lrc.exists()
+    assert exported_lrc.read_text(encoding="utf-8") == "[00:01.00] Mama"
+
+
 def test_export_dap_playlist_invalid_format(music_dir, export_target_dir, state):
     with pytest.raises(DapExportError) as exc_info:
         export_dap_playlist(

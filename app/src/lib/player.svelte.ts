@@ -1,3 +1,5 @@
+import { api } from "../api";
+
 export interface CurrentTrack {
   track_id: string;
   title: string;
@@ -64,7 +66,11 @@ class PlayerStore {
     if (!this.audioElement) return;
 
     this.currentTrack = track;
-    this.audioElement.src = `http://127.0.0.1:8000/api/v1/stream/${encodeURIComponent(track.track_id)}`;
+    try {
+      this.audioElement.src = await api.getStreamUrl(track.track_id);
+    } catch {
+      this.audioElement.src = `http://127.0.0.1:8000/api/v1/stream/${encodeURIComponent(track.track_id)}`;
+    }
     this.audioElement.volume = this.isMuted ? 0 : this.volume;
 
     // Update Media Session

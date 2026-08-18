@@ -23,6 +23,41 @@
   // Modals
   let showDapModal = $state(false);
   let activeLyricsTrack = $state<Track | null>(null);
+  let showDuplicatesModal = $state(false);
+  let duplicatesList = $state<any[]>([]);
+  let checkingDuplicates = $state(false);
+  let deduplicating = $state(false);
+  let deduplicateMsg = $state<string | null>(null);
+
+  async function checkDuplicates() {
+    checkingDuplicates = true;
+    try {
+      const res = await api.getPlaylistDuplicates(playlist.name);
+      duplicatesList = res.duplicates || [];
+      showDuplicatesModal = true;
+      deduplicateMsg = null;
+    } catch (e) {
+      console.error("Failed to check duplicates:", e);
+    } finally {
+      checkingDuplicates = false;
+    }
+  }
+
+  async function handleDeduplicate() {
+    deduplicating = true;
+    try {
+      const res = await api.deduplicatePlaylist(playlist.name);
+      deduplicateMsg = `Successfully removed ${res.removed_count} duplicate track(s).`;
+      await loadTracks();
+      setTimeout(() => {
+        showDuplicatesModal = false;
+      }, 1500);
+    } catch (e) {
+      deduplicateMsg = `Failed to deduplicate: ${e}`;
+    } finally {
+      deduplicating = false;
+    }
+  }
 
   // Rename
   let editing = $state(false);
@@ -322,6 +357,10 @@
                 : 'background:#1a1a1a;color:var(--text-secondary);border:1px solid #2a2a2a;'}">
             {playlist.paused ? "▶ Resume" : "⏸ Pause"}
           </button>
+          <button onclick={checkDuplicates} disabled={checkingDuplicates} title="Check for duplicate tracks in this playlist"
+            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(252,211,77,0.08);color:var(--accent);border:1px solid rgba(252,211,77,0.2);cursor:pointer;opacity:{checkingDuplicates?'.5':'1'};">
+            {checkingDuplicates ? "…" : "🔍 Check Duplicates"}
+          </button>
           <button onclick={() => (showDapModal = true)} title="Export and transcode playlist to DAP or portable player"
             style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(252,211,77,0.12);color:var(--accent);border:1px solid rgba(252,211,77,0.25);cursor:pointer;">
             📱 Export to DAP
@@ -470,4 +509,88 @@
     track={activeLyricsTrack}
     onclose={() => (activeLyricsTrack = null)}
   />
+{/if}
+
+{#if showDuplicatesModal}
+  <div
+    class="fixed inset-0 z-50 flex items-center justify-center p-4"
+    style="background:rgba(0,0,0,0.8);backdrop-filter:blur(8px);"
+    role="dialog"
+    aria-modal="true"
+  >
+    <div
+      class="w-full max-w-lg rounded-2xl border p-6 shadow-2xl space-y-4"
+      style="background:#121016;border-color:var(--border);color:var(--text-primary);"
+    >
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <span>🔍 Playlist Duplicate Check</span>
+        </h3>
+        <button
+          onclick={() => (showDuplicatesModal = false)}
+          class="text-zinc-400 hover:text-white text-sm"
+        >
+          ✕
+        </button>
+      </div>
+
+      {#if duplicatesList.length === 0}
+        <div class="py-6 text-center text-zinc-400 space-y-2">
+          <div class="text-2xl">✨</div>
+          <div class="font-semibold text-white">No duplicates found!</div>
+          <div class="text-xs text-zinc-500">Every track in &ldquo;{playlist.name}&rdquo; is unique.</div>
+        </div>
+        <div class="flex justify-end pt-2">
+          <button
+            onclick={() => (showDuplicatesModal = false)}
+            class="px-4 py-2 rounded-lg text-xs font-semibold bg-zinc-800 text-white hover:bg-zinc-700"
+          >
+            Close
+          </button>
+        </div>
+      {:else}
+        <div class="space-y-3">
+          <p class="text-xs text-zinc-300">
+            Found <span class="text-amber-400 font-bold">{duplicatesList.length}</span> duplicate track groups in this playlist:
+          </p>
+
+          <div class="max-h-56 overflow-y-auto space-y-2 pr-1">
+            {#each duplicatesList as dup}
+              <div class="p-3 rounded-lg bg-black/40 border border-zinc-800 flex items-center justify-between">
+                <div class="min-w-0 flex-1">
+                  <div class="text-xs font-semibold text-white truncate">{dup.title}</div>
+                  <div class="text-[11px] text-zinc-400 truncate">{dup.artist} &middot; {dup.album}</div>
+                </div>
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  {dup.count} copies
+                </span>
+              </div>
+            {/each}
+          </div>
+
+          {#if deduplicateMsg}
+            <div class="p-2.5 rounded-lg text-xs bg-green-950/40 border border-green-500/30 text-green-400">
+              {deduplicateMsg}
+            </div>
+          {/if}
+
+          <div class="flex items-center justify-end gap-3 pt-3 border-t border-zinc-800">
+            <button
+              onclick={() => (showDuplicatesModal = false)}
+              class="px-4 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-white bg-transparent"
+            >
+              Keep All
+            </button>
+            <button
+              onclick={handleDeduplicate}
+              disabled={deduplicating}
+              class="px-4 py-2 rounded-lg text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-black shadow-lg"
+            >
+              {deduplicating ? "Removing…" : "Remove Duplicates (Keep First)"}
+            </button>
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
 {/if}

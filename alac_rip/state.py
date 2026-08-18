@@ -241,6 +241,57 @@ class StateManager:
             ).fetchall()
             return [Track(*r) for r in rows]
 
+    def get_duplicate_tracks_in_playlist(self, playlist_name: str) -> list[dict]:
+        """Find tracks with identical title and artist in the given playlist."""
+        tracks = self.get_playlist_tracks(playlist_name)
+        seen: dict[tuple[str, str], list[Track]] = {}
+        for t in tracks:
+            key = (t.title.strip().lower(), t.artist.strip().lower())
+            seen.setdefault(key, []).append(t)
+        duplicates: list[dict] = []
+        for key, track_list in seen.items():
+            if len(track_list) > 1:
+                duplicates.append({
+                    "title": track_list[0].title,
+                    "artist": track_list[0].artist,
+                    "album": track_list[0].album,
+                    "count": len(track_list),
+                    "track_ids": [t.track_id for t in track_list],
+                    "tracks": [
+                        {
+                            "track_id": t.track_id,
+                            "title": t.title,
+                            "artist": t.artist,
+                            "album": t.album,
+                            "local_path": t.local_path,
+                            "artwork_url": t.artwork_url,
+                        }
+                        for t in track_list
+                    ],
+                })
+        return duplicates
+
+    def deduplicate_playlist(self, playlist_name: str) -> dict:
+        """Remove duplicate tracks (matching title and artist) preserving the first occurrence."""
+        duplicates = self.get_duplicate_tracks_in_playlist(playlist_name)
+        removed_track_ids: list[str] = []
+        with self._conn() as conn:
+            for item in duplicates:
+                # Keep first track_id, delete remaining
+                for duplicate_id in item["track_ids"][1:]:
+                    conn.execute(
+                        "DELETE FROM playlist_tracks WHERE playlist_name = ? AND track_id = ?",
+                        (playlist_name, duplicate_id),
+                    )
+                    removed_track_ids.append(duplicate_id)
+        return {
+            "status": "ok",
+            "playlist_name": playlist_name,
+            "duplicates_found": len(duplicates),
+            "removed_count": len(removed_track_ids),
+            "removed_track_ids": removed_track_ids,
+        }
+
     def has_track_path(self, path: Path) -> bool:
         """Return whether *path* belongs to a track recorded by this library."""
         target = path.resolve()

@@ -159,7 +159,9 @@
       title: "AI & External Intelligence",
       fields: [
         { key: "gemini_api_key", label: "Google Gemini API Key", hint: "Used for Gemini AI Curator intelligent playlist generation (stored mode 0600).", type: "password" },
-        { key: "lastfm_api_key", label: "Last.fm API Key", hint: "Used for artist recommendations on the Home screen.", type: "password" },
+        { key: "lastfm_api_key", label: "Last.fm API Key", hint: "Used for artist recommendations and music intelligence.", type: "password" },
+        { key: "lastfm_shared_secret", label: "Last.fm Shared Secret", hint: "Optional shared secret for authenticated Last.fm sessions (stored mode 0600).", type: "password" },
+        { key: "lastfm_username", label: "Last.fm Username", hint: "Your Last.fm user profile name for customized taste profiles.", type: "text" },
       ],
     },
   ];
@@ -310,10 +312,16 @@
         <span class="text-zinc-200 text-sm font-semibold">{section.title}</span>
         <div class="flex flex-col gap-3 border rounded-xl overflow-hidden" style="border-color:var(--border);background:var(--surface);">
           {#each section.fields as field, fi}
+            {@const isConfigured = Boolean(cfg[`${field.key}_configured`] || (cfg[field.key] && cfg[field.key] !== ""))}
             <div class="px-4 {fi > 0 ? 'pt-3 border-t border-[rgba(255,255,255,0.06)]' : 'pt-4'} pb-3">
               <div class="flex items-center justify-between mb-1.5">
-                <label class="text-zinc-400 text-[10px] uppercase tracking-widest font-semibold" for={field.key}>
-                  {field.label}
+                <label class="text-zinc-400 text-[10px] uppercase tracking-widest font-semibold flex items-center gap-2" for={field.key}>
+                  <span>{field.label}</span>
+                  {#if field.type === "password" && isConfigured}
+                    <span class="px-1.5 py-0.2 rounded text-[9px] font-bold bg-green-950/60 text-green-400 border border-green-500/30 normal-case tracking-normal">
+                      ✓ Stored Securely
+                    </span>
+                  {/if}
                 </label>
                 {#if REQUIRED.has(field.key) && isEmpty(field.key)}
                   <span class="text-amber-500 text-[9px] uppercase tracking-wider font-semibold">required</span>
@@ -323,6 +331,7 @@
                 id={field.key}
                 bind:value={cfg[field.key]}
                 type={field.type ?? "text"}
+                placeholder={field.type === "password" && isConfigured ? "••••••••••••••••••••••••••••••••" : ""}
                 class="w-full bg-[#0d0d0d] border rounded-lg px-3 py-2 text-white text-sm outline-none transition-colors
                   {field.mono ? 'font-mono text-xs' : ''}
                   {isEmpty(field.key) && REQUIRED.has(field.key)
