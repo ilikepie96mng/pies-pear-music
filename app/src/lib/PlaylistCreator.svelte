@@ -415,8 +415,11 @@
           {#each filteredTracks() as track (track.track_id)}
             {@const isSelected = selectedCatalogItems.has(track.track_id)}
             <div
+              role="button"
+              tabindex="0"
               class="group flex items-center justify-between p-2 rounded-lg border transition-all cursor-pointer {isSelected ? 'bg-amber-950/20 border-amber-500/40' : 'bg-black/20 border-zinc-800/60 hover:border-zinc-700'}"
               onclick={() => toggleItemSelection(track.track_id)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleItemSelection(track.track_id); } }}
             >
               <div class="flex items-center gap-3 min-w-0 flex-1">
                 <input
@@ -460,8 +463,11 @@
             {@const id = `${album.artist} — ${album.album}`}
             {@const isSelected = selectedCatalogItems.has(id)}
             <div
+              role="button"
+              tabindex="0"
               class="group flex items-center justify-between p-2.5 rounded-lg border transition-all cursor-pointer {isSelected ? 'bg-amber-950/20 border-amber-500/40' : 'bg-black/20 border-zinc-800/60 hover:border-zinc-700'}"
               onclick={() => toggleItemSelection(id)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleItemSelection(id); } }}
             >
               <div class="flex items-center gap-3 min-w-0 flex-1">
                 <input
@@ -500,8 +506,11 @@
           {#each artistGroups() as artist}
             {@const isSelected = selectedCatalogItems.has(artist.artist)}
             <div
+              role="button"
+              tabindex="0"
               class="group flex items-center justify-between p-2.5 rounded-lg border transition-all cursor-pointer {isSelected ? 'bg-amber-950/20 border-amber-500/40' : 'bg-black/20 border-zinc-800/60 hover:border-zinc-700'}"
               onclick={() => toggleItemSelection(artist.artist)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleItemSelection(artist.artist); } }}
             >
               <div class="flex items-center gap-3 min-w-0 flex-1">
                 <input
@@ -533,8 +542,11 @@
             {@const count = (playlistTrackMap[pl.name] || []).length}
             {@const isSelected = selectedCatalogItems.has(pl.name)}
             <div
+              role="button"
+              tabindex="0"
               class="group flex items-center justify-between p-2.5 rounded-lg border transition-all cursor-pointer {isSelected ? 'bg-amber-950/20 border-amber-500/40' : 'bg-black/20 border-zinc-800/60 hover:border-zinc-700'}"
               onclick={() => toggleItemSelection(pl.name)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleItemSelection(pl.name); } }}
             >
               <div class="flex items-center gap-3 min-w-0 flex-1">
                 <input
@@ -549,7 +561,7 @@
                 </div>
                 <div class="min-w-0 flex-1">
                   <div class="text-xs font-semibold text-white truncate">{pl.name}</div>
-                  <div class="text-[11px] text-zinc-400 truncate">{count} tracks downloaded</div>
+                  <div class="text-[11px] text-zinc-400 truncate">{count} tracks &middot; Library playlist</div>
                 </div>
               </div>
               <button
@@ -557,7 +569,7 @@
                 onclick={(e) => { e.stopPropagation(); stagedTracks = [...stagedTracks, ...(playlistTrackMap[pl.name] || [])]; }}
                 class="px-2.5 py-1 rounded text-[11px] font-semibold bg-zinc-800 hover:bg-amber-500 hover:text-black text-zinc-300 opacity-0 group-hover:opacity-100 transition-all"
               >
-                + Add Playlist ({count})
+                + Merge All ({count})
               </button>
             </div>
           {/each}
