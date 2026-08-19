@@ -2363,15 +2363,28 @@ def post_gemini_download_tracks(req: GeminiDownloadTracksRequest):
         if not url and tid and not tid.startswith("ai-"):
             url = f"https://music.apple.com/us/song/{tid}"
 
-        # If still no URL, search catalog on-the-fly using artist + title
+        # If still no URL, search catalog on-the-fly using smart query cascade
         if not url and bearer:
-            title = t.get("title") or ""
-            artist = t.get("artist") or ""
-            if title and artist:
+            title = (t.get("title") or "").strip()
+            artist = (t.get("artist") or "").strip()
+            album = (t.get("album") or "").strip()
+
+            search_queries = []
+            if artist and title:
+                # Clean featured artists / collabs (e.g. "A & B", "A ft. B", "A feat. B")
+                clean_artist = re.split(r"\s+(?:ft\.?|feat\.?|&|x|,)\s+", artist, flags=re.IGNORECASE)[0].strip()
+                search_queries.append(f"{artist} {title}")
+                if clean_artist != artist:
+                    search_queries.append(f"{clean_artist} {title}")
+            if title:
+                search_queries.append(title)
+
+            for query in search_queries:
                 try:
-                    matches = am_api.search_apple_music_tracks(f"{artist} {title}", bearer, limit=1)
+                    matches = am_api.search_apple_music_tracks(query, bearer, limit=3)
                     if matches and matches[0].get("url"):
                         url = matches[0]["url"]
+                        break
                 except Exception:
                     pass
 
