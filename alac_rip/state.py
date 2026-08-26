@@ -115,6 +115,13 @@ class StateManager:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS waveform_cache (
+                    track_id    TEXT PRIMARY KEY,
+                    peaks_json  TEXT NOT NULL,
+                    extracted_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS recommendation_cache (
                     cache_key TEXT PRIMARY KEY,
                     payload TEXT NOT NULL,
@@ -175,6 +182,23 @@ class StateManager:
                     updated_at  TEXT NOT NULL
                 )
             """)
+
+    def auto_rebase_paths(self, current_music_dir: Path) -> int:
+        """
+        If track records point to a previous host path (e.g. kio-fuse SMB or local directory)
+        rebase their local_path to match current_music_dir.
+        """
+        music_str = str(current_music_dir.resolve())
+        updated = 0
+        with self._conn() as conn:
+            rows = conn.execute("SELECT track_id, local_path FROM tracks WHERE local_path NOT LIKE ? || '%'", (music_str,)).fetchall()
+            for tid, path_str in rows:
+                if "/artists/" in path_str:
+                    rel_part = "artists/" + path_str.split("/artists/", 1)[1]
+                    new_path = current_music_dir / rel_part
+                    conn.execute("UPDATE tracks SET local_path = ? WHERE track_id = ?", (str(new_path), tid))
+                    updated += 1
+        return updated
 
     def create_smart_playlist(self, name: str, description: Optional[str], rules_json: str) -> dict:
         now = datetime.now().isoformat()

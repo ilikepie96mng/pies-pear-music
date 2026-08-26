@@ -508,6 +508,10 @@ async def lifespan(app: FastAPI):
     cfg = load_config(DEFAULT_CONFIG_PATH)
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     state = StateManager(cfg.state_dir / "downloaded.db")
+    try:
+        state.auto_rebase_paths(cfg.music_dir)
+    except Exception:
+        pass
     threading.Thread(target=attempt_auto_login, daemon=True).start()
     threading.Thread(target=_queue_worker, daemon=True).start()
 
