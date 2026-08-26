@@ -510,9 +510,18 @@ def _run_scheduled_sync() -> str:
                 {"name": "Playlists Updated", "value": str(len(res.playlists_updated))},
             ],
         )
-        return f"Synced {res.tracks_moved} tracks, updated {len(res.playlists_updated)} playlists"
     except Exception as e:
         return f"Sync failed: {e}"
+
+
+def resolve_db_path(state_dir: Path) -> Path:
+    if (state_dir / "downloaded.db").exists():
+        return state_dir / "downloaded.db"
+    if (state_dir / ".state" / "downloaded.db").exists():
+        return state_dir / ".state" / "downloaded.db"
+    if state_dir.parent.exists() and (state_dir.parent / "downloaded.db").exists():
+        return state_dir.parent / "downloaded.db"
+    return state_dir / "downloaded.db"
 
 
 @asynccontextmanager
@@ -520,7 +529,7 @@ async def lifespan(app: FastAPI):
     global cfg, state, sync_scheduler
     cfg = load_config(DEFAULT_CONFIG_PATH)
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
-    state = StateManager(cfg.state_dir / "downloaded.db")
+    state = StateManager(resolve_db_path(cfg.state_dir))
     try:
         state.auto_rebase_paths(cfg.music_dir)
     except Exception:
@@ -2336,8 +2345,14 @@ def update_config(body: ConfigUpdate):
 
     current.update(updates)
     save_config_file(DEFAULT_CONFIG_PATH, current)
-    global cfg
+    global cfg, state
     cfg = load_config(DEFAULT_CONFIG_PATH)
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    state = StateManager(resolve_db_path(cfg.state_dir))
+    try:
+        state.auto_rebase_paths(cfg.music_dir)
+    except Exception:
+        pass
 
     # Sync running scheduler dynamically
     if "scheduler" in updates and sync_scheduler:

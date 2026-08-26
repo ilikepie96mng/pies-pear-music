@@ -367,9 +367,9 @@
   }
   function applyServerDefaults() {
     cfg.music_dir = "/music";
-    cfg.state_dir = "/config/.state";
+    cfg.state_dir = "/config";
     cfg.alac_rip_dir = "/app";
-    appearanceMessage = "Applied standard Docker container paths (/music, /config/.state, /app). Click Save to apply!";
+    appearanceMessage = "Applied standard Docker container paths (/music, /config, /app). Click Save to apply!";
   }
 </script>
 
