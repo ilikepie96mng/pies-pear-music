@@ -404,6 +404,16 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
             native_bin = candidate
 
     if native_bin.exists() and (not shutil.which("podman") or os.environ.get("PIES_NATIVE_WRAPPER") or os.environ.get("PIES_HEADLESS")):
+        dev_dir = native_bin.parent / "rootfs" / "dev"
+        if dev_dir.exists():
+            try:
+                urandom_path = dev_dir / "urandom"
+                subprocess.run(["rm", "-f", str(urandom_path)], capture_output=True)
+                subprocess.run(["touch", str(urandom_path)], capture_output=True)
+                subprocess.run(["mount", "--bind", "/dev/urandom", str(urandom_path)], capture_output=True)
+            except Exception:
+                pass
+
         if email and password:
             cmd = [str(native_bin), "-L", f"{email}:{password}"]
         else:
