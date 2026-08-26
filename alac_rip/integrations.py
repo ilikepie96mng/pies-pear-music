@@ -60,29 +60,31 @@ def test_jellyfin_connection(server_url: str, api_key: str, timeout: float = 5.0
     if not api_key:
         return False, "Jellyfin API key is empty"
 
-    url = clean_url + "/System/Info"
     headers = {
         "X-Emby-Token": api_key,
+        "Authorization": f'MediaBrowser Client="PiesPearMusic", Device="Desktop", DeviceId="pies-pear-music", Version="1.0.0", Token="{api_key}"',
         "Accept": "application/json",
     }
-    try:
-        resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=False)
-        if resp.status_code == 200:
-            data = resp.json()
-            server_name = data.get("ServerName", "Jellyfin")
-            version = data.get("Version", "")
-            return True, f"Connected to {server_name} ({version})"
-        elif resp.status_code in (401, 403):
-            return False, "Authentication failed - invalid API key"
-        elif 300 <= resp.status_code < 400:
-            return False, f"Server returned redirect ({resp.status_code}); redirects are disabled for security"
-        else:
-            return False, f"Server returned HTTP {resp.status_code}"
-    except requests.Timeout:
-        return False, "Connection timed out"
-    except Exception as e:
-        logger.debug(f"Jellyfin connection check failed: {type(e).__name__}")
-        return False, "Failed to connect to Jellyfin server"
+    for endpoint in ("/System/Info", "/System/Info/Public"):
+        url = clean_url + endpoint
+        try:
+            resp = requests.get(url, headers=headers, params={"api_key": api_key}, timeout=timeout, allow_redirects=False)
+            if resp.status_code == 200:
+                data = resp.json()
+                server_name = data.get("ServerName", "Jellyfin")
+                version = data.get("Version", "")
+                return True, f"Connected to {server_name} ({version})"
+            elif resp.status_code in (401, 403):
+                return False, "Authentication failed - invalid API key"
+            elif 300 <= resp.status_code < 400:
+                return False, f"Server returned redirect ({resp.status_code}); redirects are disabled for security"
+        except requests.Timeout:
+            return False, "Connection timed out"
+        except Exception as e:
+            logger.debug(f"Jellyfin check on {endpoint} failed: {e}")
+            continue
+
+    return False, "Failed to connect to Jellyfin server"
 
 
 def trigger_jellyfin_refresh(server_url: str, api_key: str, timeout: float = 10.0) -> tuple[bool, str]:
@@ -98,10 +100,11 @@ def trigger_jellyfin_refresh(server_url: str, api_key: str, timeout: float = 10.
     url = clean_url + "/Library/Refresh"
     headers = {
         "X-Emby-Token": api_key,
+        "Authorization": f'MediaBrowser Client="PiesPearMusic", Device="Desktop", DeviceId="pies-pear-music", Version="1.0.0", Token="{api_key}"',
         "Content-Type": "application/json",
     }
     try:
-        resp = requests.post(url, headers=headers, json={}, timeout=timeout, allow_redirects=False)
+        resp = requests.post(url, headers=headers, params={"api_key": api_key}, json={}, timeout=timeout, allow_redirects=False)
         if resp.status_code in (200, 204):
             return True, "Library refresh triggered successfully"
         return False, f"Library refresh failed (HTTP {resp.status_code})"
@@ -117,37 +120,45 @@ def test_navidrome_connection(server_url: str, user: str, token: str, salt: str,
     except ValueError as ve:
         return False, str(ve)
 
-    if not user or not token or not salt:
-        return False, "Navidrome user, token, or salt is missing"
+    if not user:
+        return False, "Navidrome username is missing"
+    if not token:
+        return False, "Navidrome token or password is missing"
 
-    url = clean_url + "/rest/ping.view"
     params = {
         "u": user,
-        "t": token,
-        "s": salt,
         "v": "1.16.1",
-        "c": "PiesALACRip",
+        "c": "PiesPearMusic",
         "f": "json",
     }
-    try:
-        resp = requests.get(url, params=params, timeout=timeout, allow_redirects=False)
-        if resp.status_code == 200:
-            data = resp.json()
-            sub = data.get("subsonic-response", {})
-            if sub.get("status") == "ok":
-                version = sub.get("version", "")
-                return True, f"Connected to Subsonic/Navidrome (API v{version})"
-            error_info = sub.get("error", {})
-            err_msg = error_info.get("message", "Authentication or parameter error")
-            return False, f"Subsonic error: {err_msg}"
-        elif 300 <= resp.status_code < 400:
-            return False, f"Server returned redirect ({resp.status_code}); redirects are disabled for security"
-        return False, f"Server returned HTTP {resp.status_code}"
-    except requests.Timeout:
-        return False, "Connection timed out"
-    except Exception as e:
-        logger.debug(f"Navidrome connection test failed: {type(e).__name__}")
-        return False, "Failed to connect to Navidrome server"
+    if salt:
+        params["t"] = token
+        params["s"] = salt
+    else:
+        params["p"] = token
+
+    for ep in ("/rest/ping.view", "/ping.view"):
+        url = clean_url + ep
+        try:
+            resp = requests.get(url, params=params, timeout=timeout, allow_redirects=False)
+            if resp.status_code == 200:
+                data = resp.json()
+                sub = data.get("subsonic-response", {})
+                if sub.get("status") == "ok":
+                    version = sub.get("version", "")
+                    return True, f"Connected to Subsonic/Navidrome (API v{version})"
+                error_info = sub.get("error", {})
+                err_msg = error_info.get("message", "Authentication or parameter error")
+                return False, f"Subsonic error: {err_msg}"
+            elif 300 <= resp.status_code < 400:
+                return False, f"Server returned redirect ({resp.status_code}); redirects are disabled for security"
+        except requests.Timeout:
+            return False, "Connection timed out"
+        except Exception as e:
+            logger.debug(f"Navidrome check on {ep} failed: {e}")
+            continue
+
+    return False, "Failed to connect to Navidrome server"
 
 
 def trigger_navidrome_refresh(server_url: str, user: str, token: str, salt: str, timeout: float = 10.0) -> tuple[bool, str]:
@@ -168,6 +179,7 @@ def trigger_navidrome_refresh(server_url: str, user: str, token: str, salt: str,
         "v": "1.16.1",
         "c": "PiesALACRip",
         "f": "json",
+        "fullScan": "true",
     }
     try:
         resp = requests.get(url, params=params, timeout=timeout, allow_redirects=False)
@@ -211,3 +223,162 @@ def dispatch_media_webhooks(config_dict: dict[str, Any]) -> list[dict[str, Any]]
         results.append({"service": "navidrome", "success": success, "message": msg})
 
     return results
+
+
+def send_discord_webhook(
+    webhook_url: str,
+    title: str,
+    description: str,
+    fields: Optional[list[dict[str, Any]]] = None,
+    thumbnail_url: Optional[str] = None,
+    color: int = 0x3B82F6,
+    timeout: float = 10.0,
+) -> tuple[bool, str]:
+    """Send a notification embed to a Discord webhook."""
+    try:
+        clean_url = validate_integration_url(webhook_url)
+    except ValueError as ve:
+        return False, str(ve)
+
+    embed: dict[str, Any] = {
+        "title": title,
+        "description": description,
+        "color": color,
+        "footer": {"text": "Pies Pear Music"},
+    }
+    if fields:
+        embed["fields"] = fields
+    if thumbnail_url:
+        embed["thumbnail"] = {"url": thumbnail_url}
+
+    payload = {
+        "username": "Pies Pear Music",
+        "embeds": [embed],
+    }
+
+    try:
+        resp = requests.post(clean_url, json=payload, timeout=timeout, allow_redirects=False)
+        if resp.status_code in (200, 204):
+            return True, "Discord notification sent successfully"
+        return False, f"Discord returned HTTP {resp.status_code}"
+    except Exception as e:
+        logger.error(f"Failed to send Discord webhook: {e}")
+        return False, "Error contacting Discord webhook"
+
+
+def send_telegram_notification(
+    bot_token: str,
+    chat_id: str,
+    message: str,
+    timeout: float = 10.0,
+) -> tuple[bool, str]:
+    """Send a message via Telegram Bot API."""
+    if not bot_token or not chat_id:
+        return False, "Telegram bot token or chat ID is missing"
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML",
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=timeout, allow_redirects=False)
+        if resp.status_code == 200:
+            return True, "Telegram notification sent successfully"
+        return False, f"Telegram returned HTTP {resp.status_code}"
+    except Exception as e:
+        logger.error(f"Failed to send Telegram notification: {e}")
+        return False, "Error contacting Telegram API"
+
+
+def send_gotify_notification(
+    server_url: str,
+    token: str,
+    title: str,
+    message: str,
+    priority: int = 5,
+    timeout: float = 10.0,
+) -> tuple[bool, str]:
+    """Send a push notification via Gotify."""
+    try:
+        clean_url = validate_integration_url(server_url)
+    except ValueError as ve:
+        return False, str(ve)
+
+    if not token:
+        return False, "Gotify application token is missing"
+
+    url = f"{clean_url}/message"
+    headers = {"X-Gotify-Key": token}
+    payload = {
+        "title": title,
+        "message": message,
+        "priority": priority,
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout, allow_redirects=False)
+        if resp.status_code == 200:
+            return True, "Gotify notification sent successfully"
+        return False, f"Gotify returned HTTP {resp.status_code}"
+    except Exception as e:
+        logger.error(f"Failed to send Gotify notification: {e}")
+        return False, "Error contacting Gotify server"
+
+
+def dispatch_completion_notifications(
+    config_dict: dict[str, Any],
+    event_title: str,
+    event_description: str,
+    fields: Optional[list[dict[str, Any]]] = None,
+    thumbnail_url: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """
+    Dispatch completion notifications across all enabled channels (Discord, Telegram, Gotify).
+    """
+    results = []
+    integrations = config_dict.get("integrations", {})
+
+    # Discord
+    discord = integrations.get("discord", {})
+    if discord.get("enabled") and discord.get("webhook_url"):
+        ok, msg = send_discord_webhook(
+            webhook_url=discord["webhook_url"],
+            title=event_title,
+            description=event_description,
+            fields=fields,
+            thumbnail_url=thumbnail_url,
+        )
+        results.append({"service": "discord", "success": ok, "message": msg})
+
+    # Telegram
+    telegram = integrations.get("telegram", {})
+    if telegram.get("enabled") and telegram.get("bot_token") and telegram.get("chat_id"):
+        text_content = f"<b>{event_title}</b>\n\n{event_description}"
+        if fields:
+            for f in fields:
+                text_content += f"\n• <b>{f.get('name', '')}</b>: {f.get('value', '')}"
+        ok, msg = send_telegram_notification(
+            bot_token=telegram["bot_token"],
+            chat_id=telegram["chat_id"],
+            message=text_content,
+        )
+        results.append({"service": "telegram", "success": ok, "message": msg})
+
+    # Gotify
+    gotify = integrations.get("gotify", {})
+    if gotify.get("enabled") and gotify.get("server_url") and gotify.get("token"):
+        text_content = event_description
+        if fields:
+            for f in fields:
+                text_content += f"\n• {f.get('name', '')}: {f.get('value', '')}"
+        ok, msg = send_gotify_notification(
+            server_url=gotify["server_url"],
+            token=gotify["token"],
+            title=event_title,
+            message=text_content,
+        )
+        results.append({"service": "gotify", "success": ok, "message": msg})
+
+    return results
+

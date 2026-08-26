@@ -1,0 +1,27 @@
+services:
+  pies-pear-music:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pies-pear-music:latest
+    container_name: pies-pear-music
+    restart: unless-stopped
+    ports:
+      - "10025:10025"
+    volumes:
+      - ./config:/config
+      - /tank/media/music/Apple Music:/music
+      - /tmp/pies-staging:/staging
+    environment:
+      - PIES_CONFIG_PATH=/config/config.yaml
+      - PIES_STATE_DIR=/config/.state
+      - PIES_MUSIC_DIR=/music
+      - PIES_WEB_DIR=/app/web
+      - PORT=10025
+      - HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:10025/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

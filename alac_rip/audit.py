@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from alac_rip.config import resolve_kio_fuse_path
 from alac_rip.metadata import read_tags
 from alac_rip.organizer import sanitize
 from alac_rip.state import StateManager, Track
@@ -20,6 +21,37 @@ def _is_safe_subpath(path: Path, base_dir: Path) -> bool:
         return False
 
 
+def _normalize_track_file_path(lp: str, music_dir_resolved: Path) -> Optional[Path]:
+    """Resolve a track file path across local and network mounts (KIO-Fuse, GVFS, SMB)."""
+    if not lp:
+        return None
+    p = Path(lp).expanduser()
+    p = resolve_kio_fuse_path(p)
+    try:
+        if p.is_file():
+            return p.resolve()
+    except (OSError, RuntimeError):
+        pass
+
+    # Try resolving relative to current music_dir
+    try:
+        if not p.is_absolute():
+            cand = (music_dir_resolved / p).resolve()
+            if cand.is_file():
+                return cand
+        path_str = str(p)
+        for anchor in ("/artists/", "/playlists/", "artists/", "playlists/"):
+            if anchor in path_str:
+                rel = path_str.split(anchor, 1)[1]
+                anchor_dir = anchor.strip("/")
+                cand = (music_dir_resolved / anchor_dir / rel).resolve()
+                if cand.is_file():
+                    return cand
+    except Exception:
+        pass
+    return None
+
+
 def audit_library(music_dir: Path, state: StateManager) -> dict:
     """Compare database records against filesystem state and return audit discrepancies."""
     music_dir_resolved = music_dir.expanduser().resolve()
@@ -32,23 +64,9 @@ def audit_library(music_dir: Path, state: StateManager) -> dict:
 
     for t in tracks:
         lp = t.get("local_path", "")
-        if not lp:
-            missing_files.append({
-                "track_id": t["track_id"],
-                "title": t["title"],
-                "artist": t["artist"],
-                "album": t["album"],
-                "local_path": lp,
-                "playlists": t.get("playlists", []),
-            })
-            continue
+        p = _normalize_track_file_path(lp, music_dir_resolved)
 
-        try:
-            p = Path(lp).expanduser().resolve()
-        except (OSError, RuntimeError):
-            p = None
-
-        if p is None or not p.is_file():
+        if p is None:
             missing_files.append({
                 "track_id": t["track_id"],
                 "title": t["title"],
@@ -58,6 +76,13 @@ def audit_library(music_dir: Path, state: StateManager) -> dict:
                 "playlists": t.get("playlists", []),
             })
         else:
+            # Self-healing: update database record if stored with old session mount path
+            if str(p) != lp:
+                try:
+                    state.update_track_local_path(t["track_id"], str(p))
+                except Exception:
+                    pass
+
             tracked_resolved_paths.add(p)
             # Check lyrics (.lrc sidecar)
             lrc_path = p.with_suffix(".lrc")
@@ -67,7 +92,7 @@ def audit_library(music_dir: Path, state: StateManager) -> dict:
                     "title": t["title"],
                     "artist": t["artist"],
                     "album": t["album"],
-                    "local_path": lp,
+                    "local_path": str(p),
                 })
 
             # Check artwork (DB artwork_url or cover.jpg in directory)
@@ -79,7 +104,7 @@ def audit_library(music_dir: Path, state: StateManager) -> dict:
                     "title": t["title"],
                     "artist": t["artist"],
                     "album": t["album"],
-                    "local_path": lp,
+                    "local_path": str(p),
                 })
 
     orphaned_files = []

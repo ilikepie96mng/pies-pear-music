@@ -12,6 +12,7 @@ from collections import deque
 
 import tempfile
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -23,20 +24,32 @@ import uvicorn
 import yaml
 from fastapi import FastAPI, HTTPException, Query, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from mutagen.mp4 import MP4, MP4Cover
 from pydantic import BaseModel, field_validator
 
 from alac_rip import am_api, audit, gemini_ai, integrations, lastfm_api, lyrics, metadata_editor, playlist_import, smart_playlists, strawberry_sync, waveform
 from alac_rip.requests import RequestStore
 from alac_rip.am_api import AMApiError
-from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config, save_config_file
+from alac_rip.config import DEFAULT_CONFIG_PATH, Config, load_config, resolve_kio_fuse_path, save_config_file
 from alac_rip.dap_export import DapExportError, export_dap_playlist
 from alac_rip.metadata import read_tags
 from alac_rip.organizer import sanitize
-
+from alac_rip.scheduler import BackgroundSyncScheduler
 from alac_rip.state import StateManager
 from alac_rip.sync import StagingValidationError, SyncEngine, validate_staging_dir
+
+# Ensure standard user tool directories (Linuxbrew, local bin, go bin) are present in PATH
+extra_tool_paths = [
+    "/home/linuxbrew/.linuxbrew/bin",
+    "/home/linuxbrew/.linuxbrew/sbin",
+    str(Path.home() / ".local" / "bin"),
+    str(Path.home() / "go" / "bin"),
+]
+for _ep in reversed(extra_tool_paths):
+    if os.path.isdir(_ep) and _ep not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = f"{_ep}{os.pathsep}{os.environ.get('PATH', '')}"
 
 
 
@@ -96,19 +109,37 @@ state: Optional[StateManager] = None
 
 
 def _resolve_library_file(path: str) -> Path:
-    """Resolve a user-supplied path only when it is a recorded library track."""
+    """Resolve a user-supplied path when it is within the library or recorded track."""
     if cfg is None or state is None:
         raise HTTPException(503, "Library is not ready")
 
+    p = Path(path).expanduser()
+    p = resolve_kio_fuse_path(p)
+    music_dir = cfg.music_dir.expanduser().resolve()
+
+    if not p.is_absolute():
+        p = (music_dir / p)
+
+    if not p.is_file():
+        path_str = str(p)
+        for anchor in ("/artists/", "/playlists/", "artists/", "playlists/"):
+            if anchor in path_str:
+                rel = path_str.split(anchor, 1)[1]
+                anchor_dir = anchor.strip("/")
+                cand = (music_dir / anchor_dir / rel).resolve()
+                if cand.is_file():
+                    p = cand
+                    break
+
     try:
-        track_path = Path(path).expanduser().resolve()
-        music_dir = cfg.music_dir.expanduser().resolve()
+        track_path = p.resolve()
         track_path.relative_to(music_dir)
     except (OSError, RuntimeError, ValueError):
         raise HTTPException(403, "Path is outside the music library")
 
-    if not state.has_track_path(track_path):
+    if not state.has_track_path(track_path) and not state.has_track_path(p):
         raise HTTPException(403, "Path is not a known library track")
+
     return track_path
 
 # ── Wrapper / downloader state ────────────────────────────────────────────────
@@ -118,6 +149,7 @@ IMAGE_NAME = "alac-rip-wrapper"
 
 wrapper_process: Optional[subprocess.Popen] = None
 wrapper_running: bool = False
+wrapper_logging_in: bool = False
 wrapper_needs_2fa: bool = False
 wrapper_2fa_type: str = ""  # "device" | "sms" | ""
 wrapper_logs: deque[str] = deque(maxlen=200)
@@ -134,6 +166,27 @@ job_queue: queue.Queue = queue.Queue()
 active_job: Optional[dict] = None
 pending_jobs: list[dict] = []
 pending_jobs_lock: threading.Lock = threading.Lock()
+_queue_wake_event: threading.Event = threading.Event()
+_queue_listeners_lock: threading.Lock = threading.Lock()
+_queue_listeners: list[asyncio.Queue] = []
+
+
+def _broadcast_queue_event(event: dict) -> None:
+    with _queue_listeners_lock:
+        for q in list(_queue_listeners):
+            try:
+                q.put_nowait(event)
+            except Exception:
+                pass
+
+
+def _is_wrapper_port_alive(port: int = 10020) -> bool:
+    """Check if the local decryption wrapper daemon is reachable on port 10020."""
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.8):
+            return True
+    except (OSError, socket.error):
+        return False
 
 
 def _credentials_path() -> Path:
@@ -202,7 +255,7 @@ def _secret_service_clear() -> None:
 
 
 def save_credentials(email: str, password: str) -> bool:
-    """Store credentials in Secret Service, with safe local fallback."""
+    """Store credentials in Secret Service for the session and persistent keyring."""
     global _session_credentials
     _session_credentials = (email, password)
     persisted = _secret_service_store(email, password)
@@ -210,14 +263,6 @@ def save_credentials(email: str, password: str) -> bool:
         try:
             _credentials_path().unlink(missing_ok=True)
         except OSError:
-            pass
-    else:
-        try:
-            p = _credentials_path()
-            p.write_text(json.dumps({"email": email, "password": password}), encoding="utf-8")
-            p.chmod(0o600)
-            persisted = True
-        except Exception:
             pass
     return persisted
 
@@ -278,7 +323,7 @@ def _redact_wrapper_log(value: str, email: Optional[str] = None, password: Optio
 
 
 def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login=False):
-    global wrapper_running, wrapper_process, wrapper_needs_2fa, wrapper_2fa_type
+    global wrapper_running, wrapper_logging_in, wrapper_process, wrapper_needs_2fa, wrapper_2fa_type
     login_successful = False
     try:
         for line in iter(pipe.readline, ""):
@@ -287,15 +332,18 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
                 continue
             target_list.append(_redact_wrapper_log(line, email, password))
             if "credentialHandler:" in line and "2FA: true" in line:
+                wrapper_logging_in = False
                 wrapper_needs_2fa = True
                 wrapper_2fa_type = "sms"
                 target_list.append("2FA required — please enter your code")
-            if "[.] response type 4" in line:
+            if "[.] response type 4" in line or "[!] 2FA device code requested" in line:
+                wrapper_logging_in = False
                 wrapper_needs_2fa = True
                 wrapper_2fa_type = "device"
                 target_list.append("2FA required — Apple sent a code to your trusted device")
             if "[.] response type 6" in line:
                 wrapper_running = True
+                wrapper_logging_in = False
                 wrapper_needs_2fa = False
                 wrapper_2fa_type = ""
                 login_successful = True
@@ -311,15 +359,16 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
     except Exception as e:
         target_list.append(f"Error reading wrapper logs: {e}")
     finally:
+        wrapper_logging_in = False
         if wrapper_process and wrapper_process.poll() is not None:
             exit_code = wrapper_process.poll()
             if not login_successful:
                 target_list.append(f"Login failed — wrapper exited with code {exit_code}")
                 wrapper_running = False
+                was_2fa = wrapper_needs_2fa
                 wrapper_needs_2fa = False
                 wrapper_2fa_type = ""
-                # Only delete credentials if wrapper explicitly logged an auth error
-                if auto_login and any("invalid" in log.lower() or "auth failed" in log.lower() or "bad password" in log.lower() for log in target_list):
+                if auto_login and not was_2fa:
                     target_list.append("Authentication failed, removing saved credentials")
                     delete_credentials()
             elif exit_code != 0:
@@ -347,35 +396,50 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
     prefix = "Auto-login: " if auto_login else ""
     wrapper_logs.append(f"{prefix}Starting wrapper login...")
 
-    if cfg is None or not cfg.alac_rip_dir or not cfg.alac_rip_dir.exists():
-        wrapper_logs.append(f"{prefix}alac_rip_dir not configured — set it in Settings")
-        return False
+    # Check if native binary wrapper is installed (e.g. inside Docker or standalone)
+    native_bin = Path("/app/wrapper")
+    if not native_bin.exists() and cfg and cfg.alac_rip_dir:
+        candidate = cfg.alac_rip_dir / "wrapper" / "wrapper"
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            native_bin = candidate
 
-    wrapper_dir = cfg.alac_rip_dir / "wrapper"
+    if native_bin.exists() and (not shutil.which("podman") or os.environ.get("PIES_NATIVE_WRAPPER") or os.environ.get("PIES_HEADLESS")):
+        cmd = [str(native_bin), f"-L={email}:{password}"]
+        wrapper_logs.append(f"{prefix}Launching native decryption daemon: {native_bin}")
+        child_env = os.environ.copy()
+        cwd_dir = str(native_bin.parent)
+    else:
+        if cfg is None or not cfg.alac_rip_dir or not cfg.alac_rip_dir.exists():
+            wrapper_logs.append(f"{prefix}alac_rip_dir not configured — set it in Settings")
+            return False
 
-    subprocess.run(["podman", "stop", CONTAINER_NAME], capture_output=True)
-    subprocess.run(["podman", "rm", CONTAINER_NAME], capture_output=True)
+        wrapper_dir = cfg.alac_rip_dir / "wrapper"
 
-    ok, err = ensure_wrapper_image(wrapper_dir)
-    if not ok:
-        wrapper_logs.append(f"{prefix}Failed to build wrapper image: {err}")
-        return False
+        subprocess.run(["podman", "stop", CONTAINER_NAME], capture_output=True)
+        subprocess.run(["podman", "rm", CONTAINER_NAME], capture_output=True)
 
-    cmd = [
-        "podman", "run", "--rm",
-        "--name", CONTAINER_NAME,
-        "-i",
-        "--network", "host",
-        "--volume", "/dev/urandom:/app/rootfs/dev/urandom:ro",
-        "--env", "args",
-        IMAGE_NAME,
-    ]
-    wrapper_logs.append(f"{prefix}Launching container: {CONTAINER_NAME}")
+        ok, err = ensure_wrapper_image(wrapper_dir)
+        if not ok:
+            wrapper_logs.append(f"{prefix}Failed to build wrapper image: {err}")
+            return False
 
-    child_env = os.environ.copy()
-    child_env["args"] = f"-L {email}:{password}"
+        cmd = [
+            "podman", "run", "--rm",
+            "--name", CONTAINER_NAME,
+            "-i",
+            "--network", "host",
+            "--volume", "/dev/urandom:/app/rootfs/dev/urandom:ro",
+            "--env", "args",
+            IMAGE_NAME,
+        ]
+        wrapper_logs.append(f"{prefix}Launching container: {CONTAINER_NAME}")
+
+        child_env = os.environ.copy()
+        child_env["args"] = f"-L {email}:{password}"
+        cwd_dir = None
 
     try:
+        wrapper_logging_in = True
         wrapper_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -384,6 +448,7 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
             bufsize=1,
             universal_newlines=True,
             env=child_env,
+            cwd=cwd_dir,
         )
 
         threading.Thread(
@@ -394,9 +459,8 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
         wrapper_logs.append(f"{prefix}Container started, waiting for login confirmation...")
         return True
     except Exception as e:
+        wrapper_logging_in = False
         wrapper_logs.append(f"{prefix}Error starting container: {e}")
-        if auto_login:
-            delete_credentials()
         return False
 
 
@@ -408,15 +472,60 @@ def attempt_auto_login() -> bool:
     return False
 
 
+sync_scheduler: Optional[BackgroundSyncScheduler] = None
+
+
+def _run_scheduled_sync() -> str:
+    """Execute background sync during scheduler trigger."""
+    if cfg is None or state is None:
+        return "Library not initialized"
+
+    staging_dir = cfg.state_dir / "staging"
+    if not staging_dir.exists() or not any(staging_dir.iterdir()):
+        return "Staging directory is clean"
+
+    try:
+        engine = SyncEngine(cfg, state)
+        res = engine.sync_staging(staging_dir)
+        integrations.dispatch_media_webhooks(cfg.__dict__)
+        integrations.dispatch_completion_notifications(
+            cfg.__dict__,
+            event_title="Automated Sync Completed",
+            event_description=f"Scheduled sync organized {res.tracks_moved} tracks into the library.",
+            fields=[
+                {"name": "Tracks Moved", "value": str(res.tracks_moved)},
+                {"name": "Playlists Updated", "value": str(len(res.playlists_updated))},
+            ],
+        )
+        return f"Synced {res.tracks_moved} tracks, updated {len(res.playlists_updated)} playlists"
+    except Exception as e:
+        return f"Sync failed: {e}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global cfg, state
+    global cfg, state, sync_scheduler
     cfg = load_config(DEFAULT_CONFIG_PATH)
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     state = StateManager(cfg.state_dir / "downloaded.db")
     threading.Thread(target=attempt_auto_login, daemon=True).start()
     threading.Thread(target=_queue_worker, daemon=True).start()
+
+    sched_cfg = cfg.scheduler or {}
+    interval = int(sched_cfg.get("interval_minutes", 60))
+    enabled = bool(sched_cfg.get("enabled", False))
+    sync_scheduler = BackgroundSyncScheduler(
+        interval_minutes=interval,
+        sync_callback=_run_scheduled_sync,
+        enabled=enabled,
+    )
+    if enabled:
+        sync_scheduler.start()
+
     yield
+
+    if sync_scheduler:
+        sync_scheduler.stop()
 
 
 app = FastAPI(title="pies-alac-rip", lifespan=lifespan)
@@ -424,22 +533,33 @@ app = FastAPI(title="pies-alac-rip", lifespan=lifespan)
 
 @app.middleware("http")
 async def require_api_capability(request: Request, call_next):
-    """Require the Tauri-generated capability when running as a sidecar."""
-    if request.method != "OPTIONS" and _api_capability:
-        supplied = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
-        if not supplied or not secrets.compare_digest(supplied, _api_capability):
-            return Response(status_code=401)
+    """Require the Tauri-generated capability or configured API token."""
+    if request.method != "OPTIONS":
+        if _api_capability:
+            supplied = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
+            if not supplied or not secrets.compare_digest(supplied, _api_capability):
+                return Response(status_code=401)
+        elif cfg and cfg.api_token and request.url.path.startswith("/api/"):
+            auth_header = request.headers.get("authorization", "")
+            bearer_token = auth_header.split(" ", 1)[1] if auth_header.startswith("Bearer ") else ""
+            supplied = (
+                request.headers.get(_API_CAPABILITY_HEADER)
+                or bearer_token
+                or request.query_params.get("token")
+            )
+            if not supplied or not secrets.compare_digest(supplied, cfg.api_token):
+                return Response(status_code=401, content="Unauthorized: Invalid API Token")
     return await call_next(request)
 
 
+_is_headless = "--headless" in sys.argv or bool(os.environ.get("PIES_HEADLESS")) or bool(os.environ.get("PORT"))
 app.add_middleware(
     CORSMiddleware,
-    # Tauri's Linux webview uses http://tauri.localhost. Keep the Vite origin
-    # only for local development; do not expose the loopback API to arbitrary
-    # browser origins.
-    allow_origins=["http://tauri.localhost", "http://localhost:1420"],
-    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-    allow_headers=["content-type", _API_CAPABILITY_HEADER],
+    allow_origins=["*"] if _is_headless else ["http://tauri.localhost", "http://localhost:1420"],
+    allow_origin_regex=r"https?://.*" if _is_headless else None,
+    allow_credentials=True,
+    allow_methods=["*"] if _is_headless else ["GET", "POST", "PATCH", "PUT", "DELETE"],
+    allow_headers=["*"] if _is_headless else ["content-type", _API_CAPABILITY_HEADER],
 )
 
 
@@ -474,6 +594,13 @@ def get_diagnostics():
 
     config_exists = DEFAULT_CONFIG_PATH.exists()
     results.append(check("Config file", config_exists, "available" if config_exists else "not found"))
+
+    global cfg
+    if cfg is None and config_exists:
+        try:
+            cfg = load_config(DEFAULT_CONFIG_PATH)
+        except Exception:
+            pass
 
     if cfg is not None:
         music_ok = cfg.music_dir.exists()
@@ -595,15 +722,31 @@ def _run_job(job: dict) -> None:
     playlist_name: Optional[str] = job["playlist_name"]
     log_q: queue.Queue = job["log_q"]
     started_at = datetime.now()
+    db_id: Optional[int] = job.get("db_id")
 
     def emit(event: dict) -> None:
         log_q.put(event)
+        _broadcast_queue_event({
+            "event": "job_progress",
+            "job_id": db_id or job.get("id"),
+            "data": event,
+        })
 
     if cfg is None or not cfg.alac_rip_dir or not cfg.alac_rip_dir.exists():
         emit({"status": "error", "message": "alac_rip_dir not configured"})
+        if db_id and state:
+            try:
+                state.update_job_status(db_id, "error", completed_at=datetime.now().isoformat(), error_message="alac_rip_dir not configured")
+            except Exception:
+                pass
         return
     if not cfg.music_dir or not cfg.music_dir.is_absolute():
         emit({"status": "error", "message": "music_dir not configured"})
+        if db_id and state:
+            try:
+                state.update_job_status(db_id, "error", completed_at=datetime.now().isoformat(), error_message="music_dir not configured")
+            except Exception:
+                pass
         return
 
     amd_dir = cfg.alac_rip_dir / "apple-music-downloader"
@@ -620,6 +763,12 @@ def _run_job(job: dict) -> None:
     label = _log_slug(playlist_name or "one-off")
     log_path = logs_dir / f"{started_at.strftime('%Y%m%d-%H%M%S')}-{label}.log"
 
+    if db_id and state:
+        try:
+            state.update_job_status(db_id, "running", started_at=started_at.isoformat(), log_path=str(log_path))
+        except Exception:
+            pass
+
     def write_log(line: str) -> None:
         with log_path.open("a", encoding="utf-8") as f:
             f.write(f"{datetime.now().isoformat()} {line}\n")
@@ -632,8 +781,19 @@ def _run_job(job: dict) -> None:
 
     save_folder_key = {"ATMOS": "atmos-save-folder", "AAC": "aac-save-folder"}.get(format_, "alac-save-folder")
     try:
-        with open(amd_dir / "config.yaml") as f:
+        cfg_file = amd_dir / "config.yaml"
+        with open(cfg_file) as f:
             amd_cfg = yaml.safe_load(f) or {}
+
+        # Ensure default storefront
+        updated_cfg = False
+        if amd_cfg.get("storefront") in ("", "enter your account storefront"):
+            amd_cfg["storefront"] = "us"
+            updated_cfg = True
+        if updated_cfg:
+            with open(cfg_file, "w") as f:
+                yaml.dump(amd_cfg, f)
+
         save_folder = Path(amd_cfg.get(save_folder_key, "")).expanduser()
     except Exception as exc:
         msg = _redact_runtime_paths(f"Cannot read downloader config: {exc}")
@@ -696,14 +856,14 @@ def _run_job(job: dict) -> None:
                     k = (_normalize(t["title"]), _normalize(t["artist"]))
                     if k not in am_by_key:
                         am_by_key[k] = t["id"]
-                matched_count = 0
+                updates = []
                 for db_track in unmatched:
                     key = (_normalize(db_track.title), _normalize(db_track.artist))
                     if key in am_by_key:
-                        state.update_track_am_id(db_track.track_id, am_by_key[key])
-                        matched_count += 1
-                if matched_count:
-                    emit_log("preflight", f"Matched {matched_count} existing tracks to AM IDs")
+                        updates.append((am_by_key[key], db_track.track_id))
+                if updates:
+                    state.bulk_update_track_am_ids(updates)
+                    emit_log("preflight", f"Matched {len(updates)} existing tracks to AM IDs")
 
             artwork_map = {
                 t["id"]: t["artwork_url"]
@@ -719,28 +879,30 @@ def _run_job(job: dict) -> None:
             skip_ids = owned & am_ids_set
             delisted_ids = owned - am_ids_set
 
-            if delisted_ids:
-                playlist_tracks = state.get_playlist_tracks(playlist_name)
-                delisted_recorded = 0
-                now_str = datetime.now().isoformat()
-                for pt in playlist_tracks:
-                    # Lookup track AM ID
-                    track_obj = state.get_track(pt.track_id)
-                    # If this track was mapped to an AM ID that is no longer in upstream playlist
-                    # or if track itself is in delisted_ids
-                    if track_obj and getattr(track_obj, "am_track_id", None) in delisted_ids:
-                        state.record_delisted_track(playlist_name, pt.track_id, now_str)
-                        delisted_recorded += 1
-                if delisted_recorded:
-                    emit_log("preflight", f"Preserved {delisted_recorded} delisted track(s) in streaming graveyard")
+            if delisted_ids or skip_ids:
+                mapping = state.get_playlist_am_track_mapping(playlist_name)
+                # Map am_track_id -> list of track_ids
+                am_to_tracks: dict[str, list[str]] = {}
+                for tid, am_id in mapping:
+                    am_to_tracks.setdefault(am_id, []).append(tid)
 
-            # If tracks were restored/re-added upstream, clear their delisted mark
-            for sid in skip_ids:
-                # Find track with this AM ID
-                for pt in state.get_playlist_tracks(playlist_name):
-                    track_obj = state.get_track(pt.track_id)
-                    if track_obj and getattr(track_obj, "am_track_id", None) == sid:
-                        state.clear_delisted_track(playlist_name, pt.track_id)
+                if delisted_ids:
+                    now_str = datetime.now().isoformat()
+                    delisted_records = []
+                    for did in delisted_ids:
+                        for tid in am_to_tracks.get(did, []):
+                            delisted_records.append((playlist_name, tid, now_str))
+                    if delisted_records:
+                        state.bulk_record_delisted_tracks(delisted_records)
+                        emit_log("preflight", f"Preserved {len(delisted_records)} delisted track(s) in streaming graveyard")
+
+                # If tracks were restored/re-added upstream, clear their delisted mark
+                if skip_ids:
+                    restored_tids = []
+                    for sid in skip_ids:
+                        restored_tids.extend(am_to_tracks.get(sid, []))
+                    if restored_tids:
+                        state.bulk_clear_delisted_tracks(playlist_name, restored_tids)
 
             skip_file_path = Path(_tmp) / "skip.json"
             skip_file_path.write_text(json.dumps({"skip_ids": list(skip_ids)}))
@@ -765,9 +927,12 @@ def _run_job(job: dict) -> None:
                     f"Pre-flight check failed ({e}), falling back to full download"
                 )
 
+    system_amd = shutil.which("amd-main")
     patched_bin = Path.home() / ".local" / "share" / "pies-alac-rip" / "amd-main"
-    if patched_bin.exists() and os.access(patched_bin, os.X_OK):
-        _amd_bin: list[str] = [str(patched_bin)]
+    if system_amd:
+        _amd_bin: list[str] = [system_amd]
+    elif patched_bin.exists() and os.access(patched_bin, os.X_OK):
+        _amd_bin = [str(patched_bin)]
     else:
         _amd_bin = [go_bin, "run", "main.go"]
 
@@ -782,11 +947,22 @@ def _run_job(job: dict) -> None:
         cmd += ["--skip-ids-file", str(skip_file_path)]
     cmd += ["--manifest-out", str(manifest_path)]
 
+    # Ensure decryption wrapper is alive before launching downloader
+    if not _is_wrapper_port_alive():
+        emit_log("downloading", "Decryption wrapper is not responding; attempting auto-recovery...")
+        attempt_auto_login()
+        for _ in range(15):
+            if _is_wrapper_port_alive():
+                emit_log("downloading", "Decryption wrapper auto-recovery successful.")
+                break
+            time.sleep(0.5)
+
     # ── Phase 1: download ──────────────────────────────────────────────────────
     try:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
             bufsize=1, universal_newlines=True,
             cwd=str(amd_dir), env=env,
         )
@@ -799,6 +975,7 @@ def _run_job(job: dict) -> None:
                                   "error", 0, 0, 0, str(log_path), msg)
         return
 
+    last_progress_emit = 0.0
     for line in iter(proc.stdout.readline, ""):
         line = line.strip()
         if line:
@@ -806,6 +983,13 @@ def _run_job(job: dict) -> None:
             if m:
                 current, total, rest = m.groups()
                 emit_log("downloading", f"[{current}/{total}] {rest}".rstrip())
+            elif line.startswith("Downloading...") or line.startswith("Decrypting..."):
+                now = time.time()
+                if now - last_progress_emit >= 0.25:
+                    last_progress_emit = now
+                    emit_log("downloading", line)
+                else:
+                    write_log(f"[downloading] {line}")
             else:
                 emit_log("downloading", line)
 
@@ -898,26 +1082,107 @@ def _run_job(job: dict) -> None:
           "new": result.new_count, "skipped": result.skipped_count,
           "errors": result.error_count, "log_path": str(log_path)})
 
+    if db_id and state:
+        try:
+            state.update_job_status(
+                db_id,
+                "done",
+                completed_at=datetime.now().isoformat(),
+                new_tracks=result.new_count,
+                skipped_tracks=result.skipped_count,
+                error_count=result.error_count,
+                log_path=str(log_path),
+            )
+        except Exception:
+            pass
+
 
 def _queue_worker() -> None:
     global active_job
-    while True:
-        job = job_queue.get()
-        with pending_jobs_lock:
-            try:
-                pending_jobs.remove(job)
-            except ValueError:
-                pass
-        active_job = job
-        job["started"].set()
+    # On startup or after crash recovery, reset any interrupted 'running' jobs to 'pending'
+    if state:
         try:
-            sys.modules[__name__]._run_job(job)
-        except Exception as exc:
-            job["log_q"].put({"status": "error", "message": _redact_runtime_paths(f"Internal error: {exc}")})
-        finally:
-            job["log_q"].put(None)  # sentinel: tells _job_event_stream to stop
-            active_job = None
-            job_queue.task_done()
+            state.reset_interrupted_jobs()
+        except Exception:
+            pass
+
+    while True:
+        # 1. Process SQLite persistent queue first
+        pending_db_job = None
+        if state:
+            try:
+                pending_db_job = state.get_next_pending_job()
+            except Exception:
+                pass
+
+        if pending_db_job is not None:
+            job_id = str(uuid.uuid4())
+            job = {
+                "id": job_id,
+                "db_id": pending_db_job["id"],
+                "type": "one-off" if pending_db_job.get("item_type") != "playlist" else "playlist",
+                "url": pending_db_job["url"],
+                "format": pending_db_job.get("format", "ALAC"),
+                "playlist_name": pending_db_job.get("title") if pending_db_job.get("item_type") == "playlist" else None,
+                "title": pending_db_job.get("title", "Lossless Download"),
+                "artist": pending_db_job.get("artist", ""),
+                "album": pending_db_job.get("album", ""),
+                "artwork_url": pending_db_job.get("artwork_url"),
+                "log_q": queue.Queue(),
+                "started": threading.Event(),
+            }
+            active_job = job
+            job["started"].set()
+            _broadcast_queue_event({"event": "job_started", "job": pending_db_job})
+            try:
+                sys.modules[__name__]._run_job(job)
+            except Exception as exc:
+                msg = _redact_runtime_paths(f"Internal error: {exc}")
+                job["log_q"].put({"status": "error", "message": msg})
+                if state:
+                    try:
+                        state.update_job_status(
+                            pending_db_job["id"],
+                            "error",
+                            completed_at=datetime.now().isoformat(),
+                            error_message=msg,
+                        )
+                    except Exception:
+                        pass
+            finally:
+                job["log_q"].put(None)
+                active_job = None
+                _broadcast_queue_event({"event": "job_finished", "job_id": pending_db_job["id"]})
+                time.sleep(0.3)
+            continue
+
+        # 2. Process in-memory queue fallback
+        try:
+            job = job_queue.get_nowait()
+        except queue.Empty:
+            job = None
+
+        if job is not None:
+            with pending_jobs_lock:
+                try:
+                    pending_jobs.remove(job)
+                except ValueError:
+                    pass
+            active_job = job
+            job["started"].set()
+            try:
+                sys.modules[__name__]._run_job(job)
+            except Exception as exc:
+                job["log_q"].put({"status": "error", "message": _redact_runtime_paths(f"Internal error: {exc}")})
+            finally:
+                job["log_q"].put(None)
+                active_job = None
+                job_queue.task_done()
+            continue
+
+        # 3. Wait for new jobs
+        _queue_wake_event.wait(timeout=1.5)
+        _queue_wake_event.clear()
 
 
 async def _job_event_stream(job: dict):
@@ -943,8 +1208,220 @@ async def _job_event_stream(job: dict):
         yield f"data: {json.dumps(event)}\n\n"
 
 
+class QueueAddRequest(BaseModel):
+    urls: list[str] = []
+    items: list[dict[str, Any]] = []
+    format: str = "ALAC"
+    batch_id: Optional[str] = None
+    batch_title: Optional[str] = None
+
+
+class QueueCancelRequest(BaseModel):
+    job_id: Optional[int] = None
+    batch_id: Optional[str] = None
+    cancel_all: bool = False
+
+
+class QueueRetryRequest(BaseModel):
+    job_ids: list[int] = []
+
+
+class QueueReorderRequest(BaseModel):
+    job_id: int
+    new_position: int
+
+
+@app.post("/api/v1/queue/add")
+@app.post("/download/queue/add")
+def post_queue_add(req: QueueAddRequest):
+    format_ = _validate_download_format(req.format)
+    jobs_to_insert = []
+    batch_id = req.batch_id or (str(uuid.uuid4()) if (len(req.urls) + len(req.items)) > 1 else None)
+
+    for item in req.items:
+        url = item.get("url") or ""
+        alb_id = str(item.get("id") or item.get("album_id") or "")
+        if not url and alb_id:
+            url = f"https://music.apple.com/us/album/{alb_id}"
+        if not url:
+            continue
+        try:
+            valid_url = _validate_apple_music_url(url)
+        except ValueError:
+            continue
+        jobs_to_insert.append({
+            "batch_id": batch_id,
+            "batch_title": req.batch_title or item.get("batch_title"),
+            "url": valid_url,
+            "title": item.get("title") or item.get("name") or "Album Download",
+            "artist": item.get("artist") or "",
+            "album": item.get("album") or item.get("title") or "",
+            "artwork_url": item.get("artwork_url"),
+            "format": format_,
+            "item_type": item.get("item_type") or "album",
+            "total_tracks": item.get("total_tracks") or item.get("track_count") or 0,
+        })
+
+    for url_raw in req.urls:
+        try:
+            valid_url = _validate_apple_music_url(url_raw)
+        except ValueError:
+            continue
+        jobs_to_insert.append({
+            "batch_id": batch_id,
+            "batch_title": req.batch_title,
+            "url": valid_url,
+            "title": "Lossless Download",
+            "artist": "",
+            "album": "",
+            "artwork_url": None,
+            "format": format_,
+            "item_type": "album",
+            "total_tracks": 0,
+        })
+
+    if not jobs_to_insert:
+        raise HTTPException(400, "No valid URLs or items provided")
+
+    job_ids = state.bulk_enqueue_download_jobs(jobs_to_insert) if state else []
+    _queue_wake_event.set()
+    _broadcast_queue_event({"event": "queue_updated", "count": len(job_ids)})
+    return {"queued": len(job_ids), "job_ids": job_ids, "batch_id": batch_id}
+
+
+@app.get("/api/v1/queue")
+@app.get("/download/queue")
+def get_download_queue():
+    if not state:
+        return {
+            "active": None,
+            "pending": [],
+            "completed": [],
+            "counts": {"pending": 0, "running": 0, "done": 0, "error": 0, "cancelled": 0, "total": 0},
+        }
+    summary = state.get_queue_summary()
+    if not summary["active"] and active_job:
+        summary["active"] = {
+            "id": active_job.get("db_id") or active_job.get("id"),
+            "title": active_job.get("title") or active_job.get("playlist_name") or "Lossless Download",
+            "url": active_job.get("url"),
+            "status": "running",
+            "format": active_job.get("format", "ALAC"),
+            "artist": active_job.get("artist", ""),
+            "album": active_job.get("album", ""),
+        }
+    return summary
+
+
+@app.post("/api/v1/queue/cancel")
+def post_queue_cancel(req: QueueCancelRequest):
+    if not state:
+        raise HTTPException(500, "Database state not initialized")
+    if req.cancel_all:
+        count = state.cancel_all_pending_jobs()
+        _broadcast_queue_event({"event": "queue_updated"})
+        return {"cancelled": count}
+    if req.batch_id:
+        count = state.cancel_all_pending_jobs(batch_id=req.batch_id)
+        _broadcast_queue_event({"event": "queue_updated"})
+        return {"cancelled": count}
+    if req.job_id:
+        ok = state.cancel_queue_job(req.job_id)
+        _broadcast_queue_event({"event": "queue_updated"})
+        return {"cancelled": 1 if ok else 0}
+    raise HTTPException(400, "Must provide 'job_id', 'batch_id', or 'cancel_all=true'")
+
+
+@app.post("/api/v1/queue/retry")
+def post_queue_retry(req: QueueRetryRequest):
+    if not state:
+        raise HTTPException(500, "Database state not initialized")
+    count = state.retry_failed_jobs(req.job_ids or None)
+    _queue_wake_event.set()
+    _broadcast_queue_event({"event": "queue_updated"})
+    return {"retried": count}
+
+
+@app.post("/api/v1/queue/clear")
+def post_queue_clear(older_than_days: int = 0):
+    if not state:
+        raise HTTPException(500, "Database state not initialized")
+    count = state.clear_completed_queue(older_than_days=older_than_days)
+    _broadcast_queue_event({"event": "queue_updated"})
+    return {"cleared": count}
+
+
+@app.post("/api/v1/queue/reorder")
+def post_queue_reorder(req: QueueReorderRequest):
+    if not state:
+        raise HTTPException(500, "Database state not initialized")
+    ok = state.reorder_queue_job(req.job_id, req.new_position)
+    _queue_wake_event.set()
+    _broadcast_queue_event({"event": "queue_updated"})
+    return {"reordered": ok}
+
+
+@app.get("/api/v1/queue/stream")
+async def queue_event_stream():
+    """SSE stream for real-time queue updates, live logs, and progress."""
+    q: asyncio.Queue = asyncio.Queue()
+    with _queue_listeners_lock:
+        _queue_listeners.append(q)
+
+    async def event_generator():
+        try:
+            if state:
+                summary = state.get_queue_summary()
+                yield f"data: {json.dumps({'event': 'queue_state', 'summary': summary})}\n\n"
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            with _queue_listeners_lock:
+                try:
+                    _queue_listeners.remove(q)
+                except ValueError:
+                    pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/sync/queue")
 def get_queue():
+    if state:
+        summary = state.get_queue_summary()
+        active = summary["active"]
+        pending = [
+            {
+                "id": j["id"],
+                "type": j.get("item_type", "one-off"),
+                "playlist_name": j.get("title") if j.get("item_type") == "playlist" else None,
+                "url": j.get("url"),
+                "title": j.get("title"),
+                "artist": j.get("artist"),
+            }
+            for j in summary["pending"]
+        ]
+        if active:
+            active_dict = {
+                "id": active["id"],
+                "type": active.get("item_type", "one-off"),
+                "playlist_name": active.get("title") if active.get("item_type") == "playlist" else None,
+                "url": active.get("url"),
+                "title": active.get("title"),
+                "artist": active.get("artist"),
+            }
+        else:
+            active_dict = None
+        return {"active": active_dict, "pending": pending}
+
     with pending_jobs_lock:
         pending = [
             {
@@ -1259,6 +1736,30 @@ def deduplicate_playlist(name: str):
     if state is None:
         raise HTTPException(503, "Library is not ready")
     result = state.deduplicate_playlist(name)
+
+    # Regenerate m3u8 playlist with updated track list
+    try:
+        cfg = load_config()
+        if cfg:
+            music_dir = cfg.music_dir.expanduser().resolve()
+            engine = SyncEngine(state, music_dir, name)
+            engine._write_m3u8()
+    except Exception as e:
+        logger.warning(f"Failed to update m3u8 after deduplication: {e}")
+
+    # Trigger media server webhooks (Navidrome / Jellyfin) to reflect deduplication
+    try:
+        if DEFAULT_CONFIG_PATH.exists():
+            with open(DEFAULT_CONFIG_PATH) as f_cfg:
+                raw_cfg = yaml.safe_load(f_cfg) or {}
+            threading.Thread(
+                target=integrations.dispatch_media_webhooks,
+                args=(raw_cfg,),
+                daemon=True
+            ).start()
+    except Exception as e:
+        logger.warning(f"Webhook dispatch error after deduplication: {e}")
+
     return result
 
 
@@ -1665,17 +2166,47 @@ def get_track_art(path: str):
     if not track_path.exists():
         raise HTTPException(404, "File not found")
     try:
-        tags = MP4(track_path)
-        covers = tags.get("covr", [])
-        if not covers:
-            raise HTTPException(404, "No cover art embedded")
-        cover = covers[0]
-        fmt = "image/jpeg" if cover.imageformat == MP4Cover.FORMAT_JPEG else "image/png"
-        return Response(content=bytes(cover), media_type=fmt)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(500, _redact_runtime_paths(str(exc)))
+        if track_path.suffix.lower() == ".flac":
+            from mutagen.flac import FLAC
+            audio = FLAC(track_path)
+            if audio.pictures:
+                pic = audio.pictures[0]
+                fmt = pic.mime or "image/jpeg"
+                return Response(content=pic.data, media_type=fmt)
+        elif track_path.suffix.lower() in (".m4a", ".alac", ".mp4"):
+            from mutagen.mp4 import MP4, MP4Cover
+            tags = MP4(track_path)
+            covers = tags.get("covr", [])
+            if covers:
+                cover = covers[0]
+                fmt = "image/jpeg" if cover.imageformat == MP4Cover.FORMAT_JPEG else "image/png"
+                return Response(content=bytes(cover), media_type=fmt)
+        elif track_path.suffix.lower() == ".mp3":
+            from mutagen.mp3 import MP3
+            audio = MP3(track_path)
+            if audio.tags:
+                for k, v in audio.tags.items():
+                    if k.startswith("APIC"):
+                        return Response(content=v.data, media_type=getattr(v, "mime", "image/jpeg"))
+    except Exception:
+        pass
+
+    # 2. Try directory cover files in track parent directory
+    parent_dir = track_path.parent
+    for cover_name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg", "front.png", "artwork.jpg", "cover.webp"):
+        cand = parent_dir / cover_name
+        if cand.is_file():
+            mime = "image/png" if cand.suffix.lower() == ".png" else "image/webp" if cand.suffix.lower() == ".webp" else "image/jpeg"
+            return Response(content=cand.read_bytes(), media_type=mime)
+
+    # 3. Check if DB has an Apple Music artwork_url for this track
+    if state:
+        track_row = state.get_track_by_path(str(track_path))
+        if track_row and track_row.artwork_url and track_row.artwork_url.startswith("http"):
+            art_url = track_row.artwork_url.replace("{w}x{h}", "300x300")
+            return RedirectResponse(art_url, status_code=307)
+
+    raise HTTPException(404, "No cover art found")
 
 
 class ConfigUpdate(BaseModel):
@@ -1687,6 +2218,8 @@ class ConfigUpdate(BaseModel):
     lastfm_shared_secret: Optional[str] = None
     lastfm_username: Optional[str] = None
     gemini_api_key: Optional[str] = None
+    api_token: Optional[str] = None
+    scheduler: Optional[dict] = None
     integrations: Optional[dict] = None
 
     @field_validator("music_dir", "state_dir", "alac_rip_dir")
@@ -1723,7 +2256,7 @@ def _sanitize_config_dict(data: dict) -> dict:
             for s_name, s_cfg in v.items():
                 if isinstance(s_cfg, dict):
                     copied = dict(s_cfg)
-                    for secret_field in ("api_key", "token", "password", "salt"):
+                    for secret_field in ("api_key", "token", "password", "salt", "webhook_url", "bot_token"):
                         if secret_field in copied and copied[secret_field]:
                             copied[secret_field] = "********"
                             copied[f"{secret_field}_configured"] = True
@@ -1765,7 +2298,7 @@ def update_config(body: ConfigUpdate):
         for s_name, s_cfg in updates["integrations"].items():
             if isinstance(s_cfg, dict) and s_name in cur_integ:
                 cur_s = cur_integ[s_name]
-                for secret_field in ("api_key", "token", "password", "salt"):
+                for secret_field in ("api_key", "token", "password", "salt", "webhook_url", "bot_token"):
                     if s_cfg.get(secret_field) == "********":
                         s_cfg[secret_field] = cur_s.get(secret_field, "")
                     s_cfg.pop(f"{secret_field}_configured", None)
@@ -1774,6 +2307,18 @@ def update_config(body: ConfigUpdate):
     save_config_file(DEFAULT_CONFIG_PATH, current)
     global cfg
     cfg = load_config(DEFAULT_CONFIG_PATH)
+
+    # Sync running scheduler dynamically
+    if "scheduler" in updates and sync_scheduler:
+        s_cfg = updates["scheduler"]
+        enabled = bool(s_cfg.get("enabled", False))
+        interval_min = int(s_cfg.get("interval_minutes", 60))
+        sync_scheduler.update_config(enabled=enabled, interval_minutes=interval_min)
+        if enabled and not sync_scheduler.is_running():
+            sync_scheduler.start()
+        elif not enabled and sync_scheduler.is_running():
+            sync_scheduler.stop()
+
     return {"status": "ok"}
 
 
@@ -1832,11 +2377,13 @@ def submit_2fa(body: TwoFARequest):
 
 @app.get("/wrapper/status")
 def get_wrapper_status():
-    global wrapper_running, wrapper_process, wrapper_needs_2fa, wrapper_2fa_type
+    global wrapper_running, wrapper_logging_in, wrapper_process, wrapper_needs_2fa, wrapper_2fa_type
     if wrapper_process and wrapper_process.poll() is not None and wrapper_running:
         wrapper_running = False
+        wrapper_logging_in = False
     return {
         "running": wrapper_running,
+        "logging_in": wrapper_logging_in,
         "needs_2fa": wrapper_needs_2fa,
         "2fa_type": wrapper_2fa_type,
         "logs": list(wrapper_logs),
@@ -2056,7 +2603,7 @@ def post_batch_tag_tracks(req: BatchTagRequest):
 @app.get("/tracks/{track_id:path}/cover")
 @app.get("/tracks/cover")
 def get_track_embedded_cover(track_id: Optional[str] = None):
-    """Extract and return embedded cover artwork for a track."""
+    """Extract and return cover artwork for a track (from embedded tags, directory cover.jpg, or CDN fallback)."""
     if state is None or cfg is None:
         raise HTTPException(503, "Library is not ready")
 
@@ -2064,25 +2611,57 @@ def get_track_embedded_cover(track_id: Optional[str] = None):
         raise HTTPException(400, "Missing track_id parameter")
 
     track = state.get_track(track_id)
-    if not track or not track.local_path:
+    if not track:
         raise HTTPException(404, f"Track {track_id} not found")
 
-    file_path = Path(track.local_path).expanduser().resolve()
-    if not file_path.is_file():
-        raise HTTPException(404, f"Audio file not found on disk for track {track_id}")
+    file_path: Optional[Path] = None
+    if track.local_path:
+        candidates = [
+            Path(track.local_path).expanduser(),
+            resolve_kio_fuse_path(Path(track.local_path).expanduser()),
+            cfg.music_dir / track_id,
+            cfg.music_dir / Path(track.local_path).name,
+        ]
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+                if resolved.is_file():
+                    file_path = resolved
+                    break
+            except Exception:
+                pass
 
-    # Check path isolation
-    try:
-        file_path.relative_to(cfg.music_dir)
-    except ValueError:
-        raise HTTPException(403, "Access denied: audio file outside library root")
+    if file_path and file_path.is_file():
+        # 1. Check embedded tags
+        cover_info = metadata_editor.extract_embedded_cover(file_path)
+        if cover_info:
+            cover_bytes, mime = cover_info
+            return Response(
+                content=cover_bytes,
+                media_type=mime,
+                headers={"Cache-Control": "public, max-age=86400"}
+            )
 
-    cover_info = metadata_editor.extract_embedded_cover(file_path)
-    if not cover_info:
-        raise HTTPException(404, "No embedded cover artwork found")
+        # 2. Check folder cover file (cover.jpg, folder.jpg, etc.)
+        for art_name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "artwork.jpg"):
+            sidecar = file_path.parent / art_name
+            if sidecar.is_file():
+                mime = "image/png" if sidecar.suffix.lower() == ".png" else "image/jpeg"
+                return Response(
+                    content=sidecar.read_bytes(),
+                    media_type=mime,
+                    headers={"Cache-Control": "public, max-age=86400"}
+                )
 
-    cover_bytes, mime = cover_info
-    return Response(content=cover_bytes, media_type=mime)
+    # 3. Fallback to catalog artwork_url from DB if file is remote / not accessible
+    if track.artwork_url:
+        cdn_url = track.artwork_url.replace("{w}x{h}", "600x600")
+        return Response(
+            status_code=307,
+            headers={"Location": cdn_url, "Cache-Control": "public, max-age=604800"}
+        )
+
+    raise HTTPException(404, "No cover artwork found")
 
 
 class JellyfinTestRequest(BaseModel):
@@ -2092,7 +2671,14 @@ class JellyfinTestRequest(BaseModel):
 
 @app.post("/integrations/jellyfin/test")
 def post_test_jellyfin(req: JellyfinTestRequest):
-    ok, msg = integrations.test_jellyfin_connection(req.server_url, req.api_key)
+    server_url = req.server_url
+    api_key = req.api_key
+    if cfg and cfg.integrations.jellyfin:
+        if not server_url:
+            server_url = cfg.integrations.jellyfin.server_url
+        if api_key == "********" or not api_key:
+            api_key = cfg.integrations.jellyfin.api_key
+    ok, msg = integrations.test_jellyfin_connection(server_url, api_key)
     return {"success": ok, "message": msg}
 
 
@@ -2105,7 +2691,20 @@ class NavidromeTestRequest(BaseModel):
 
 @app.post("/integrations/navidrome/test")
 def post_test_navidrome(req: NavidromeTestRequest):
-    ok, msg = integrations.test_navidrome_connection(req.server_url, req.user, req.token, req.salt)
+    server_url = req.server_url
+    user = req.user
+    token = req.token
+    salt = req.salt
+    if cfg and cfg.integrations.navidrome:
+        if not server_url:
+            server_url = cfg.integrations.navidrome.server_url
+        if not user:
+            user = cfg.integrations.navidrome.user
+        if token == "********" or not token:
+            token = cfg.integrations.navidrome.token
+        if salt == "********" or not salt:
+            salt = cfg.integrations.navidrome.salt
+    ok, msg = integrations.test_navidrome_connection(server_url, user, token, salt)
     return {"success": ok, "message": msg}
 
 
@@ -2429,33 +3028,257 @@ def post_gemini_save_playlist(req: GeminiSavePlaylistRequest):
     # Add any existing or matched tracks to this playlist
     for t in req.tracks:
         am = t.get("am_track") or {}
-        tid = str(am.get("id") or am.get("track_id") or t.get("track_id") or "")
-        title = t.get("title") or am.get("title") or "Unknown Title"
-        artist = t.get("artist") or am.get("artist") or "Unknown Artist"
-        album = t.get("album") or am.get("album") or "AI Curated"
-        artwork = t.get("artwork_url") or am.get("artwork_url")
+        local = t.get("local_track") or {}
+        tid = str(am.get("id") or am.get("track_id") or local.get("track_id") or t.get("track_id") or "")
+        title = t.get("title") or am.get("title") or local.get("title") or "Unknown Title"
+        artist = t.get("artist") or am.get("artist") or local.get("artist") or "Unknown Artist"
+        album = t.get("album") or am.get("album") or local.get("album") or "AI Curated"
+        artwork = am.get("artwork_url") or local.get("artwork_url") or t.get("artwork_url")
 
-        if tid:
-            # If track record does not exist yet in DB, record metadata placeholder
-            existing_track = state.get_track(tid)
-            if not existing_track:
-                from alac_rip.state import Track
-                state.add_track(
-                    Track(
-                        track_id=tid,
-                        title=title,
-                        artist=artist,
-                        album=album,
-                        local_path="",
-                        downloaded_at=datetime.now().isoformat(),
-                        artwork_url=artwork,
-                    )
+        if not tid:
+            # Generate deterministic fallback ID for unindexed AI tracks
+            import hashlib
+            clean_slug = re.sub(r"[^\w]+", "-", f"{artist}-{title}").strip("-").lower()
+            tid = f"ai-{hashlib.md5(clean_slug.encode('utf-8')).hexdigest()[:12]}"
+
+        existing_track = state.get_track(tid)
+        if not existing_track:
+            from alac_rip.state import Track
+            state.add_track(
+                Track(
+                    track_id=tid,
+                    title=title,
+                    artist=artist,
+                    album=album,
+                    local_path=local.get("local_path", ""),
+                    downloaded_at=datetime.now().isoformat(),
+                    artwork_url=artwork,
                 )
-            state.add_track_to_playlist(name, tid)
+            )
+        elif artwork and not existing_track.artwork_url:
+            # Update artwork URL if existing track didn't have one
+            state.store_artwork(tid, artwork)
+
+        state.add_track_to_playlist(name, tid)
 
     from alac_rip.state import Playlist
     playlist = Playlist(name=name, url=f"https://music.apple.com/us/playlist/gemini-{prompt_tag}", last_synced=None, paused=False)
     return _playlist_dict(playlist)
+
+
+# ── Catalog & Discography Download Endpoints ─────────────────────────────────
+
+def _get_storefront() -> str:
+    if cfg and cfg.alac_rip_dir:
+        try:
+            cfg_file = cfg.alac_rip_dir / "apple-music-downloader" / "config.yaml"
+            if cfg_file.exists():
+                with open(cfg_file) as f:
+                    amd_cfg = yaml.safe_load(f) or {}
+                sf = amd_cfg.get("storefront")
+                if sf and sf != "enter your account storefront":
+                    return sf
+        except Exception:
+            pass
+    return "us"
+
+
+@app.get("/catalog/search")
+def get_catalog_search(
+    q: str = Query(..., min_length=1),
+    types: str = Query("songs,albums,artists"),
+    limit: int = Query(8, ge=1, le=25),
+):
+    """Search Apple Music catalog across songs, albums, and artists."""
+    try:
+        bearer = am_api.fetch_bearer_token()
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to obtain Apple Music bearer token: {exc}")
+
+    storefront = _get_storefront()
+    type_list = tuple(t.strip() for t in types.split(",") if t.strip() in ("songs", "albums", "artists"))
+    if not type_list:
+        type_list = ("songs", "albums", "artists")
+
+    try:
+        results = am_api.search_apple_music_catalog(q, bearer, storefront=storefront, types=type_list, limit=limit)
+        return results
+    except Exception as exc:
+        raise HTTPException(500, f"Catalog search failed: {exc}")
+
+
+@app.get("/catalog/album")
+def get_catalog_album(
+    id: Optional[str] = Query(None),
+    url: Optional[str] = Query(None),
+):
+    """Fetch album metadata and full tracklist from Apple Music catalog."""
+    target = id or url
+    if not target:
+        raise HTTPException(400, "Must provide 'id' or 'url' query parameter")
+
+    try:
+        bearer = am_api.fetch_bearer_token()
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to obtain Apple Music bearer token: {exc}")
+
+    storefront = _get_storefront()
+    try:
+        album_data = am_api.fetch_album_details(target, bearer, storefront=storefront)
+        return album_data
+    except am_api.AMApiError as exc:
+        raise HTTPException(404, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to fetch album details: {exc}")
+
+
+@app.get("/catalog/artist")
+def get_catalog_artist(
+    id: Optional[str] = Query(None),
+    url: Optional[str] = Query(None),
+):
+    """Fetch artist details and full paginated discography albums."""
+    target = id or url
+    if not target:
+        raise HTTPException(400, "Must provide 'id' or 'url' query parameter")
+
+    try:
+        bearer = am_api.fetch_bearer_token()
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to obtain Apple Music bearer token: {exc}")
+
+    storefront = _get_storefront()
+    try:
+        artist_data = am_api.fetch_artist_discography(target, bearer, storefront=storefront)
+        return artist_data
+    except am_api.AMApiError as exc:
+        raise HTTPException(404, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to fetch artist discography: {exc}")
+
+
+class DownloadAlbumRequest(BaseModel):
+    url: Optional[str] = None
+    album_id: Optional[str] = None
+    format: str = "ALAC"
+
+
+@app.post("/download/album")
+def post_download_album(req: DownloadAlbumRequest):
+    """Queue download for a single album."""
+    format_ = _validate_download_format(req.format)
+    target_url = req.url
+    if not target_url and req.album_id:
+        target_url = f"https://music.apple.com/us/album/{req.album_id}"
+    if not target_url:
+        raise HTTPException(400, "Must provide 'url' or 'album_id'")
+
+    try:
+        valid_url = _validate_apple_music_url(target_url)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+    if state:
+        db_id = state.enqueue_download_job(
+            url=valid_url,
+            title="Album Download",
+            format=format_,
+            item_type="album",
+        )
+        _queue_wake_event.set()
+        _broadcast_queue_event({"event": "queue_updated", "count": 1})
+        return {"queued": 1, "job_ids": [db_id]}
+
+    job_id = str(uuid.uuid4())
+    job: dict = {
+        "id": job_id,
+        "type": "one-off",
+        "url": valid_url,
+        "format": format_,
+        "playlist_name": None,
+        "log_q": queue.Queue(),
+        "started": threading.Event(),
+    }
+    with pending_jobs_lock:
+        pending_jobs.append(job)
+    job_queue.put(job)
+    _queue_wake_event.set()
+
+    return {"queued": 1, "job_ids": [job_id]}
+
+
+class DownloadArtistAlbumsRequest(BaseModel):
+    artist_id: Optional[str] = None
+    albums: list[dict[str, Any]] = []
+    format: str = "ALAC"
+
+
+@app.post("/download/artist-albums")
+def post_download_artist_albums(req: DownloadArtistAlbumsRequest):
+    """Queue batch download for selected albums of an artist."""
+    format_ = _validate_download_format(req.format)
+    if not req.albums:
+        raise HTTPException(400, "Must provide at least one album in 'albums' list")
+
+    batch_id = str(uuid.uuid4())
+    batch_title = f"Artist Discography Batch"
+    jobs_to_insert = []
+
+    for alb in req.albums:
+        url = alb.get("url") or ""
+        alb_id = str(alb.get("id") or alb.get("album_id") or "")
+        if not url and alb_id:
+            url = f"https://music.apple.com/us/album/{alb_id}"
+
+        if not url:
+            continue
+
+        try:
+            valid_url = _validate_apple_music_url(url)
+        except ValueError:
+            continue
+
+        jobs_to_insert.append({
+            "batch_id": batch_id,
+            "batch_title": alb.get("artist") or batch_title,
+            "url": valid_url,
+            "title": alb.get("title") or alb.get("name") or "Album Download",
+            "artist": alb.get("artist") or "",
+            "album": alb.get("album") or alb.get("title") or "",
+            "artwork_url": alb.get("artwork_url"),
+            "format": format_,
+            "item_type": "album",
+            "total_tracks": alb.get("total_tracks") or alb.get("track_count") or 0,
+        })
+
+    if not jobs_to_insert:
+        raise HTTPException(400, "No valid albums provided")
+
+    if state:
+        job_ids = state.bulk_enqueue_download_jobs(jobs_to_insert)
+        _queue_wake_event.set()
+        _broadcast_queue_event({"event": "queue_updated", "count": len(job_ids)})
+        return {"queued": len(job_ids), "job_ids": job_ids, "batch_id": batch_id}
+
+    job_ids = []
+    for j in jobs_to_insert:
+        job_id = str(uuid.uuid4())
+        job: dict = {
+            "id": job_id,
+            "type": "one-off",
+            "url": j["url"],
+            "format": format_,
+            "playlist_name": None,
+            "log_q": queue.Queue(),
+            "started": threading.Event(),
+        }
+        with pending_jobs_lock:
+            pending_jobs.append(job)
+        job_queue.put(job)
+        job_ids.append(job_id)
+
+    _queue_wake_event.set()
+    return {"queued": len(job_ids), "job_ids": job_ids}
 
 
 # ── Smart Dynamic Playlists Endpoints ─────────────────────────────────────────
@@ -2599,6 +3422,304 @@ def preview_smart_playlist(req: SmartPlaylistEvaluateRequest):
     }
 
 
+_artwork_resync_lock = threading.Lock()
+_artwork_resync_status: dict[str, Any] = {
+    "running": False,
+    "total": 0,
+    "processed": 0,
+    "updated": 0,
+    "message": "",
+    "error": None,
+}
+
+
+def _run_artwork_resync() -> None:
+    global _artwork_resync_status
+    try:
+        tracks = state.get_all_tracks_with_provenance() if state else []
+        missing = [t for t in tracks if not t.get("artwork_url")]
+        _artwork_resync_status["total"] = len(missing)
+        _artwork_resync_status["processed"] = 0
+        _artwork_resync_status["updated"] = 0
+
+        if not missing:
+            _artwork_resync_status["running"] = False
+            _artwork_resync_status["message"] = "All tracks already have artwork!"
+            return
+
+        bearer = ""
+        try:
+            bearer = am_api.fetch_bearer_token()
+        except Exception:
+            pass
+
+        updated_count = 0
+        for idx, t in enumerate(missing):
+            tid = t["track_id"]
+            title = (t.get("title") or "").strip()
+            artist = (t.get("artist") or "").strip()
+            album = (t.get("album") or "").strip()
+            local_path = t.get("local_path") or ""
+            found_art = None
+
+            # 1. Search Apple Music catalog
+            if bearer and (title or album):
+                clean_artist = re.split(r"\s+(?:ft\.?|feat\.?|&|x|,)\s+", artist, flags=re.IGNORECASE)[0].strip()
+                queries = []
+                if artist and title:
+                    queries.append(f"{artist} {title}".strip())
+                if artist and album:
+                    queries.append(f"{artist} {album}".strip())
+                if clean_artist != artist:
+                    if title:
+                        queries.append(f"{clean_artist} {title}".strip())
+                    if album:
+                        queries.append(f"{clean_artist} {album}".strip())
+                if title:
+                    queries.append(title)
+                if album:
+                    queries.append(album)
+
+                for q in queries:
+                    try:
+                        matches = am_api.search_apple_music_tracks(q, bearer, limit=1)
+                        if matches and matches[0].get("artwork_url"):
+                            found_art = matches[0]["artwork_url"]
+                            break
+                    except Exception:
+                        pass
+
+            # 2. Check local embedded or directory cover artwork
+            if not found_art and local_path:
+                try:
+                    resolved = _resolve_library_file(local_path)
+                    if resolved.exists():
+                        found_art = f"/track-art?path={local_path}"
+                except Exception:
+                    pass
+
+            if found_art and state:
+                state.store_artwork(tid, found_art)
+                updated_count += 1
+
+            _artwork_resync_status["processed"] = idx + 1
+            _artwork_resync_status["updated"] = updated_count
+            _artwork_resync_status["message"] = f"Processed {idx + 1}/{len(missing)} ({updated_count} matched)"
+
+        _artwork_resync_status["running"] = False
+        _artwork_resync_status["message"] = f"Finished! Matched cover art for {updated_count} of {len(missing)} tracks."
+    except Exception as exc:
+        _artwork_resync_status["running"] = False
+        _artwork_resync_status["error"] = str(exc)
+        _artwork_resync_status["message"] = f"Resync failed: {exc}"
+
+
+@app.post("/library/resync-artwork")
+def post_library_resync_artwork():
+    """Start asynchronous global artwork resync across library and playlists."""
+    if state is None:
+        raise HTTPException(503, "Library is not ready")
+
+    with _artwork_resync_lock:
+        if _artwork_resync_status.get("running"):
+            return _artwork_resync_status
+
+        _artwork_resync_status["running"] = True
+        _artwork_resync_status["error"] = None
+        _artwork_resync_status["message"] = "Starting artwork resync…"
+        _artwork_resync_status["processed"] = 0
+        _artwork_resync_status["updated"] = 0
+
+        t = threading.Thread(target=_run_artwork_resync, daemon=True)
+        t.start()
+
+    return _artwork_resync_status
+
+
+@app.get("/library/resync-artwork/status")
+def get_library_resync_artwork_status():
+    """Get live progress of artwork resync."""
+    return _artwork_resync_status
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Storage, SMB Network Mount & Navidrome Integration Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestStorageRequest(BaseModel):
+    path: str
+
+class ResolveSmbRequest(BaseModel):
+    uri: str
+
+class GenerateNavidromeTokenRequest(BaseModel):
+    password: str
+
+
+@app.post("/api/v1/storage/test")
+def test_storage_endpoint(req: TestStorageRequest):
+    """Test read/write/delete permissions, latency, and free space on any storage path."""
+    import alac_rip.smb_helper as smb_helper
+    if not req.path.strip():
+        raise HTTPException(status_code=400, detail="Path cannot be empty")
+    return smb_helper.test_storage_path(Path(req.path.strip()))
+
+
+@app.post("/api/v1/storage/resolve-smb")
+def resolve_smb_endpoint(req: ResolveSmbRequest):
+    """Attempt to resolve an smb:// URI to an active local GVFS or CIFS mount point."""
+    import alac_rip.smb_helper as smb_helper
+    if not req.uri.strip():
+        raise HTTPException(status_code=400, detail="SMB URI cannot be empty")
+    resolved = smb_helper.resolve_smb_mount(req.uri.strip())
+    return {
+        "uri": req.uri.strip(),
+        "resolved_path": str(resolved) if resolved else None,
+        "found": resolved is not None,
+    }
+
+
+@app.post("/api/v1/integrations/navidrome/generate-token")
+def generate_navidrome_token_endpoint(req: GenerateNavidromeTokenRequest):
+    """Generate Subsonic MD5 token and salt from a password for Navidrome authentication."""
+    import alac_rip.smb_helper as smb_helper
+    if not req.password:
+        raise HTTPException(status_code=400, detail="Password cannot be empty")
+    return smb_helper.generate_subsonic_token(req.password)
+
+
+class TestWebhookRequest(BaseModel):
+    service: str  # "discord", "telegram", "gotify", "jellyfin", "navidrome"
+    url: Optional[str] = None
+    token: Optional[str] = None
+    chat_id: Optional[str] = None
+    api_key: Optional[str] = None
+    user: Optional[str] = None
+    salt: Optional[str] = None
+
+
+@app.post("/api/v1/integrations/test-webhook")
+def test_webhook_endpoint(req: TestWebhookRequest):
+    svc = req.service.lower().strip()
+    if svc == "discord":
+        if not req.url:
+            raise HTTPException(400, "Webhook URL is required")
+        ok, msg = integrations.send_discord_webhook(
+            webhook_url=req.url,
+            title="Pies Pear Music Test",
+            description="Test notification from Pies Pear Music server.",
+            fields=[{"name": "Status", "value": "Online & Reachable", "inline": True}],
+        )
+        return {"success": ok, "message": msg}
+    elif svc == "telegram":
+        if not req.token or not req.chat_id:
+            raise HTTPException(400, "Bot token and Chat ID are required")
+        ok, msg = integrations.send_telegram_notification(
+            bot_token=req.token,
+            chat_id=req.chat_id,
+            message="<b>Pies Pear Music</b>\n\nTest notification from server: Online & Reachable.",
+        )
+        return {"success": ok, "message": msg}
+    elif svc == "gotify":
+        if not req.url or not req.token:
+            raise HTTPException(400, "Server URL and App token are required")
+        ok, msg = integrations.send_gotify_notification(
+            server_url=req.url,
+            token=req.token,
+            title="Pies Pear Music Test",
+            message="Test notification from Pies Pear Music server.",
+        )
+        return {"success": ok, "message": msg}
+    elif svc == "jellyfin":
+        if not req.url or not req.api_key:
+            raise HTTPException(400, "Server URL and API Key are required")
+        ok, msg = integrations.test_jellyfin_connection(req.url, req.api_key)
+        return {"success": ok, "message": msg}
+    elif svc == "navidrome":
+        if not req.url or not req.user or not req.token or not req.salt:
+            raise HTTPException(400, "Server URL, user, token, and salt are required")
+        ok, msg = integrations.test_navidrome_connection(req.url, req.user, req.token, req.salt)
+        return {"success": ok, "message": msg}
+    else:
+        raise HTTPException(400, f"Unsupported service '{req.service}'")
+
+
+class UpdateSchedulerRequest(BaseModel):
+    enabled: bool
+    interval_minutes: int
+
+
+@app.get("/api/v1/scheduler/status")
+def get_scheduler_status_endpoint():
+    if sync_scheduler is None:
+        return {
+            "enabled": False,
+            "running": False,
+            "interval_minutes": 60,
+            "last_run_time": None,
+            "last_run_status": "inactive",
+            "last_run_message": "",
+            "run_count": 0,
+        }
+    return sync_scheduler.get_status()
+
+
+@app.post("/api/v1/scheduler/trigger")
+def trigger_scheduler_sync_endpoint():
+    if sync_scheduler is None:
+        raise HTTPException(503, "Scheduler is not initialized")
+    sync_scheduler.trigger_now()
+    return {"status": "triggered"}
+
+
+@app.post("/api/v1/scheduler/config")
+def update_scheduler_config_endpoint(req: UpdateSchedulerRequest):
+    if sync_scheduler is None:
+        raise HTTPException(503, "Scheduler is not initialized")
+    sync_scheduler.update_config(enabled=req.enabled, interval_minutes=req.interval_minutes)
+    if req.enabled and not sync_scheduler.is_running():
+        sync_scheduler.start()
+    elif not req.enabled and sync_scheduler.is_running():
+        sync_scheduler.stop()
+    return sync_scheduler.get_status()
+
+
+def _find_web_dir() -> Optional[Path]:
+    """Find the frontend build directory if available."""
+    candidates = []
+    if cfg and cfg.web_dir and cfg.web_dir.exists():
+        candidates.append(cfg.web_dir)
+    candidates.extend([
+        Path(__file__).parent.parent / "app" / "build",
+        Path.cwd() / "app" / "build",
+        Path.cwd() / "build",
+        Path("/app/web"),
+    ])
+    for c in candidates:
+        if c.exists() and (c / "index.html").exists():
+            return c
+    return None
+
+
+_web_dir = _find_web_dir()
+if _web_dir:
+    if (_web_dir / "_app").exists():
+        app.mount("/_app", StaticFiles(directory=str(_web_dir / "_app")), name="app_assets")
+    if (_web_dir / "favicon.png").exists():
+        @app.get("/favicon.png", include_in_schema=False)
+        def favicon():
+            return FileResponse(_web_dir / "favicon.png")
+
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    async def serve_spa_frontend(full_path: str):
+        if full_path.startswith("api/") or full_path in ("health", "diagnostics", "metrics", "docs", "openapi.json"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        file_path = _web_dir / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(_web_dir / "index.html")
+
+
 def _read_sidecar_handshake(value: str) -> tuple[int, str]:
     try:
         data = json.loads(value)
@@ -2614,13 +3735,17 @@ def _read_sidecar_handshake(value: str) -> tuple[int, str]:
 
 
 if __name__ == "__main__":
-    port = 0
+    port = int(os.environ.get("PIES_PORT") or os.environ.get("PORT") or "10025")
+    host = os.environ.get("PIES_HOST") or os.environ.get("HOST") or ("0.0.0.0" if "--headless" in sys.argv or os.environ.get("PIES_HEADLESS") else "127.0.0.1")
     if "--sidecar-handshake" in sys.argv:
         try:
             port, _api_capability = _read_sidecar_handshake(sys.stdin.readline())
+            host = "127.0.0.1"
         except ValueError as exc:
             raise SystemExit(str(exc)) from None
-    sock = socket.socket()
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", port))
-    uvicorn.run(app, fd=sock.fileno(), log_level="warning")
+        sock = socket.socket()
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+        uvicorn.run(app, fd=sock.fileno(), log_level="warning")
+    else:
+        uvicorn.run(app, host=host, port=port, log_level="info")

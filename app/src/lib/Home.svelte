@@ -26,6 +26,31 @@
   let hiddenArtistsOpen = $state(false);
   let hiddenArtists = $state<string[]>([]);
 
+  // 1-Click Recommendation Downloads
+  let downloadingItems = $state<Record<string, boolean>>({});
+  let downloadNotice = $state<string | null>(null);
+
+  async function downloadRecommendationItem(key: string, item: { title: string; artist: string; album?: string }) {
+    downloadingItems[key] = true;
+    downloadNotice = null;
+    try {
+      const res = await api.downloadGeminiTracks([
+        {
+          title: item.title,
+          artist: item.artist,
+          am_track: null,
+        }
+      ]);
+      downloadNotice = `Queued "${item.title}" (${item.artist}) for background download!`;
+      setTimeout(() => (downloadNotice = null), 5000);
+    } catch (e) {
+      downloadNotice = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
+      setTimeout(() => (downloadNotice = null), 6000);
+    } finally {
+      downloadingItems[key] = false;
+    }
+  }
+
   // Modal state for "+N tracks" expansion
   let runTracksOpen = $state(false);
   let runTracksLoading = $state(false);
@@ -185,10 +210,19 @@
                   src={track.artwork_url.replace("{w}x{h}", "96x96")}
                   alt=""
                   class="w-9 h-9 rounded flex-shrink-0 object-cover"
-                  onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                  onerror={(e) => {
+                    const img = e.currentTarget as HTMLImageElement;
+                    img.onerror = () => { img.style.display = "none"; };
+                    img.src = `/track-art?path=${encodeURIComponent(track.local_path)}`;
+                  }}
                 />
               {:else}
-                <div class="w-9 h-9 rounded flex-shrink-0 bg-[#1e1e1e]"></div>
+                <img
+                  src={`/track-art?path=${encodeURIComponent(track.local_path)}`}
+                  alt=""
+                  class="w-9 h-9 rounded flex-shrink-0 object-cover"
+                  onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                />
               {/if}
               <div class="flex-1 min-w-0">
                 <div class="text-sm text-white font-medium truncate">{track.title}</div>
@@ -200,6 +234,17 @@
         </div>
       {/if}
     </div>
+
+    <!-- Notification Banner -->
+    {#if downloadNotice}
+      <div class="rounded-xl px-4 py-2.5 mb-6 flex items-center justify-between border bg-amber-500/10 border-amber-500/25 text-amber-300 text-xs">
+        <div class="flex items-center gap-2">
+          <span>⚡</span>
+          <span>{downloadNotice}</span>
+        </div>
+        <button onclick={() => (downloadNotice = null)} class="text-zinc-500 hover:text-white text-sm leading-none">&times;</button>
+      </div>
+    {/if}
 
     <!-- Recommendations -->
     <div class="border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden">
@@ -279,6 +324,7 @@
         </div>
         <div class="divide-y divide-[#181818]">
           {#each data.recommended_tracks as track}
+            {@const key = `track-${track.name}-${track.artist}`}
             <div class="flex items-center gap-3 px-4 py-2.5">
               <div class="flex-1 min-w-0">
                 <a href={track.url} onclick={(event) => openExternal(event, track.url)}
@@ -287,10 +333,25 @@
                 </a>
                 <div class="text-zinc-600 text-xs mt-0.5">{track.artist}</div>
               </div>
-              <a href={appleMusicSearch(`${track.name} ${track.artist}`)} onclick={(event) => openExternal(event, appleMusicSearch(`${track.name} ${track.artist}`))}
-                class="flex-shrink-0 text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
-                ♫ Apple Music
-              </a>
+              <div class="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  onclick={() => downloadRecommendationItem(key, { title: track.name, artist: track.artist })}
+                  disabled={downloadingItems[key]}
+                  class="text-[9px] font-semibold text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded px-2 py-0.5 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  title="Download this track in Lossless ALAC"
+                >
+                  {#if downloadingItems[key]}
+                    <span class="w-2.5 h-2.5 rounded-full border border-amber-300 border-t-transparent animate-spin"></span>
+                    <span>Queuing…</span>
+                  {:else}
+                    <span>⬇ Download</span>
+                  {/if}
+                </button>
+                <a href={appleMusicSearch(`${track.name} ${track.artist}`)} onclick={(event) => openExternal(event, appleMusicSearch(`${track.name} ${track.artist}`))}
+                  class="text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
+                  ♫ Apple Music
+                </a>
+              </div>
             </div>
           {/each}
         </div>
@@ -306,6 +367,7 @@
         </div>
         <div class="divide-y divide-[#181818]">
           {#each data.recommended_albums as album}
+            {@const key = `album-${album.name}-${album.artist}`}
             <div class="flex items-center gap-3 px-4 py-2.5">
               {#if album.image_url}
                 <img src={album.image_url} alt="" class="w-9 h-9 rounded flex-shrink-0 object-cover" />
@@ -319,10 +381,25 @@
                 </a>
                 <div class="text-zinc-600 text-xs mt-0.5">{album.artist}</div>
               </div>
-              <a href={appleMusicSearch(`${album.name} ${album.artist}`)} onclick={(event) => openExternal(event, appleMusicSearch(`${album.name} ${album.artist}`))}
-                class="flex-shrink-0 text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
-                ♫ Apple Music
-              </a>
+              <div class="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  onclick={() => downloadRecommendationItem(key, { title: album.name, artist: album.artist, album: album.name })}
+                  disabled={downloadingItems[key]}
+                  class="text-[9px] font-semibold text-amber-300 hover:text-amber-200 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded px-2 py-0.5 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  title="Download this album in Lossless ALAC"
+                >
+                  {#if downloadingItems[key]}
+                    <span class="w-2.5 h-2.5 rounded-full border border-amber-300 border-t-transparent animate-spin"></span>
+                    <span>Queuing…</span>
+                  {:else}
+                    <span>⬇ Download</span>
+                  {/if}
+                </button>
+                <a href={appleMusicSearch(`${album.name} ${album.artist}`)} onclick={(event) => openExternal(event, appleMusicSearch(`${album.name} ${album.artist}`))}
+                  class="text-[9px] text-zinc-600 hover:text-[#5eead4] transition-colors border border-zinc-800 hover:border-[#5eead4]/40 rounded px-1.5 py-0.5">
+                  ♫ Apple Music
+                </a>
+              </div>
             </div>
           {/each}
         </div>

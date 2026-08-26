@@ -92,13 +92,20 @@
     }
   }
 
-  function playPreview(title: string, artist: string) {
+  function thumbUrl(url: string | null | undefined, size: string): string {
+    if (!url) return "";
+    return url.replace("{w}x{h}", size);
+  }
+
+  function playPreview(track: any) {
+    const art = track.am_track?.artwork_url || track.local_track?.artwork_url || track.artwork_url || "";
     player.playTrack({
-      track_id: "preview-" + Math.random(),
-      title,
-      artist,
-      album: "Gemini Curated",
-      local_path: "",
+      track_id: track.am_track?.id || track.local_track?.track_id || ("preview-" + Math.random()),
+      title: track.title,
+      artist: track.artist,
+      album: track.album || "Gemini Curated",
+      local_path: track.local_track?.local_path || "",
+      artwork_url: art,
     });
   }
 
@@ -216,7 +223,7 @@
                 id="gemini-track-count-range"
                 type="range"
                 min="5"
-                max="100"
+                max="300"
                 step="5"
                 bind:value={trackCount}
                 class="w-24 h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-amber-400"
@@ -224,7 +231,7 @@
               <input
                 type="number"
                 min="1"
-                max="200"
+                max="500"
                 bind:value={trackCount}
                 class="w-12 px-1.5 py-0.5 rounded text-xs text-center font-bold text-amber-300 bg-black/50 border border-zinc-700 outline-none"
               />
@@ -328,9 +335,22 @@
         {#each (result.tracks || []) as track, idx}
           {@const trackKey = `${track.artist} - ${track.title}`}
           {@const isDownloading = downloadingTrackMap[trackKey]}
+          {@const art = track.am_track?.artwork_url || track.local_track?.artwork_url || track.artwork_url}
           <div class="p-3.5 flex items-center justify-between text-xs hover:bg-white/[0.04] transition-colors">
             <div class="flex items-center gap-3 min-w-0 pr-4">
               <span class="text-zinc-500 font-mono text-[10px] w-5 text-right flex-shrink-0">{idx + 1}</span>
+              {#if art}
+                <img
+                  src={thumbUrl(art, "64x64")}
+                  alt=""
+                  class="w-8 h-8 rounded-md flex-shrink-0 object-cover bg-zinc-900 border border-white/10"
+                  onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                />
+              {:else}
+                <div class="w-8 h-8 rounded-md flex-shrink-0 bg-zinc-850 border border-white/5 flex items-center justify-center text-zinc-600 text-xs">
+                  🎵
+                </div>
+              {/if}
               <div class="min-w-0">
                 <div class="font-semibold text-white truncate">{track.title}</div>
                 <div class="text-zinc-400 text-[11px] truncate">{track.artist} <span class="text-zinc-600">—</span> {track.album}</div>
@@ -367,7 +387,7 @@
               {/if}
 
               <button
-                onclick={() => playPreview(track.title, track.artist)}
+                onclick={() => playPreview(track)}
                 class="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-semibold transition-colors flex items-center gap-1"
               >
                 ▶ Play

@@ -156,7 +156,22 @@
                 alt=""
                 class="w-full h-full object-cover"
                 loading="lazy"
-                onerror={(e) => ((e.currentTarget as HTMLElement).style.display = "none")}
+                onerror={(e) => {
+                  const img = e.currentTarget as HTMLImageElement;
+                  if (item.track.local_path && !img.src.includes("/track-art")) {
+                    img.src = `/track-art?path=${encodeURIComponent(item.track.local_path)}`;
+                  } else {
+                    img.style.display = "none";
+                  }
+                }}
+              />
+            {:else if item.track.local_path}
+              <img
+                src={`/track-art?path=${encodeURIComponent(item.track.local_path)}`}
+                alt=""
+                class="w-full h-full object-cover"
+                loading="lazy"
+                onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
               />
             {:else}
               <span class="text-zinc-600 text-[10px]">♪</span>

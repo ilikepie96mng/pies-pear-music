@@ -65,14 +65,14 @@
 
   function classifyLine(text: string): "add" | "skip" | "err" | "done" | "info" {
     if (text.includes("added:")) return "add";
-    if (text.includes("skipped")) return "skip";
+    if (text.toLowerCase().includes("skipping") || text.includes("skipped")) return "skip";
     if (text.includes("error processing") || text.startsWith("[!")) return "err";
     if (text.startsWith("Sync complete")) return "done";
     return "info";
   }
 
   function parseProgress(text: string) {
-    const m = text.match(/^\[(\d+)\/(\d+)\]/);
+    const m = text.match(/\[(\d+)\/(\d+)\]\s*songs?/i) || text.match(/Track\s+(\d+)\s+of\s+(\d+)/i) || text.match(/^\[(\d+)\/(\d+)\]/);
     if (m) {
       progressCurrent = parseInt(m[1]);
       progressTotal = parseInt(m[2]);
@@ -123,8 +123,10 @@
 
   function appendLog(text: string, kind: LogLine["kind"]) {
     pendingLogs.push({ id: nextLogId++, text, kind });
+    if (pendingLogs.length > MAX_RENDERED_LOGS) {
+      pendingLogs = pendingLogs.slice(-MAX_RENDERED_LOGS);
+    }
     totalLogCount += 1;
-    allLogText = allLogText ? `${allLogText}\n${text}` : text;
     scheduleLogFlush();
   }
 
@@ -135,7 +137,7 @@
   }
 
   async function copyLog() {
-    const text = allLogText || logs.map(l => l.text).join("\n");
+    const text = logs.map(l => l.text).join("\n");
     await navigator.clipboard.writeText(text);
     copied = true;
     setTimeout(() => (copied = false), 2000);
@@ -295,9 +297,9 @@
       <div class="flex justify-between text-xs text-zinc-600 mb-1.5">
         <span>
           {#if progressTotal > 0}
-            {progressCurrent} / {progressTotal} new
-            {#if libraryCount !== null}
-              <span class="text-zinc-700 ml-1">· {(libraryCount + progressCurrent).toLocaleString()} / {(libraryCount + progressTotal).toLocaleString()} in playlist</span>
+            Scanning {progressCurrent} / {progressTotal} in playlist
+            {#if liveNew > 0}
+              <span class="text-amber-400 font-medium ml-1">({liveNew} downloading)</span>
             {/if}
           {:else}
             Working…

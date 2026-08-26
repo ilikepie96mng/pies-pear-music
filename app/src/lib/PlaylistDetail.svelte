@@ -42,6 +42,15 @@
     try {
       const res = await api.downloadGeminiTracks(unownedTracks as any);
       downloadMissingMsg = `Queued ${res.queued} unowned track(s) for background download!`;
+      // Poll library updates to reflect newly downloaded tracks automatically
+      let polls = 0;
+      const pollInterval = setInterval(async () => {
+        polls++;
+        await loadTracks();
+        if (unownedTracks.length === 0 || polls > 24) {
+          clearInterval(pollInterval);
+        }
+      }, 5000);
       setTimeout(() => (downloadMissingMsg = null), 6000);
     } catch (e) {
       downloadMissingMsg = `Download failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -170,10 +179,18 @@
   }
 
   // Strawberry export
+  let hasStrawberry = $state(false);
   let exporting = $state(false);
   let exportingM3u = $state(false);
   let exportMsg = $state<{ kind: "ok" | "err"; text: string } | null>(null);
   let exportMsgTimer: ReturnType<typeof setTimeout> | null = null;
+
+  onMount(async () => {
+    try {
+      const h = await api.getIntegrationsHealth();
+      hasStrawberry = !!h.strawberry;
+    } catch {}
+  });
 
   async function exportToStrawberry() {
     exporting = true;
@@ -394,10 +411,12 @@
             style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(163,230,53,.12);color:#bef264;border:1px solid rgba(163,230,53,.25);cursor:pointer;opacity:{exportingM3u?'.5':'1'};">
             {exportingM3u ? "…" : "▶ Player"}
           </button>
-          <button onclick={exportToStrawberry} disabled={exporting} title="Replace this playlist in Strawberry"
-            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(196,181,253,0.12);color:var(--accent-2);border:1px solid rgba(196,181,253,0.25);cursor:pointer;opacity:{exporting?'.5':'1'};">
-            {exporting ? "…" : "🍓 Strawberry"}
-          </button>
+          {#if hasStrawberry}
+            <button onclick={exportToStrawberry} disabled={exporting} title="Replace this playlist in Strawberry"
+              style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(196,181,253,0.12);color:var(--accent-2);border:1px solid rgba(196,181,253,0.25);cursor:pointer;opacity:{exporting?'.5':'1'};">
+              {exporting ? "…" : "🍓 Strawberry"}
+            </button>
+          {/if}
           {#if unownedTracks.length > 0}
             <button onclick={handleDownloadMissingTracks} disabled={downloadingMissing} title="Download unowned / AI curated tracks in this playlist"
               style="padding:6px 14px;border-radius:6px;font-size:11px;font-weight:700;background:rgba(252,211,77,0.15);color:var(--accent);border:1px solid rgba(252,211,77,0.35);cursor:pointer;opacity:{downloadingMissing?'.5':'1'};">
@@ -493,10 +512,17 @@
                 {#if track.artwork_url}
                   <img src={thumbUrl(track.artwork_url, "56x56")} alt=""
                     style="width:28px;height:28px;border-radius:4px;object-fit:cover;display:block;"
-                    onerror={e => { const el = e.currentTarget as HTMLImageElement; el.style.display='none'; (el.nextElementSibling as HTMLElement)!.style.display='block'; }} />
+                    onerror={e => {
+                      const img = e.currentTarget as HTMLImageElement;
+                      img.onerror = () => { img.style.display='none'; (img.nextElementSibling as HTMLElement)!.style.display='block'; };
+                      img.src = `/api/v1/tracks/cover?track_id=${encodeURIComponent(track.track_id)}`;
+                    }} />
                   <div style="display:none;width:28px;height:28px;border-radius:4px;background:#1e1e1e;"></div>
                 {:else}
-                  <div style="width:28px;height:28px;border-radius:4px;background:#1e1e1e;"></div>
+                  <img src={`/api/v1/tracks/cover?track_id=${encodeURIComponent(track.track_id)}`} alt=""
+                    style="width:28px;height:28px;border-radius:4px;object-fit:cover;display:block;"
+                    onerror={e => { const el = e.currentTarget as HTMLImageElement; el.style.display='none'; (el.nextElementSibling as HTMLElement)!.style.display='block'; }} />
+                  <div style="display:none;width:28px;height:28px;border-radius:4px;background:#1e1e1e;"></div>
                 {/if}
               </td>
               <td style="padding:6px 10px;color:var(--text-primary);font-weight:500;max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title={track.title}>{track.title}</td>

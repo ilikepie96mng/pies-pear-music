@@ -18,6 +18,7 @@
     onopenGraveyard: () => void;
     onopenAbout: () => void;
     onopenData: () => void;
+    onopenTour?: () => void;
     onopenCreator?: () => void;
     onopenImport?: () => void;
     onopenSync?: () => void;
@@ -27,7 +28,7 @@
   let {
     playlists, selectedName,
     onselectPlaylist, onstartSync,
-    onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenLibrary, onopenDashboard, onopenDownload, onopenGraveyard, onopenAbout, onopenData, onopenCreator, onopenImport,
+    onopenSettings, onopenSetup, onopenDiagnostics, onopenHome, onopenLibrary, onopenDashboard, onopenDownload, onopenGraveyard, onopenAbout, onopenData, onopenTour, onopenCreator, onopenImport,
     onplaylistAdded, onopenSync,
   }: Props = $props();
 
@@ -38,13 +39,16 @@
   let addError = $state<string | null>(null);
 
   let wrapperRunning = $state<boolean | null>(null);
+  let wrapperLoggingIn = $state(false);
 
   async function pollWrapperStatus() {
     try {
       const s = await api.wrapper.status();
       wrapperRunning = s.running;
+      wrapperLoggingIn = Boolean(s.logging_in);
     } catch {
       wrapperRunning = false;
+      wrapperLoggingIn = false;
     }
   }
 
@@ -92,7 +96,7 @@
   <nav class="p-2 border-b border-[var(--border)] flex flex-col gap-3 overflow-y-auto max-h-[50vh]">
     <!-- Collection Section -->
     <div class="flex flex-col gap-0.5">
-      <div class="px-2.5 py-1 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Library</div>
+      <div class="px-2.5 py-1 text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Library</div>
       {#each [
         { label: "⌂ Home", action: onopenHome },
         { label: "♫ Library", action: onopenLibrary },
@@ -110,7 +114,7 @@
 
     <!-- Intelligence Section -->
     <div class="flex flex-col gap-0.5">
-      <div class="px-2.5 py-1 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Discovery</div>
+      <div class="px-2.5 py-1 text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Discovery</div>
       {#each [
         { label: "⚡ Streaming Import", action: onopenImport },
         { label: "◈ Data & Recs", action: onopenData },
@@ -127,7 +131,7 @@
 
     <!-- Management Section -->
     <div class="flex flex-col gap-0.5">
-      <div class="px-2.5 py-1 text-[9px] font-bold text-zinc-500 uppercase tracking-widest">System</div>
+      <div class="px-2.5 py-1 text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-widest">System</div>
       {#each [
         { label: "▦ Dashboard", action: onopenDashboard },
         { label: "🏛 Graveyard", action: onopenGraveyard },
@@ -135,6 +139,7 @@
         { label: "⚙ Settings", action: onopenSettings },
         { label: "⊕ Diagnostics", action: onopenDiagnostics },
         { label: "◆ Setup", action: onopenSetup },
+        { label: "🧭 Quick-Start", action: onopenTour },
         { label: "ⓘ About", action: onopenAbout },
       ] as item}
         {#if item.action}
@@ -208,11 +213,17 @@
     {/if}
   </div>
 
-  <QueueIndicator onopenSync={onopenSync} />
+  <QueueIndicator onopenSync={onopenSync} onopenDownload={onopenDownload} />
 
   <!-- Connection status -->
   <div style="padding:8px 12px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;">
-    {#if wrapperRunning === null}
+    {#if wrapperLoggingIn}
+      <span class="relative flex h-2 w-2 flex-shrink-0">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+        <span class="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+      </span>
+      <span style="font-size:10px;color:#fde68a;font-weight:600;">Signing in…</span>
+    {:else if wrapperRunning === null}
       <span style="width:8px;height:8px;border-radius:50%;background:#444;flex-shrink:0;"></span>
       <span style="font-size:10px;color:var(--text-muted);">Checking…</span>
     {:else if wrapperRunning}

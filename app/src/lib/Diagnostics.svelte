@@ -33,12 +33,50 @@
   let criticalCount = $derived(checks.filter(c => CRITICAL.has(c.label) && !c.ok).length);
   let warnCount = $derived(checks.filter(c => !CRITICAL.has(c.label) && !c.ok).length);
 
+  // Artwork Resync State
+  let resyncingArtwork = $state(false);
+  let artworkStatus = $state<{ running: boolean; total: number; processed: number; updated: number; message: string; error?: string | null } | null>(null);
+  let artworkPollInterval: ReturnType<typeof setInterval> | null = null;
+
+  async function pollArtworkStatus() {
+    try {
+      const s = await api.getArtworkResyncStatus();
+      artworkStatus = s;
+      if (!s.running && artworkPollInterval) {
+        clearInterval(artworkPollInterval);
+        artworkPollInterval = null;
+        resyncingArtwork = false;
+      }
+    } catch {}
+  }
+
+  async function startArtworkResync() {
+    resyncingArtwork = true;
+    try {
+      const s = await api.resyncArtwork();
+      artworkStatus = s;
+      if (artworkPollInterval) clearInterval(artworkPollInterval);
+      artworkPollInterval = setInterval(pollArtworkStatus, 1500);
+    } catch (e) {
+      artworkStatus = {
+        running: false,
+        total: 0,
+        processed: 0,
+        updated: 0,
+        message: `Failed: ${e instanceof Error ? e.message : String(e)}`,
+        error: String(e),
+      };
+      resyncingArtwork = false;
+    }
+  }
+
   async function refresh() {
     loading = true;
     error = null;
     try {
       checks = await api.diagnostics();
       lastRefreshed = new Date();
+      await pollArtworkStatus();
     } catch (e) {
       error = String(e);
     } finally {
@@ -65,7 +103,10 @@
     startInterval();
   });
 
-  onDestroy(stopInterval);
+  onDestroy(() => {
+    stopInterval();
+    if (artworkPollInterval) clearInterval(artworkPollInterval);
+  });
 
   let now = $state(Date.now());
   const ticker = setInterval(() => { now = Date.now(); }, 5000);
@@ -179,6 +220,60 @@
         </div>
       </div>
     {/each}
+  </div>
+
+  <!-- Artwork & Library Health Maintenance -->
+  <div class="mt-6 border border-[rgba(255,255,255,0.06)] rounded-xl overflow-hidden bg-[#12100e]">
+    <div class="px-4 py-3 border-b border-[rgba(255,255,255,0.06)] flex items-center justify-between">
+      <div>
+        <div class="text-white text-xs font-bold flex items-center gap-1.5">
+          <span>🎨</span> Artwork & Metadata Health
+        </div>
+        <div class="text-zinc-500 text-[11px] mt-0.5">
+          Match and populate missing 1:1 album artwork across your entire library from Apple Music catalog and local audio tags.
+        </div>
+      </div>
+      <button
+        onclick={startArtworkResync}
+        disabled={resyncingArtwork || artworkStatus?.running}
+        class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 transition-colors flex items-center gap-1.5 disabled:opacity-50 flex-shrink-0"
+      >
+        {#if resyncingArtwork || artworkStatus?.running}
+          <span class="inline-block w-3 h-3 border-2 border-amber-300 border-t-transparent rounded-full animate-spin"></span>
+          <span>Resyncing…</span>
+        {:else}
+          <span>Resync All Artwork</span>
+        {/if}
+      </button>
+    </div>
+
+    {#if artworkStatus && (artworkStatus.running || artworkStatus.message)}
+      <div class="p-4 space-y-2">
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-zinc-300 font-medium">{artworkStatus.message}</span>
+          {#if artworkStatus.total > 0}
+            <span class="text-amber-400 font-mono text-[11px]">
+              {Math.round((artworkStatus.processed / artworkStatus.total) * 100)}%
+            </span>
+          {/if}
+        </div>
+
+        {#if artworkStatus.total > 0}
+          <div class="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+            <div
+              class="h-full bg-amber-500 transition-all duration-300"
+              style="width: {(artworkStatus.processed / artworkStatus.total) * 100}%"
+            ></div>
+          </div>
+        {/if}
+
+        {#if artworkStatus.error}
+          <div class="text-[11px] text-red-400 mt-1 font-mono">
+            {artworkStatus.error}
+          </div>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   {#if !loading && checks.some(c => !c.ok) && onopenSettings}

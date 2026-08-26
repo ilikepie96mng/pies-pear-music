@@ -123,3 +123,27 @@ jobs:
             app/src-tauri/target/release/bundle/SBOM-*.json
             app/src-tauri/target/release/bundle/SBOM-*.lock
           if-no-files-found: error
+
+  docker:
+    name: Docker Container Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: pies-pear-music:ci-test
+          load: true
+      - name: Verify Container Runtime
+        run: |
+          docker run -d --name pies-test -p 10025:10025 pies-pear-music:ci-test
+          sleep 5
+          curl -I http://127.0.0.1:10025/
+          curl -s http://127.0.0.1:10025/health
+          docker stop pies-test

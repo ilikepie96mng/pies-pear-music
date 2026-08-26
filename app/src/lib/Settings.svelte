@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api } from "../api";
+  import { api, type SchedulerStatus } from "../api";
   import {
     applyTheme, getStoredTheme, parseAppearance, serializeAppearance, textContrast, themes, type ThemeId,
     applyWallpaper, getStoredWallpaper,
@@ -25,6 +25,148 @@
   let jfStatus = $state<string | null>(null);
   let naviTesting = $state(false);
   let naviStatus = $state<string | null>(null);
+  let discordTesting = $state(false);
+  let discordStatus = $state<string | null>(null);
+  let telegramTesting = $state(false);
+  let telegramStatus = $state<string | null>(null);
+  let gotifyTesting = $state(false);
+  let gotifyStatus = $state<string | null>(null);
+
+  // Scheduler State
+  let schedulerStatus = $state<SchedulerStatus | null>(null);
+  let schedulerTriggering = $state(false);
+
+  // Storage & SMB helper state
+  let storageTesting = $state(false);
+  let storageTestResult = $state<string | null>(null);
+  let smbUriInput = $state("");
+  let smbResolving = $state(false);
+  let smbResolveResult = $state<string | null>(null);
+
+  // Navidrome token generator state
+  let naviPasswordInput = $state("");
+  let naviGenerating = $state(false);
+  let naviGenResult = $state<string | null>(null);
+
+  async function testStorageAccess() {
+    const target = cfg.music_dir?.toString().trim();
+    if (!target) return;
+    storageTesting = true;
+    storageTestResult = null;
+    try {
+      const res = await api.testStoragePath(target);
+      if (res.writable) {
+        storageTestResult = `✓ Writable (~${res.latency_ms}ms latency, ${res.free_space_formatted} free)`;
+      } else {
+        storageTestResult = `✗ ${res.message || "Directory is not writable"}`;
+      }
+    } catch (e) {
+      storageTestResult = `✗ Error testing storage: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      storageTesting = false;
+    }
+  }
+
+  async function resolveSmbShare() {
+    const uri = smbUriInput.trim();
+    if (!uri) return;
+    smbResolving = true;
+    smbResolveResult = null;
+    try {
+      const res = await api.resolveSmb(uri);
+      if (res.found && res.resolved_path) {
+        cfg.music_dir = res.resolved_path;
+        smbResolveResult = `✓ Found active SMB mount! Set Music Directory to: ${res.resolved_path}`;
+      } else {
+        const parts = uri.replace(/^smb:\/\//i, "").split("/");
+        const baseShare = parts.length > 1 ? `smb://${parts[0]}/${parts[1]}` : uri;
+        smbResolveResult = `✗ Mount not detected in GVFS/CIFS. Please connect to ${baseShare} in your file manager (Other Locations) or run:\ngio mount ${baseShare}`;
+      }
+    } catch (e) {
+      smbResolveResult = `✗ Error: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      smbResolving = false;
+    }
+  }
+
+  async function generateNaviToken() {
+    if (!naviPasswordInput) return;
+    naviGenerating = true;
+    naviGenResult = null;
+    try {
+      const res = await api.generateNavidromeToken(naviPasswordInput);
+      cfg.integrations.navidrome.token = res.token;
+      cfg.integrations.navidrome.salt = res.salt;
+      naviGenResult = "✓ Token & Salt generated and applied!";
+      naviPasswordInput = "";
+    } catch (e) {
+      naviGenResult = `✗ Error: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      naviGenerating = false;
+    }
+  }
+
+  async function testDiscord() {
+    discordTesting = true;
+    discordStatus = null;
+    try {
+      const url = cfg.integrations?.discord?.webhook_url || "";
+      const res = await api.integrations.testWebhook({ service: "discord", url });
+      discordStatus = res.success ? `✓ ${res.message}` : `✗ ${res.message}`;
+    } catch (e) {
+      discordStatus = `✗ Error: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      discordTesting = false;
+    }
+  }
+
+  async function testTelegram() {
+    telegramTesting = true;
+    telegramStatus = null;
+    try {
+      const tg = cfg.integrations?.telegram || {};
+      const res = await api.integrations.testWebhook({
+        service: "telegram",
+        token: tg.bot_token || "",
+        chat_id: tg.chat_id || "",
+      });
+      telegramStatus = res.success ? `✓ ${res.message}` : `✗ ${res.message}`;
+    } catch (e) {
+      telegramStatus = `✗ Error: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      telegramTesting = false;
+    }
+  }
+
+  async function testGotify() {
+    gotifyTesting = true;
+    gotifyStatus = null;
+    try {
+      const g = cfg.integrations?.gotify || {};
+      const res = await api.integrations.testWebhook({
+        service: "gotify",
+        url: g.server_url || "",
+        token: g.token || "",
+      });
+      gotifyStatus = res.success ? `✓ ${res.message}` : `✗ ${res.message}`;
+    } catch (e) {
+      gotifyStatus = `✗ Error: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      gotifyTesting = false;
+    }
+  }
+
+  async function triggerSchedulerSync() {
+    schedulerTriggering = true;
+    try {
+      await api.scheduler.trigger();
+      schedulerStatus = await api.scheduler.getStatus();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      schedulerTriggering = false;
+    }
+  }
 
   onMount(async () => {
     theme = getStoredTheme();
@@ -35,11 +177,22 @@
 
     cfg = await api.config();
     if (!cfg.integrations) {
-      cfg.integrations = {
-        jellyfin: { enabled: false, server_url: "", api_key: "", auto_refresh: true },
-        navidrome: { enabled: false, server_url: "", user: "", token: "", salt: "", auto_refresh: true },
-      };
+      cfg.integrations = {};
     }
+    if (!cfg.integrations.jellyfin) cfg.integrations.jellyfin = { enabled: false, server_url: "", api_key: "", auto_refresh: true };
+    if (!cfg.integrations.navidrome) cfg.integrations.navidrome = { enabled: false, server_url: "", user: "", token: "", salt: "", auto_refresh: true };
+    if (!cfg.integrations.discord) cfg.integrations.discord = { enabled: false, webhook_url: "" };
+    if (!cfg.integrations.telegram) cfg.integrations.telegram = { enabled: false, bot_token: "", chat_id: "" };
+    if (!cfg.integrations.gotify) cfg.integrations.gotify = { enabled: false, server_url: "", token: "" };
+
+    if (!cfg.scheduler) {
+      cfg.scheduler = { enabled: false, interval_minutes: 60 };
+    }
+
+    try {
+      schedulerStatus = await api.scheduler.getStatus();
+    } catch {}
+
     loaded = true;
   });
 
@@ -156,6 +309,12 @@
       ],
     },
     {
+      title: "Security & Multi-Device Access",
+      fields: [
+        { key: "api_token", label: "Headless Web API Token", hint: "Optional static token required for web browser access when self-hosting with Docker.", type: "password" },
+      ],
+    },
+    {
       title: "AI & External Intelligence",
       fields: [
         { key: "gemini_api_key", label: "Google Gemini API Key", hint: "Used for Gemini AI Curator intelligent playlist generation (stored mode 0600).", type: "password" },
@@ -181,14 +340,23 @@
       for (const section of SECTIONS) {
         for (const f of section.fields) {
           const val = cfg[f.key] ?? "";
-          if ((f.key === "lastfm_api_key" || f.key === "gemini_api_key") && !val) continue;
+          if ((f.key === "lastfm_api_key" || f.key === "gemini_api_key" || f.key === "api_token") && !val) continue;
           updates[f.key] = val;
         }
       }
       if (cfg.integrations) {
         updates.integrations = cfg.integrations;
       }
+      if (cfg.scheduler) {
+        updates.scheduler = cfg.scheduler;
+      }
+      if (cfg.api_token !== undefined) {
+        updates.api_token = cfg.api_token;
+      }
       await api.updateConfig(updates);
+      if (cfg.scheduler) {
+        schedulerStatus = await api.scheduler.updateConfig(cfg.scheduler.enabled, cfg.scheduler.interval_minutes);
+      }
       saved = true;
       setTimeout(() => (saved = false), 2500);
     } catch (e) {
@@ -323,9 +491,20 @@
                     </span>
                   {/if}
                 </label>
-                {#if REQUIRED.has(field.key) && isEmpty(field.key)}
-                  <span class="text-amber-500 text-[9px] uppercase tracking-wider font-semibold">required</span>
-                {/if}
+                <div class="flex items-center gap-2">
+                  {#if field.key === "music_dir"}
+                    <button
+                      onclick={testStorageAccess}
+                      disabled={storageTesting || !cfg.music_dir}
+                      class="px-2 py-0.5 rounded text-[10px] font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+                    >
+                      {storageTesting ? "Testing…" : "Test Storage & Access"}
+                    </button>
+                  {/if}
+                  {#if REQUIRED.has(field.key) && isEmpty(field.key)}
+                    <span class="text-amber-500 text-[9px] uppercase tracking-wider font-semibold">required</span>
+                  {/if}
+                </div>
               </div>
               <input
                 id={field.key}
@@ -339,6 +518,44 @@
                     : 'border-[#2a2a2a] focus:border-amber-700'}"
               />
               <p class="text-zinc-500 text-[10px] mt-1.5 leading-relaxed">{field.hint}</p>
+
+              {#if field.key === "music_dir" && storageTestResult}
+                <div class="mt-2 text-xs font-mono {storageTestResult.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}">
+                  {storageTestResult}
+                </div>
+              {/if}
+
+              {#if field.key === "music_dir"}
+                <!-- SMB / Network Share Auto-Resolver Card -->
+                <div class="mt-3 p-3 bg-black/40 border border-zinc-800 rounded-xl space-y-2">
+                  <div class="text-[11px] font-bold text-amber-400 flex items-center gap-1.5">
+                    <span>🌐</span>
+                    <span>SMB / NAS Network Storage Resolver</span>
+                  </div>
+                  <p class="text-[10px] text-zinc-400 leading-relaxed">
+                    Paste your network share URI (e.g. <code class="text-amber-300">smb://msadmin@192.168.0.250/tank/media/music/</code>) to auto-detect its active Linux GVFS/CIFS mount point:
+                  </p>
+                  <div class="flex items-center gap-2">
+                    <input
+                      bind:value={smbUriInput}
+                      placeholder="smb://msadmin@192.168.0.250/tank/media/music/"
+                      class="flex-1 bg-[#12100e] border border-[#2a2a2a] rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-700 outline-none focus:border-amber-500"
+                    />
+                    <button
+                      onclick={resolveSmbShare}
+                      disabled={smbResolving || !smbUriInput.trim()}
+                      class="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black hover:bg-amber-400 transition-colors disabled:opacity-50 flex-shrink-0"
+                    >
+                      {smbResolving ? "Detecting…" : "Auto-Detect Mount"}
+                    </button>
+                  </div>
+                  {#if smbResolveResult}
+                    <div class="text-xs font-mono {smbResolveResult.startsWith('✓') ? 'text-emerald-400' : 'text-amber-400/90'}">
+                      {smbResolveResult}
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -409,16 +626,16 @@
         </div>
 
         {#if cfg.integrations.navidrome.enabled}
-          <div class="space-y-2 pt-2 border-t border-[rgba(255,255,255,0.06)]">
+          <div class="space-y-3 pt-2 border-t border-[rgba(255,255,255,0.06)]">
             <div class="grid grid-cols-2 gap-2">
               <input
                 bind:value={cfg.integrations.navidrome.server_url}
-                placeholder="http://192.168.1.100:4533"
+                placeholder="http://192.168.0.250:4533"
                 class="px-3 py-1.5 rounded-lg text-xs bg-black/40 border border-zinc-800 text-white"
               />
               <input
                 bind:value={cfg.integrations.navidrome.user}
-                placeholder="Username"
+                placeholder="Username (e.g. msadmin)"
                 class="px-3 py-1.5 rounded-lg text-xs bg-black/40 border border-zinc-800 text-white"
               />
               <input
@@ -433,15 +650,232 @@
                 class="px-3 py-1.5 rounded-lg text-xs bg-black/40 border border-zinc-800 text-white"
               />
             </div>
+
+            <!-- Subsonic Password to Token Generator -->
+            <div class="p-2.5 bg-black/40 border border-zinc-800 rounded-xl space-y-1.5">
+              <div class="text-[10px] uppercase tracking-wider font-bold text-amber-400">Password-to-Token Auto-Generator</div>
+              <div class="flex items-center gap-2">
+                <input
+                  type="password"
+                  bind:value={naviPasswordInput}
+                  placeholder="Enter Navidrome Password"
+                  class="flex-1 px-3 py-1.5 rounded-lg text-xs bg-black/60 border border-zinc-800 text-white placeholder-zinc-700 outline-none focus:border-amber-500"
+                />
+                <button
+                  onclick={generateNaviToken}
+                  disabled={naviGenerating || !naviPasswordInput}
+                  class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-amber-300 disabled:opacity-50 transition-colors flex-shrink-0"
+                >
+                  {naviGenerating ? "Generating…" : "Generate Token & Salt"}
+                </button>
+              </div>
+              {#if naviGenResult}
+                <div class="text-[11px] font-mono {naviGenResult.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}">
+                  {naviGenResult}
+                </div>
+              {/if}
+            </div>
+
             <div class="flex items-center gap-2">
               <input type="checkbox" id="navi-auto" bind:checked={cfg.integrations.navidrome.auto_refresh} class="accent-amber-400" />
-              <label for="navi-auto" class="text-[11px] text-zinc-400">Trigger startScan on sync completion</label>
+              <label for="navi-auto" class="text-[11px] text-zinc-400">Trigger startScan on sync / download completion</label>
             </div>
           </div>
         {/if}
 
         {#if naviStatus}
           <div class="text-[11px] font-mono {naviStatus.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}">{naviStatus}</div>
+        {/if}
+      </div>
+    </div>
+
+    <!-- BACKGROUND AUTOMATION & SCHEDULER -->
+    <div class="space-y-4">
+      <div class="flex items-center justify-between">
+        <span class="text-zinc-200 text-sm font-semibold">Background Sync Scheduler</span>
+        {#if schedulerStatus}
+          <div class="flex items-center gap-2">
+            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold {schedulerStatus.running ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' : 'bg-zinc-800 text-zinc-400'}">
+              <span class="w-1.5 h-1.5 rounded-full {schedulerStatus.running ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}"></span>
+              {schedulerStatus.running ? 'Active daemon' : 'Idle'}
+            </span>
+          </div>
+        {/if}
+      </div>
+
+      <div class="p-4 rounded-xl border space-y-3" style="background:var(--surface);border-color:var(--border);">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" id="sched-enable" bind:checked={cfg.scheduler.enabled} class="accent-amber-400" />
+            <label for="sched-enable" class="text-xs font-bold text-white cursor-pointer">Enable Automated Background Sync</label>
+          </div>
+          <button
+            onclick={triggerSchedulerSync}
+            disabled={schedulerTriggering}
+            class="px-2.5 py-1 rounded text-[11px] font-semibold bg-zinc-800 hover:bg-zinc-700 text-amber-300 disabled:opacity-50 transition-colors"
+          >
+            {schedulerTriggering ? "Triggering…" : "Run Sync Now"}
+          </button>
+        </div>
+
+        {#if cfg.scheduler.enabled}
+          <div class="space-y-3 pt-2 border-t border-[rgba(255,255,255,0.06)]">
+            <div class="space-y-1.5">
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-zinc-300">Sync Interval:</span>
+                <span class="font-bold text-amber-400">{cfg.scheduler.interval_minutes} minutes</span>
+              </div>
+              <input
+                type="range"
+                min="5"
+                max="720"
+                step="5"
+                bind:value={cfg.scheduler.interval_minutes}
+                class="w-full accent-amber-500 cursor-pointer"
+              />
+              <div class="flex justify-between text-[10px] text-zinc-500">
+                <span>5m</span>
+                <span>30m</span>
+                <span>1h</span>
+                <span>2h</span>
+                <span>6h</span>
+                <span>12h</span>
+              </div>
+            </div>
+
+            {#if schedulerStatus}
+              <div class="p-3 bg-black/40 border border-zinc-800/80 rounded-lg text-xs space-y-1 text-zinc-400">
+                <div class="flex justify-between">
+                  <span>Last Sync Status:</span>
+                  <span class="font-medium {schedulerStatus.last_run_status === 'success' ? 'text-emerald-400' : schedulerStatus.last_run_status === 'error' ? 'text-red-400' : 'text-zinc-400'}">
+                    {schedulerStatus.last_run_status || 'Never run'}
+                  </span>
+                </div>
+                {#if schedulerStatus.last_run_time}
+                  <div class="flex justify-between text-[11px]">
+                    <span>Last Run Time:</span>
+                    <span class="text-zinc-300">{new Date(schedulerStatus.last_run_time).toLocaleString()}</span>
+                  </div>
+                {/if}
+                {#if schedulerStatus.last_run_message}
+                  <div class="text-[11px] text-zinc-400 truncate">
+                    <span>Note: {schedulerStatus.last_run_message}</span>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    </div>
+
+    <!-- NOTIFICATIONS & WEBHOOKS (Discord / Telegram / Gotify) -->
+    <div class="space-y-4">
+      <span class="text-zinc-200 text-sm font-semibold">Completion Webhooks & Push Notifications</span>
+
+      <!-- Discord -->
+      <div class="p-4 rounded-xl border space-y-3" style="background:var(--surface);border-color:var(--border);">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" id="discord-enable" bind:checked={cfg.integrations.discord.enabled} class="accent-amber-400" />
+            <label for="discord-enable" class="text-xs font-bold text-white cursor-pointer">Discord Webhook (Rich Embeds)</label>
+          </div>
+          <button
+            onclick={testDiscord}
+            disabled={discordTesting || !cfg.integrations.discord.webhook_url}
+            class="px-2.5 py-1 rounded text-[11px] font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-50"
+          >
+            {discordTesting ? "Sending…" : "Test Webhook"}
+          </button>
+        </div>
+
+        {#if cfg.integrations.discord.enabled}
+          <div class="space-y-2 pt-2 border-t border-[rgba(255,255,255,0.06)]">
+            <input
+              bind:value={cfg.integrations.discord.webhook_url}
+              placeholder="https://discord.com/api/webhooks/..."
+              class="w-full px-3 py-1.5 rounded-lg text-xs bg-black/40 border border-zinc-800 text-white placeholder-zinc-700 outline-none focus:border-amber-500 font-mono"
+            />
+            <p class="text-[10px] text-zinc-500">Sends rich cards with new track count, artwork, and completion timestamp on sync.</p>
+          </div>
+        {/if}
+
+        {#if discordStatus}
+          <div class="text-[11px] font-mono {discordStatus.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}">{discordStatus}</div>
+        {/if}
+      </div>
+
+      <!-- Telegram -->
+      <div class="p-4 rounded-xl border space-y-3" style="background:var(--surface);border-color:var(--border);">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" id="tg-enable" bind:checked={cfg.integrations.telegram.enabled} class="accent-amber-400" />
+            <label for="tg-enable" class="text-xs font-bold text-white cursor-pointer">Telegram Bot Notifications</label>
+          </div>
+          <button
+            onclick={testTelegram}
+            disabled={telegramTesting || !cfg.integrations.telegram.bot_token || !cfg.integrations.telegram.chat_id}
+            class="px-2.5 py-1 rounded text-[11px] font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-50"
+          >
+            {telegramTesting ? "Sending…" : "Test Bot"}
+          </button>
+        </div>
+
+        {#if cfg.integrations.telegram.enabled}
+          <div class="grid grid-cols-2 gap-2 pt-2 border-t border-[rgba(255,255,255,0.06)]">
+            <input
+              type="password"
+              bind:value={cfg.integrations.telegram.bot_token}
+              placeholder="Bot Token (e.g. 123456:ABC-DEF1234)"
+              class="px-3 py-1.5 rounded-lg text-xs bg-black/40 border border-zinc-800 text-white placeholder-zinc-700 outline-none focus:border-amber-500 font-mono"
+            />
+            <input
+              bind:value={cfg.integrations.telegram.chat_id}
+              placeholder="Chat ID (e.g. -100123456789 or @channel)"
+              class="px-3 py-1.5 rounded-lg text-xs bg-black/40 border border-zinc-800 text-white placeholder-zinc-700 outline-none focus:border-amber-500 font-mono"
+            />
+          </div>
+        {/if}
+
+        {#if telegramStatus}
+          <div class="text-[11px] font-mono {telegramStatus.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}">{telegramStatus}</div>
+        {/if}
+      </div>
+
+      <!-- Gotify -->
+      <div class="p-4 rounded-xl border space-y-3" style="background:var(--surface);border-color:var(--border);">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" id="gotify-enable" bind:checked={cfg.integrations.gotify.enabled} class="accent-amber-400" />
+            <label for="gotify-enable" class="text-xs font-bold text-white cursor-pointer">Gotify Push Server</label>
+          </div>
+          <button
+            onclick={testGotify}
+            disabled={gotifyTesting || !cfg.integrations.gotify.server_url || !cfg.integrations.gotify.token}
+            class="px-2.5 py-1 rounded text-[11px] font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-50"
+          >
+            {gotifyTesting ? "Sending…" : "Test Gotify"}
+          </button>
+        </div>
+
+        {#if cfg.integrations.gotify.enabled}
+          <div class="grid grid-cols-2 gap-2 pt-2 border-t border-[rgba(255,255,255,0.06)]">
+            <input
+              bind:value={cfg.integrations.gotify.server_url}
+              placeholder="https://gotify.yourdomain.com"
+              class="px-3 py-1.5 rounded-lg text-xs bg-black/40 border border-zinc-800 text-white placeholder-zinc-700 outline-none focus:border-amber-500 font-mono"
+            />
+            <input
+              type="password"
+              bind:value={cfg.integrations.gotify.token}
+              placeholder="Application AppToken"
+              class="px-3 py-1.5 rounded-lg text-xs bg-black/40 border border-zinc-800 text-white placeholder-zinc-700 outline-none focus:border-amber-500 font-mono"
+            />
+          </div>
+        {/if}
+
+        {#if gotifyStatus}
+          <div class="text-[11px] font-mono {gotifyStatus.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}">{gotifyStatus}</div>
         {/if}
       </div>
     </div>

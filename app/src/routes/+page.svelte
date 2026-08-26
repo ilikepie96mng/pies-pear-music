@@ -15,7 +15,9 @@
   import Library from "$lib/Library.svelte";
   import PlaylistCreator from "$lib/PlaylistCreator.svelte";
   import PlaylistImportModal from "$lib/PlaylistImportModal.svelte";
+  import QuickStartModal from "$lib/QuickStartModal.svelte";
   import PlayerBar from "$lib/PlayerBar.svelte";
+  import { player } from "$lib/player.svelte";
   import { api, type Playlist } from "../api";
 
   type View = "playlist" | "sync" | "settings" | "setup" | "diagnostics" | "dashboard" | "download" | "home" | "about" | "data" | "graveyard" | "library" | "creator" | "import";
@@ -26,6 +28,7 @@
   let syncingPlaylist = $state<string | null>(null);
   let dashboardKey = $state(0);
   let showImportModal = $state(false);
+  let showTourModal = $state(false);
 
   let selectedPlaylist = $derived(playlists.find(p => p.name === selectedName) ?? null);
 
@@ -79,7 +82,7 @@
   }
 </script>
 
-<div class="flex h-screen overflow-hidden select-none relative pb-20" style="background:var(--bg);color:var(--text-primary);">
+<div class="flex h-screen overflow-hidden select-none relative {player.currentTrack ? 'pb-20' : ''}" style="background:var(--bg);color:var(--text-primary);">
   <Sidebar
     {playlists}
     selectedName={selectedName}
@@ -97,6 +100,7 @@
     onopenGraveyard={() => (view = "graveyard")}
     onopenAbout={() => (view = "about")}
     onopenData={() => (view = "data")}
+    onopenTour={() => (showTourModal = true)}
     onopenSync={syncingPlaylist ? () => (view = "sync") : undefined}
     onplaylistAdded={onPlaylistAdded}
   />
@@ -109,7 +113,14 @@
         {/key}
       </div>
     {/if}
-    <div class="h-full" class:hidden={view === "sync"}>
+
+    <!-- Download workstation stays mounted so active streaming downloads continue when browsing away and view state is preserved -->
+    <div class="h-full" class:hidden={view !== "download"}>
+      <Download />
+    </div>
+
+    <!-- Other page views -->
+    <div class="h-full" class:hidden={view === "sync" || view === "download"}>
       {#if view === "setup"}
         <SetupWizard ondone={() => (view = "dashboard")} />
       {:else if view === "diagnostics"}
@@ -153,8 +164,6 @@
         <Settings />
       {:else if view === "graveyard"}
         <StreamingGraveyard onopenSettings={() => (view = "settings")} />
-      {:else if view === "download"}
-        <Download />
       {:else if view === "about"}
         <About />
       {:else if view === "data"}
@@ -174,6 +183,17 @@
         showImportModal = false;
         view = "download";
       }}
+    />
+  {/if}
+
+  {#if showTourModal}
+    <QuickStartModal
+      onclose={() => (showTourModal = false)}
+      onopenSetup={() => { showTourModal = false; view = "setup"; }}
+      onopenSettings={() => { showTourModal = false; view = "settings"; }}
+      onopenCreator={() => { showTourModal = false; view = "creator"; }}
+      onopenImport={() => { showTourModal = false; showImportModal = true; }}
+      onopenLibrary={() => { showTourModal = false; view = "library"; }}
     />
   {/if}
 

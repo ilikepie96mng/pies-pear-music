@@ -122,3 +122,55 @@ export async function notifyDapExportCompleted(
     `Exported ${exportedCount} track${exportedCount === 1 ? '' : 's'} for "${name}" to DAP storage.`
   );
 }
+
+/**
+ * Notifies when an album / artist discography / track download begins.
+ */
+export async function notifyDownloadStarted(itemTitle: string): Promise<void> {
+  const name = itemTitle.trim() || 'Lossless Audio';
+  await sendDesktopNotification(
+    'Download Started',
+    `Beginning lossless download for "${name}"...`
+  );
+}
+
+/**
+ * Notifies when a download completes successfully.
+ */
+export async function notifyDownloadCompleted(
+  itemTitle: string,
+  newCount: number = 0,
+  skippedCount: number = 0
+): Promise<void> {
+  const name = itemTitle.trim() || 'Download';
+  let details = '';
+  if (newCount > 0 && skippedCount > 0) {
+    details = `Ripped ${newCount} new track${newCount === 1 ? '' : 's'}, ${skippedCount} already in library.`;
+  } else if (newCount > 0) {
+    details = `Ripped ${newCount} new track${newCount === 1 ? '' : 's'}.`;
+  } else if (skippedCount > 0) {
+    details = `All ${skippedCount} track${skippedCount === 1 ? '' : 's'} already in library.`;
+  } else {
+    details = 'Download finished successfully.';
+  }
+
+  await sendDesktopNotification(
+    'Download Complete',
+    `"${name}": ${details}`
+  );
+}
+
+/**
+ * Notifies when a download encounters a failure.
+ */
+export async function notifyDownloadFailed(
+  itemTitle: string,
+  errorMessage: string
+): Promise<void> {
+  const name = itemTitle.trim() || 'Download';
+  const cleanMsg = errorMessage.trim() || 'Unknown error occurred.';
+  await sendDesktopNotification(
+    'Download Failed',
+    `"${name}": ${cleanMsg}`
+  );
+}

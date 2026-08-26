@@ -672,7 +672,22 @@
                     src={thumbUrl(alb.artwork_url, "300x300")}
                     alt={alb.album}
                     class="w-full h-full object-cover"
-                    onerror={(e) => ((e.currentTarget as HTMLElement).style.display = "none")}
+                    onerror={(e) => {
+                      const img = e.currentTarget as HTMLImageElement;
+                      const lp = alb.tracks[0]?.local_path;
+                      if (lp && !img.src.includes("/track-art")) {
+                        img.src = `/track-art?path=${encodeURIComponent(lp)}`;
+                      } else {
+                        img.style.display = "none";
+                      }
+                    }}
+                  />
+                {:else if alb.tracks[0]?.local_path}
+                  <img
+                    src={`/track-art?path=${encodeURIComponent(alb.tracks[0].local_path)}`}
+                    alt={alb.album}
+                    class="w-full h-full object-cover"
+                    onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
                   />
                 {:else}
                   <span class="text-4xl text-zinc-700">♪</span>

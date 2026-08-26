@@ -33,6 +33,7 @@
 
   // ── Wrapper auth state ──────────────────────────────────────────────────────
   let wrapperRunning = $state(false);
+  let wrapperLoggingIn = $state(false);
   let wrapperNeeds2fa = $state(false);
   let wrapper2faType = $state("");
   let wrapperLogs = $state<string[]>([]);
@@ -47,6 +48,7 @@
     try {
       const s = await api.wrapper.status();
       wrapperRunning = s.running;
+      wrapperLoggingIn = Boolean(s.logging_in);
       wrapperNeeds2fa = s.needs_2fa;
       wrapper2faType = s["2fa_type"];
       wrapperLogs = s.logs;
@@ -325,6 +327,15 @@
               class="px-3 py-1.5 rounded-lg text-xs bg-[#1a1a1a] text-zinc-400 hover:text-red-400 hover:bg-red-950/30 transition-colors disabled:opacity-50">
               Disconnect
             </button>
+          </div>
+
+        {:else if wrapperLoggingIn}
+          <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+            <span class="w-4 h-4 rounded-full border-2 border-amber-400 border-t-transparent animate-spin flex-shrink-0"></span>
+            <div class="flex-1 min-w-0">
+              <div class="text-xs font-semibold text-amber-300">Auto-authenticating with saved credentials…</div>
+              <div class="text-[10px] text-zinc-400 mt-0.5">Initializing Apple Music downloader container in background</div>
+            </div>
           </div>
 
         {:else if wrapperNeeds2fa}

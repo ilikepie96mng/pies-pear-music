@@ -4,8 +4,9 @@
 
   interface Props {
     onopenSync?: () => void;
+    onopenDownload?: () => void;
   }
-  let { onopenSync }: Props = $props();
+  let { onopenSync, onopenDownload }: Props = $props();
 
   let status = $state<QueueStatus | null>(null);
   let showPopover = $state(false);
@@ -13,7 +14,7 @@
 
   async function poll() {
     try {
-      status = await api.queue();
+      status = await api.queue.get();
     } catch {}
   }
 
@@ -27,19 +28,29 @@
   });
 
   function jobLabel(job: QueueJob): string {
-    return job.playlist_name ?? "Download";
+    return job.title || job.batch_title || job.url || "Download";
   }
 
   let isActive = $derived(status?.active != null);
   let pendingCount = $derived(status?.pending.length ?? 0);
+
+  function handleClick() {
+    if (onopenDownload) {
+      onopenDownload();
+    } else if (onopenSync) {
+      onopenSync();
+    } else {
+      showPopover = !showPopover;
+    }
+  }
 </script>
 
 {#if isActive || pendingCount > 0}
   <div class="relative mx-2 mb-2">
     <button
-      onclick={() => { if (onopenSync && isActive) { onopenSync(); } else { showPopover = !showPopover; } }}
+      onclick={handleClick}
       class="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-[#1a1a1a] border border-[var(--accent-dim)] text-xs text-zinc-300 hover:border-[var(--accent)] transition-colors"
-      title={isActive && onopenSync ? "View sync progress" : undefined}
+      title={isActive ? "View active progress" : undefined}
     >
       <span class="w-2.5 h-2.5 border border-[var(--accent)] border-t-transparent rounded-full animate-spin flex-shrink-0"></span>
       <span class="truncate flex-1 text-left">

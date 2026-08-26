@@ -11,43 +11,81 @@ class AMApiError(Exception):
     pass
 
 
-def fetch_bearer_token() -> str:
-    """Scrape music.apple.com, extract the Bearer JWT from the JS bundle, and return it.
+def _decode_jwt_payload(jwt_str: str) -> dict:
+    import base64
+    import json
+    try:
+        parts = jwt_str.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload))
+    except Exception:
+        return {}
+
+
+def fetch_bearer_token(force_refresh: bool = False) -> str:
+    """Scrape music.apple.com, extract the valid Bearer JWT from the JS bundle, and return it.
 
     Result is cached in a module-level variable for the lifetime of the process.
     Raises AMApiError on network failure or if the token cannot be found.
     """
     global _bearer_token_cache
-    if _bearer_token_cache:
+    if _bearer_token_cache and not force_refresh:
         return _bearer_token_cache
 
     try:
-        r = requests.get("https://music.apple.com", timeout=10)
+        r = requests.get("https://music.apple.com/us/browse", timeout=10)
         r.raise_for_status()
     except requests.RequestException as e:
         raise AMApiError(f"Could not fetch music.apple.com: {e}") from e
 
-    match = re.search(
-        r'<script[^>]+src="((?:https://music\.apple\.com)?/assets/index[^"]+\.js)"', r.text
+    js_paths = re.findall(
+        r'<script[^>]+src="((?:https://music\.apple\.com)?/assets/[^"]+\.js)"', r.text
     )
-    if not match:
+    if not js_paths:
+        js_paths = re.findall(r'/assets/[^"\'\s]+\.js', r.text)
+
+    if not js_paths:
         raise AMApiError("Could not find Apple Music JS bundle in page HTML")
 
-    path = match.group(1)
-    js_url = path if path.startswith("http") else f"https://music.apple.com{path}"
-    try:
-        js_r = requests.get(js_url, timeout=15)
-        js_r.raise_for_status()
-    except requests.RequestException as e:
-        raise AMApiError(f"Could not fetch JS bundle: {e}") from e
+    candidate_tokens: list[str] = []
+    for path in js_paths:
+        js_url = path if path.startswith("http") else f"https://music.apple.com{path}"
+        try:
+            js_r = requests.get(js_url, timeout=15)
+            js_r.raise_for_status()
+            found = re.findall(
+                r'"(eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+)"', js_r.text
+            )
+            for t in found:
+                if t not in candidate_tokens:
+                    candidate_tokens.append(t)
+        except Exception:
+            continue
 
-    token_match = re.search(
-        r'"(eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+)"', js_r.text
-    )
-    if not token_match:
-        raise AMApiError("Could not extract bearer token from JS bundle")
+    if not candidate_tokens:
+        raise AMApiError("Could not extract bearer token from JS bundles")
 
-    _bearer_token_cache = token_match.group(1)
+    valid_token = None
+    for token in candidate_tokens:
+        payload = _decode_jwt_payload(token)
+        iss = payload.get("iss", "")
+        if iss and iss not in ("AMPWebPlay", "M62YD85FTQ"):
+            valid_token = token
+            break
+
+    if not valid_token:
+        for token in candidate_tokens:
+            payload = _decode_jwt_payload(token)
+            if payload.get("iss") != "AMPWebPlay":
+                valid_token = token
+                break
+
+    if not valid_token:
+        valid_token = candidate_tokens[0]
+
+    _bearer_token_cache = valid_token
     return _bearer_token_cache
 
 
@@ -322,23 +360,325 @@ def search_apple_music_tracks(
     url = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/search?term={requests.utils.quote(query)}&types=songs&limit={limit}"
     try:
         r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code != 200:
-            return []
-        data = r.json()
-        songs = data.get("results", {}).get("songs", {}).get("data", [])
-        results = []
-        for s in songs:
-            attrs = s.get("attributes", {})
-            art = attrs.get("artwork", {})
-            results.append({
-                "id": s.get("id", ""),
-                "title": attrs.get("name", ""),
-                "artist": attrs.get("artistName", ""),
-                "album": attrs.get("albumName", ""),
-                "url": attrs.get("url", ""),
-                "artwork_url": art.get("url"),
-                "isrc": attrs.get("isrc", ""),
-            })
-        return results
+        if r.status_code == 200:
+            data = r.json()
+            songs = data.get("results", {}).get("songs", {}).get("data", [])
+            results = []
+            for s in songs:
+                attrs = s.get("attributes", {})
+                art = attrs.get("artwork", {})
+                results.append({
+                    "id": s.get("id", ""),
+                    "title": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", ""),
+                    "album": attrs.get("albumName", ""),
+                    "url": attrs.get("url", ""),
+                    "artwork_url": art.get("url"),
+                    "isrc": attrs.get("isrc", ""),
+                })
+            if results:
+                return results
     except Exception:
-        return []
+        pass
+
+    # Fallback to iTunes search API
+    itunes_res = _search_itunes_fallback(query, limit=limit)
+    return itunes_res.get("songs", [])
+
+
+def fetch_album_details(
+    album_id_or_url: str,
+    bearer_token: str,
+    storefront: str = "us",
+) -> dict:
+    """Fetch album metadata and full tracklist from Apple Music AMP API."""
+    if not storefront or storefront == "enter your account storefront":
+        storefront = "us"
+
+    # Extract album ID if full URL passed
+    album_id = album_id_or_url
+    if "music.apple.com" in album_id_or_url or "/album/" in album_id_or_url:
+        m = re.search(r"/album/(?:[^/]+/)?(\d+)", album_id_or_url)
+        if m:
+            album_id = m.group(1)
+        else:
+            m_end = re.search(r"(\d+)(?:[/?]|$)", album_id_or_url)
+            if m_end:
+                album_id = m_end.group(1)
+
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Origin": "https://music.apple.com",
+    }
+
+    url = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/albums/{album_id}"
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            raise AMApiError(f"Apple Music returned {r.status_code} for album {album_id}")
+        data = r.json()
+        item = data.get("data", [])[0]
+        attrs = item.get("attributes", {})
+        art = attrs.get("artwork", {})
+
+        # Fetch tracks relationship
+        rel_tracks = item.get("relationships", {}).get("tracks", {}).get("data", [])
+        tracks = []
+        for t in rel_tracks:
+            t_attrs = t.get("attributes", {})
+            t_art = t_attrs.get("artwork", {})
+            tracks.append({
+                "id": t.get("id", ""),
+                "title": t_attrs.get("name", ""),
+                "artist": t_attrs.get("artistName", ""),
+                "album": attrs.get("name", ""),
+                "track_number": t_attrs.get("trackNumber", 0),
+                "disc_number": t_attrs.get("discNumber", 1),
+                "duration_ms": t_attrs.get("durationInMillis", 0),
+                "url": t_attrs.get("url", ""),
+                "artwork_url": t_art.get("url") or art.get("url"),
+                "isrc": t_attrs.get("isrc", ""),
+            })
+
+        return {
+            "id": item.get("id", ""),
+            "title": attrs.get("name", ""),
+            "artist": attrs.get("artistName", ""),
+            "release_date": attrs.get("releaseDate", ""),
+            "record_label": attrs.get("recordLabel", ""),
+            "genre_names": attrs.get("genreNames", []),
+            "track_count": attrs.get("trackCount", len(tracks)),
+            "artwork_url": art.get("url"),
+            "url": attrs.get("url", ""),
+            "tracks": tracks,
+        }
+    except AMApiError:
+        raise
+    except Exception as e:
+        raise AMApiError(f"Failed to fetch album {album_id}: {e}") from e
+
+
+def fetch_artist_discography(
+    artist_id_or_url: str,
+    bearer_token: str,
+    storefront: str = "us",
+) -> dict:
+    """Fetch artist details and paginated albums/singles from Apple Music AMP API."""
+    if not storefront or storefront == "enter your account storefront":
+        storefront = "us"
+
+    artist_id = artist_id_or_url
+    if "music.apple.com" in artist_id_or_url or "/artist/" in artist_id_or_url:
+        m = re.search(r"/artist/(?:[^/]+/)?(\d+)", artist_id_or_url)
+        if m:
+            artist_id = m.group(1)
+        else:
+            m_end = re.search(r"(\d+)(?:[/?]|$)", artist_id_or_url)
+            if m_end:
+                artist_id = m_end.group(1)
+
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Origin": "https://music.apple.com",
+    }
+
+    # 1. Fetch artist details
+    artist_name = "Unknown Artist"
+    artist_url = ""
+    artist_genres: list[str] = []
+    artist_art = None
+
+    try:
+        r_art = requests.get(
+            f"https://amp-api.music.apple.com/v1/catalog/{storefront}/artists/{artist_id}",
+            headers=headers,
+            timeout=15,
+        )
+        if r_art.status_code == 200:
+            art_data = r_art.json().get("data", [])[0]
+            art_attrs = art_data.get("attributes", {})
+            artist_name = art_attrs.get("name", artist_name)
+            artist_url = art_attrs.get("url", "")
+            artist_genres = art_attrs.get("genreNames", [])
+            artist_art = art_attrs.get("artwork", {}).get("url")
+    except Exception:
+        pass
+
+    # 2. Paginate artist albums
+    albums: list[dict] = []
+    next_url: Optional[str] = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/artists/{artist_id}/albums?limit=100"
+
+    while next_url:
+        try:
+            r = requests.get(next_url, headers=headers, timeout=15)
+            if r.status_code != 200:
+                break
+            data = r.json()
+            for alb in data.get("data", []):
+                attrs = alb.get("attributes", {})
+                art = attrs.get("artwork", {})
+                albums.append({
+                    "id": alb.get("id", ""),
+                    "title": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", artist_name),
+                    "release_date": attrs.get("releaseDate", ""),
+                    "track_count": attrs.get("trackCount", 0),
+                    "record_label": attrs.get("recordLabel", ""),
+                    "is_single": attrs.get("isSingle", False),
+                    "is_compilation": attrs.get("isCompilation", False),
+                    "is_complete": attrs.get("isComplete", True),
+                    "url": attrs.get("url", ""),
+                    "artwork_url": art.get("url"),
+                })
+            next_path = data.get("next")
+            if next_path:
+                next_url = next_path if next_path.startswith("http") else f"https://amp-api.music.apple.com{next_path}"
+            else:
+                next_url = None
+        except Exception:
+            break
+
+    return {
+        "id": artist_id,
+        "name": artist_name,
+        "url": artist_url,
+        "genres": artist_genres,
+        "artwork_url": artist_art,
+        "album_count": len(albums),
+        "albums": albums,
+    }
+
+
+def _search_itunes_fallback(query: str, limit: int = 8) -> dict:
+    """Fallback search using the public iTunes Search API when AMP API is rate-limited or unavailable."""
+    url = f"https://itunes.apple.com/search?term={requests.utils.quote(query)}&media=music&limit={limit * 3}"
+    try:
+        r = requests.get(url, timeout=8)
+        if r.status_code != 200:
+            return {"songs": [], "albums": [], "artists": []}
+        data = r.json().get("results", [])
+        songs = []
+        albums = []
+        artists = []
+        seen_artists = set()
+        seen_albums = set()
+
+        for item in data:
+            wrapper = item.get("wrapperType")
+            kind = item.get("kind")
+            art_raw = item.get("artworkUrl100") or item.get("artworkUrl60") or ""
+            art_template = (
+                art_raw.replace("100x100bb.jpg", "{w}x{h}bb.jpg").replace("60x60bb.jpg", "{w}x{h}bb.jpg")
+                if art_raw
+                else None
+            )
+
+            if (kind == "song" or wrapper == "track") and len(songs) < limit:
+                songs.append({
+                    "id": str(item.get("trackId", "")),
+                    "title": item.get("trackName", ""),
+                    "artist": item.get("artistName", ""),
+                    "album": item.get("collectionName", ""),
+                    "url": item.get("trackViewUrl", ""),
+                    "artwork_url": art_template,
+                })
+            if item.get("collectionId") and item.get("collectionName") not in seen_albums and len(albums) < limit:
+                seen_albums.add(item.get("collectionName"))
+                albums.append({
+                    "id": str(item.get("collectionId", "")),
+                    "title": item.get("collectionName", ""),
+                    "artist": item.get("artistName", ""),
+                    "release_date": item.get("releaseDate", ""),
+                    "track_count": item.get("trackCount", 0),
+                    "url": item.get("collectionViewUrl", ""),
+                    "artwork_url": art_template,
+                })
+            if item.get("artistName") and item.get("artistName") not in seen_artists and len(artists) < limit:
+                seen_artists.add(item.get("artistName"))
+                artists.append({
+                    "id": str(item.get("artistId", "")),
+                    "name": item.get("artistName", ""),
+                    "genre_names": [item.get("primaryGenreName")] if item.get("primaryGenreName") else [],
+                    "url": item.get("artistViewUrl", ""),
+                    "artwork_url": art_template,
+                })
+
+        return {"songs": songs, "albums": albums, "artists": artists}
+    except Exception:
+        return {"songs": [], "albums": [], "artists": []}
+
+
+def search_apple_music_catalog(
+    query: str,
+    bearer_token: str,
+    storefront: str = "us",
+    types: tuple[str, ...] = ("songs", "albums", "artists"),
+    limit: int = 8,
+) -> dict:
+    """Multi-entity catalog search across songs, albums, and artists."""
+    if not query.strip():
+        return {"songs": [], "albums": [], "artists": []}
+    if not storefront or storefront == "enter your account storefront":
+        storefront = "us"
+
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Origin": "https://music.apple.com",
+    }
+    types_param = ",".join(types)
+    url = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/search?term={requests.utils.quote(query)}&types={types_param}&limit={limit}"
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            data = r.json().get("results", {})
+
+            songs = []
+            for s in data.get("songs", {}).get("data", []):
+                attrs = s.get("attributes", {})
+                art = attrs.get("artwork", {})
+                songs.append({
+                    "id": s.get("id", ""),
+                    "title": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", ""),
+                    "album": attrs.get("albumName", ""),
+                    "url": attrs.get("url", ""),
+                    "artwork_url": art.get("url"),
+                })
+
+            albums = []
+            for a in data.get("albums", {}).get("data", []):
+                attrs = a.get("attributes", {})
+                art = attrs.get("artwork", {})
+                albums.append({
+                    "id": a.get("id", ""),
+                    "title": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", ""),
+                    "release_date": attrs.get("releaseDate", ""),
+                    "track_count": attrs.get("trackCount", 0),
+                    "url": attrs.get("url", ""),
+                    "artwork_url": art.get("url"),
+                })
+
+            artists = []
+            for art in data.get("artists", {}).get("data", []):
+                attrs = art.get("attributes", {})
+                artwork = attrs.get("artwork", {})
+                artists.append({
+                    "id": art.get("id", ""),
+                    "name": attrs.get("name", ""),
+                    "genre_names": attrs.get("genreNames", []),
+                    "url": attrs.get("url", ""),
+                    "artwork_url": artwork.get("url"),
+                })
+
+            if songs or albums or artists:
+                return {
+                    "songs": songs,
+                    "albums": albums,
+                    "artists": artists,
+                }
+    except Exception:
+        pass
+
+    # Seamless fallback to public iTunes API
+    return _search_itunes_fallback(query, limit=limit)

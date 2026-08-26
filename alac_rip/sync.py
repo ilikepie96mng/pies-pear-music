@@ -16,6 +16,7 @@ from alac_rip.organizer import ensure_album_dir, sanitize, track_path
 from alac_rip.state import StateManager, Track
 
 LogCallback = Callable[[str, str], None]  # (message, phase)
+ProgressCallback = Callable[[int, int], None]  # (current, total)
 
 
 class StagingValidationError(ValueError):
@@ -87,18 +88,47 @@ class SyncEngine:
         playlist_name: Optional[str] = None,
         on_log: Optional[LogCallback] = None,
         state_dir: Optional[Path] = None,
+        on_progress: Optional[ProgressCallback] = None,
     ):
         self.state = state
         self.music_dir = music_dir.resolve()
         self.playlist_name = playlist_name
         self.state_dir = state_dir.resolve() if state_dir else None
         self._on_log: LogCallback = on_log or (lambda msg, phase: None)
+        self.on_progress: Optional[ProgressCallback] = on_progress
 
     def _log(self, msg: str, phase: str = "processing") -> None:
         self._on_log(msg, phase)
 
     def _track_id(self, relative_path: str) -> str:
-        return relative_path
+        return str(Path(relative_path).with_suffix(".flac"))
+
+    def _safe_commit(self, src: Path, dest: Path) -> None:
+        """Safely move or replace file across filesystems or network SMB/CIFS shares."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(str(src), str(dest))
+        except OSError:
+            # Cross-filesystem or FUSE / CIFS fallback: use byte-copy to avoid ioctl/utime failures on FUSE
+            tmp_target = dest.with_name(f".tmp_commit_{os.getpid()}_{dest.name}")
+            try:
+                shutil.copyfile(str(src), str(tmp_target))
+                try:
+                    os.replace(str(tmp_target), str(dest))
+                except OSError:
+                    # Some network shares disallow atomic overwrite; remove existing target first
+                    dest.unlink(missing_ok=True)
+                    try:
+                        os.replace(str(tmp_target), str(dest))
+                    except OSError:
+                        shutil.copyfile(str(src), str(dest))
+                        tmp_target.unlink(missing_ok=True)
+            finally:
+                tmp_target.unlink(missing_ok=True)
+            try:
+                src.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _write_m3u8(self) -> None:
         tracks = self.state.get_playlist_tracks(self.playlist_name)
@@ -115,10 +145,27 @@ class SyncEngine:
             # Flatten any control characters or newlines to prevent M3U injection
             clean_artist = re.sub(r"[\r\n\t\x00-\x1f\x7f-\x9f\s]+", " ", track.artist).strip()
             clean_title = re.sub(r"[\r\n\t\x00-\x1f\x7f-\x9f\s]+", " ", track.title).strip()
-            clean_path = track.local_path.replace("\r", "").replace("\n", "").strip()
-            lines.append(f"#EXTINF:-1,{clean_artist} - {clean_title}")
-            lines.append(clean_path)
+            raw_path = track.local_path.replace("\r", "").replace("\n", "").strip()
 
+            # Format relative path for universal Navidrome / Subsonic / SMB portability
+            rel_path = raw_path
+            try:
+                track_abs = Path(raw_path).resolve()
+                if track_abs.is_relative_to(self.music_dir):
+                    rel_path = os.path.relpath(track_abs, playlists_dir).replace("\\", "/")
+                elif "/artists/" in raw_path:
+                    sub_rel = "artists/" + raw_path.split("/artists/", 1)[1]
+                    rel_path = f"../{sub_rel}".replace("\\", "/")
+                elif "\\artists\\" in raw_path:
+                    sub_rel = "artists/" + raw_path.split("\\artists\\", 1)[1].replace("\\", "/")
+                    rel_path = f"../{sub_rel}"
+            except Exception:
+                if "/artists/" in raw_path:
+                    sub_rel = "artists/" + raw_path.split("/artists/", 1)[1]
+                    rel_path = f"../{sub_rel}".replace("\\", "/")
+
+            lines.append(f"#EXTINF:-1,{clean_artist} - {clean_title}")
+            lines.append(rel_path)
 
         m3u8_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -130,26 +177,26 @@ class SyncEngine:
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg failed: {result.stderr.decode()[:300]}")
 
-    def _handle_cover(self, src_m4a: Path, dest_flac: Path) -> None:
-        """Extract embedded cover from M4A, embed in FLAC, and save cover.jpg."""
+    def _handle_cover(self, src_m4a: Path, local_flac: Path, album_dir: Path) -> None:
+        """Extract embedded cover from M4A, embed in FLAC, and save cover.jpg in album dir."""
         try:
             mp4 = MP4(src_m4a)
             if mp4.tags and "covr" in mp4.tags and mp4.tags["covr"]:
                 cover_data = bytes(mp4.tags["covr"][0])
-                embed_cover_art(dest_flac, cover_data)
-                cover_jpg = dest_flac.parent / "cover.jpg"
+                embed_cover_art(local_flac, cover_data)
+                cover_jpg = album_dir / "cover.jpg"
                 if not cover_jpg.exists():
                     save_cover_file(cover_jpg, cover_data)
         except Exception:
             pass  # cover art is best-effort
 
-    def _save_cover_from_flac(self, dest_flac: Path) -> None:
+    def _save_cover_from_flac(self, local_flac: Path, album_dir: Path) -> None:
         """Extract embedded cover from FLAC and save cover.jpg in album dir."""
-        cover_jpg = dest_flac.parent / "cover.jpg"
+        cover_jpg = album_dir / "cover.jpg"
         if cover_jpg.exists():
             return
         try:
-            audio = FLAC(dest_flac)
+            audio = FLAC(local_flac)
             if audio.pictures:
                 save_cover_file(cover_jpg, audio.pictures[0].data)
         except Exception:
@@ -194,33 +241,29 @@ class SyncEngine:
         lrc_src = src_audio.with_suffix(".lrc")
         lrc_dest = dest_flac.with_suffix(".lrc")
         if lrc_src.exists() and lrc_src.is_file() and not lrc_src.is_symlink():
-            content = lrc_src.read_text(encoding="utf-8", errors="replace")
-            shutil.move(str(lrc_src), lrc_dest)
-            return content
+            try:
+                content = lrc_src.read_text(encoding="utf-8", errors="replace")
+                lrc_dest.write_text(content, encoding="utf-8")
+                lrc_src.unlink(missing_ok=True)
+                return content
+            except Exception:
+                pass
         elif lyrics_text:
-            lrc_dest.write_text(lyrics_text, encoding="utf-8")
-            return lyrics_text
+            try:
+                lrc_dest.write_text(lyrics_text, encoding="utf-8")
+                return lyrics_text
+            except Exception:
+                pass
         elif lrc_dest.exists() and lrc_dest.is_file():
-            return lrc_dest.read_text(encoding="utf-8", errors="replace")
+            try:
+                return lrc_dest.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
         return None
 
-    def sync(
-        self,
-        staging_dir: Path,
-        manifest_files: Optional[Sequence[Path]] = None,
-    ) -> SyncResult:
-        """
-        Process .m4a/.flac files from staging_dir into music_dir.
-
-        Validates staging directory boundaries, uses manifest-scoped input when
-        provided, guarantees atomic transactional writes with collision safety,
-        verifies FLAC stream integrity before committing, and ensures resolved
-        destination containment.
-        """
-        valid_staging = validate_staging_dir(staging_dir, self.music_dir, self.state_dir)
-
-        # Collect and validate audio candidate files
+    def _find_files(self, staging_dir: Path, manifest_files: Optional[Sequence[Path]] = None) -> list[Path]:
         audio_files: list[Path] = []
+        valid_staging = staging_dir.resolve()
         if manifest_files is not None:
             for item in manifest_files:
                 resolved_item = item.resolve()
@@ -240,39 +283,44 @@ class SyncEngine:
                     and f.suffix.lower() in (".flac", ".m4a")
                 ):
                     audio_files.append(f)
+        return audio_files
 
-        total = len(audio_files)
-        self._log(f"Processing {total} file(s) from staging...", "processing")
+    def sync(
+        self,
+        staging_dir: Path,
+        manifest_files: Optional[Sequence[Path]] = None,
+    ) -> SyncResult:
+        """
+        Process .m4a/.flac files from staging_dir into music_dir.
 
+        If manifest_files is provided, ONLY those files (which must exist in
+        staging_dir) will be processed, ignoring other files in staging_dir.
+        """
+        valid_staging = validate_staging_dir(staging_dir, self.music_dir, self.state_dir)
+        files = self._find_files(valid_staging, manifest_files=manifest_files)
+        total_files = len(files)
         new_count = 0
         skipped_count = 0
         error_count = 0
 
-        for i, src in enumerate(audio_files, 1):
-            relative = str(src.relative_to(valid_staging))
-            # Track ID uses .flac extension regardless of source format
-            track_id = str(Path(relative).with_suffix(".flac"))
+        self._log(f"Found {total_files} file(s) in staging.", "processing")
 
-            if self.state.is_downloaded(track_id):
-                skipped_count += 1
-                try:
-                    src.unlink(missing_ok=True)
-                except OSError:
-                    pass
-                if self.playlist_name:
-                    self.state.add_track_to_playlist(self.playlist_name, track_id)
-                self._log(f"[{i}/{total}] skipped (already downloaded): {src.name}", "processing")
-                continue
-
-            tmp_dest: Optional[Path] = None
+        for i, src in enumerate(files, 1):
             try:
                 tags = read_tags(src)
-                if not tags["artist"] and not tags["album"] and not tags["title"]:
-                    self._log(
-                        f"[{i}/{total}] warning: {src.name} has no source metadata "
-                        f"(downloader likely failed to embed tags) — filing under Unknown Artist/Unknown Album",
-                        "processing",
-                    )
+                track_id = self._track_id(str(src.relative_to(valid_staging)))
+
+                if self.state.is_downloaded(track_id):
+                    skipped_count += 1
+                    src.unlink(missing_ok=True)
+                    if self.playlist_name:
+                        self.state.add_track_to_playlist(self.playlist_name, track_id)
+                    continue
+
+                # Progress callback
+                if self.on_progress:
+                    self.on_progress(i, total_files, f"[{i}/{total_files}] {src.name}", "processing")
+                
                 artist = tags["artist"] or "Unknown Artist"
                 album_artist = tags["album_artist"] or artist
                 album = tags["album"] or "Unknown Album"
@@ -280,61 +328,50 @@ class SyncEngine:
                 track_num = tags["track_num"] or 1
 
                 dest = track_path(self.music_dir, album_artist, album, track_num, title, ext=".flac")
-                resolved_dest = dest.resolve()
-
-                # Containment check: destination must reside inside music_dir
-                if not resolved_dest.is_relative_to(self.music_dir):
-                    raise SecurityError(f"Destination path escapes music directory: {dest}")
-
                 album_dir = ensure_album_dir(self.music_dir, album_artist, album)
 
-                # Collision safety: Check if file already exists at destination
                 if dest.exists():
-                    existing_track = self.state.get_track(track_id)
-                    if existing_track and existing_track.local_path == str(dest):
-                        # Idempotent retry of same track
-                        pass
+                    dest = album_dir / f"{track_num:02d} - {sanitize(title)}_coll_{i}.flac"
+
+                # Perform all transcoding, tagging, and validation locally on fast local storage
+                local_work_file = valid_staging / f".work_{os.getpid()}_{i}_{dest.name}"
+
+                try:
+                    if src.suffix.lower() == ".m4a":
+                        self._convert_m4a_to_flac(src, local_work_file)
+                        self._handle_cover(src, local_work_file, album_dir)
                     else:
-                        # Collision with distinct track: disambiguate to prevent data destruction
-                        dest = album_dir / f"{track_num:02d} - {sanitize(title)}_coll_{i}.flac"
+                        shutil.copyfile(str(src), str(local_work_file))
+                        self._save_cover_from_flac(local_work_file, album_dir)
 
-                # Write to unique temporary file in destination directory
-                tmp_dest = album_dir / f".tmp_{os.getpid()}_{i}_{dest.name}"
+                    # Collect lyrics from staging .lrc sidecar or embedded source tags
+                    lrc_src = src.with_suffix(".lrc")
+                    lyrics = ""
+                    if lrc_src.exists() and lrc_src.is_file() and not lrc_src.is_symlink():
+                        lyrics = lrc_src.read_text(encoding="utf-8", errors="replace")
+                    elif tags.get("lyrics"):
+                        lyrics = tags["lyrics"]
 
-                if src.suffix.lower() == ".m4a":
-                    self._convert_m4a_to_flac(src, tmp_dest)
-                    self._handle_cover(src, tmp_dest)
-                else:
-                    shutil.copy2(str(src), str(tmp_dest))
-                    self._save_cover_from_flac(tmp_dest)
+                    write_tags(
+                        local_work_file,
+                        title=title,
+                        artist=artist,
+                        album_artist=album_artist,
+                        album=album,
+                        track_num=track_num,
+                        genre=tags.get("genre", ""),
+                        lyrics=lyrics,
+                    )
 
-                # Collect lyrics from staging .lrc sidecar or embedded source tags
-                lrc_src = src.with_suffix(".lrc")
-                lyrics = ""
-                if lrc_src.exists() and lrc_src.is_file() and not lrc_src.is_symlink():
-                    lyrics = lrc_src.read_text(encoding="utf-8", errors="replace")
-                elif tags.get("lyrics"):
-                    lyrics = tags["lyrics"]
+                    # FLAC stream integrity verification before commit
+                    valid, err_msg = self._verify_flac_integrity(local_work_file)
+                    if not valid:
+                        raise IntegrityError(f"FLAC stream integrity check failed: {err_msg}")
 
-                write_tags(
-                    tmp_dest,
-                    title=title,
-                    artist=artist,
-                    album_artist=album_artist,
-                    album=album,
-                    track_num=track_num,
-                    playlist_name=self.playlist_name or "",
-                    lyrics=lyrics,
-                )
-
-                # FLAC stream integrity verification before commit
-                valid, err_msg = self._verify_flac_integrity(tmp_dest)
-                if not valid:
-                    tmp_dest.unlink(missing_ok=True)
-                    raise IntegrityError(f"FLAC stream integrity check failed: {err_msg}")
-
-                # Atomic replacement into final destination
-                os.replace(str(tmp_dest), str(dest))
+                    # Safe replacement into final destination (handles cross-filesystem and SMB mounts)
+                    self._safe_commit(local_work_file, dest)
+                finally:
+                    local_work_file.unlink(missing_ok=True)
 
                 # Safe cleanup of source
                 try:
@@ -355,16 +392,11 @@ class SyncEngine:
                 if self.playlist_name:
                     self.state.add_track_to_playlist(self.playlist_name, track_id)
                 new_count += 1
-                self._log(f"[{i}/{total}] added: {artist} — {title}", "processing")
+                self._log(f"[{i}/{total_files}] added: {artist} — {title}", "processing")
 
             except Exception as exc:
-                if tmp_dest is not None:
-                    try:
-                        tmp_dest.unlink(missing_ok=True)
-                    except OSError:
-                        pass
                 error_count += 1
-                self._log(f"[{i}/{total}] error processing {src.name}: {exc}", "processing")
+                self._log(f"[{i}/{total_files}] error processing {src.name}: {exc}", "processing")
 
         if self.playlist_name:
             self._write_m3u8()

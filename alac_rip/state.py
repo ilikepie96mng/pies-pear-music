@@ -140,6 +140,33 @@ class StateManager:
                 )
             """)
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS download_queue (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_id       TEXT,
+                    batch_title    TEXT,
+                    url            TEXT NOT NULL,
+                    title          TEXT NOT NULL,
+                    artist         TEXT NOT NULL DEFAULT '',
+                    album          TEXT NOT NULL DEFAULT '',
+                    artwork_url    TEXT,
+                    format         TEXT NOT NULL DEFAULT 'ALAC',
+                    status         TEXT NOT NULL DEFAULT 'pending',
+                    item_type      TEXT NOT NULL DEFAULT 'album',
+                    total_tracks   INTEGER NOT NULL DEFAULT 0,
+                    new_tracks     INTEGER NOT NULL DEFAULT 0,
+                    skipped_tracks INTEGER NOT NULL DEFAULT 0,
+                    error_count    INTEGER NOT NULL DEFAULT 0,
+                    error_message  TEXT,
+                    log_path       TEXT,
+                    position       INTEGER NOT NULL DEFAULT 0,
+                    created_at     TEXT NOT NULL,
+                    started_at     TEXT,
+                    completed_at   TEXT
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_download_queue_status_pos ON download_queue (status, position, id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_download_queue_batch ON download_queue (batch_id)")
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS audio_waveforms (
                     track_id    TEXT PRIMARY KEY,
                     points      INTEGER NOT NULL,
@@ -324,6 +351,38 @@ class StateManager:
                 artwork_url=row[6],
             )
 
+    def get_track_by_path(self, path: str) -> Optional[Track]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url, am_track_id FROM tracks WHERE local_path = ?",
+                (path,)
+            ).fetchone()
+            if not row:
+                p_obj = Path(path)
+                row = conn.execute(
+                    "SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url, am_track_id FROM tracks WHERE local_path LIKE ? OR local_path LIKE ?",
+                    (f"%{p_obj.name}", f"%{p_obj.parent.name}/{p_obj.name}")
+                ).fetchone()
+            if row:
+                return Track(
+                    track_id=row[0],
+                    title=row[1],
+                    artist=row[2],
+                    album=row[3],
+                    local_path=row[4],
+                    downloaded_at=row[5],
+                    artwork_url=row[6],
+                    am_track_id=row[7] if len(row) > 7 else None,
+                )
+            return None
+
+    def update_track_local_path(self, track_id: str, new_path: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE tracks SET local_path = ? WHERE track_id = ?",
+                (new_path, track_id)
+            )
+
 
     def add_track(self, track: Track) -> None:
         with self._conn() as conn:
@@ -470,6 +529,49 @@ class StateManager:
             ).fetchall()
             return {r[0] for r in rows}
 
+    def get_playlist_am_track_mapping(self, playlist_name: str) -> list[tuple[str, str]]:
+        """Return (track_id, am_track_id) pairs for a playlist."""
+        with self._conn() as conn:
+            return conn.execute(
+                """
+                SELECT pt.track_id, t.am_track_id
+                FROM playlist_tracks pt
+                JOIN tracks t ON pt.track_id = t.track_id
+                WHERE pt.playlist_name = ? AND t.am_track_id IS NOT NULL
+                """,
+                (playlist_name,),
+            ).fetchall()
+
+    def bulk_record_delisted_tracks(self, records: list[tuple[str, str, str]]) -> None:
+        """Insert or replace multiple delisted tracks (playlist_name, track_id, delisted_at)."""
+        if not records:
+            return
+        with self._conn() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO delisted_tracks (playlist_name, track_id, delisted_at) VALUES (?, ?, ?)",
+                records,
+            )
+
+    def bulk_clear_delisted_tracks(self, playlist_name: str, track_ids: list[str]) -> None:
+        """Clear multiple delisted tracks in a single batch."""
+        if not track_ids:
+            return
+        with self._conn() as conn:
+            conn.executemany(
+                "DELETE FROM delisted_tracks WHERE playlist_name = ? AND track_id = ?",
+                [(playlist_name, tid) for tid in track_ids],
+            )
+
+    def bulk_update_track_am_ids(self, updates: list[tuple[str, str]]) -> None:
+        """Batch update (am_track_id, track_id) pairs."""
+        if not updates:
+            return
+        with self._conn() as conn:
+            conn.executemany(
+                "UPDATE tracks SET am_track_id = ? WHERE track_id = ?",
+                updates,
+            )
+
     def update_track_am_id(self, track_id: str, am_track_id: str) -> None:
         with self._conn() as conn:
             conn.execute(
@@ -573,6 +675,14 @@ class StateManager:
                     (limit,),
                 ).fetchall()
             return [SyncRun(*r) for r in rows]
+
+    def store_artwork(self, track_id: str, artwork_url: str) -> None:
+        """Store or update artwork URL for a specific track by track_id."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE tracks SET artwork_url = ? WHERE track_id = ?",
+                (artwork_url, track_id),
+            )
 
     def bulk_store_artwork(self, artwork_map: dict[str, str]) -> None:
         """Store artwork URLs for tracks matched by am_track_id. Only fills nulls."""
@@ -832,4 +942,274 @@ class StateManager:
         with self._conn() as conn:
             cur = conn.execute("DELETE FROM audio_waveforms WHERE track_id = ?", (track_id,))
             return cur.rowcount > 0
+
+    # ── Download Queue (Persistent SQLite Queue) ──────────────────────────────
+
+    def enqueue_download_job(
+        self,
+        url: str,
+        title: str,
+        artist: str = "",
+        album: str = "",
+        artwork_url: Optional[str] = None,
+        format: str = "ALAC",
+        item_type: str = "album",
+        batch_id: Optional[str] = None,
+        batch_title: Optional[str] = None,
+        total_tracks: int = 0,
+    ) -> int:
+        now = datetime.now().isoformat()
+        with self._conn() as conn:
+            max_pos = conn.execute("SELECT COALESCE(MAX(position), 0) FROM download_queue WHERE status = 'pending'").fetchone()[0]
+            cur = conn.execute(
+                """
+                INSERT INTO download_queue (
+                    batch_id, batch_title, url, title, artist, album, artwork_url,
+                    format, status, item_type, total_tracks, position, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                """,
+                (batch_id, batch_title, url, title, artist, album, artwork_url,
+                 format, item_type, total_tracks, max_pos + 1, now),
+            )
+            return cur.lastrowid
+
+    def bulk_enqueue_download_jobs(self, jobs: list[dict]) -> list[int]:
+        if not jobs:
+            return []
+        now = datetime.now().isoformat()
+        job_ids = []
+        with self._conn() as conn:
+            max_pos = conn.execute("SELECT COALESCE(MAX(position), 0) FROM download_queue WHERE status = 'pending'").fetchone()[0]
+            for i, j in enumerate(jobs):
+                cur = conn.execute(
+                    """
+                    INSERT INTO download_queue (
+                        batch_id, batch_title, url, title, artist, album, artwork_url,
+                        format, status, item_type, total_tracks, position, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                    """,
+                    (
+                        j.get("batch_id"),
+                        j.get("batch_title"),
+                        j["url"],
+                        j["title"],
+                        j.get("artist", ""),
+                        j.get("album", ""),
+                        j.get("artwork_url"),
+                        j.get("format", "ALAC"),
+                        j.get("item_type", "album"),
+                        j.get("total_tracks", 0),
+                        max_pos + 1 + i,
+                        now,
+                    ),
+                )
+                job_ids.append(cur.lastrowid)
+        return job_ids
+
+    def get_next_pending_job(self) -> Optional[dict]:
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT * FROM download_queue
+                WHERE status = 'pending'
+                ORDER BY position ASC, id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_queue_job(self, job_id: int) -> Optional[dict]:
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM download_queue WHERE id = ?", (job_id,)).fetchone()
+            return dict(row) if row else None
+
+    def get_queue_jobs(
+        self,
+        status: Optional[str] = None,
+        batch_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> list[dict]:
+        query = "SELECT * FROM download_queue WHERE 1=1"
+        params: list[object] = []
+        if status:
+            query += " AND status = ?"
+            params.append(status)
+        if batch_id:
+            query += " AND batch_id = ?"
+            params.append(batch_id)
+
+        # Sort running first, then pending by position, then completed by completed_at desc
+        query += """
+            ORDER BY
+                CASE status
+                    WHEN 'running' THEN 1
+                    WHEN 'pending' THEN 2
+                    WHEN 'error' THEN 3
+                    ELSE 4
+                END,
+                position ASC,
+                id ASC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(query, params).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_queue_summary(self) -> dict:
+        with self._conn() as conn:
+            conn.row_factory = sqlite3.Row
+            active_row = conn.execute(
+                "SELECT * FROM download_queue WHERE status = 'running' ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+
+            counts = dict(conn.execute(
+                "SELECT status, COUNT(*) FROM download_queue GROUP BY status"
+            ).fetchall())
+
+            pending_jobs = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM download_queue WHERE status = 'pending' ORDER BY position ASC, id ASC LIMIT 50"
+                ).fetchall()
+            ]
+
+            recent_completed = [
+                dict(r) for r in conn.execute(
+                    "SELECT * FROM download_queue WHERE status IN ('done', 'error', 'cancelled') ORDER BY id DESC LIMIT 20"
+                ).fetchall()
+            ]
+
+            return {
+                "active": dict(active_row) if active_row else None,
+                "pending": pending_jobs,
+                "completed": recent_completed,
+                "counts": {
+                    "pending": counts.get("pending", 0),
+                    "running": counts.get("running", 0),
+                    "done": counts.get("done", 0),
+                    "error": counts.get("error", 0),
+                    "cancelled": counts.get("cancelled", 0),
+                    "total": sum(counts.values()),
+                }
+            }
+
+    def update_job_status(
+        self,
+        job_id: int,
+        status: str,
+        started_at: Optional[str] = None,
+        completed_at: Optional[str] = None,
+        new_tracks: Optional[int] = None,
+        skipped_tracks: Optional[int] = None,
+        error_count: Optional[int] = None,
+        error_message: Optional[str] = None,
+        log_path: Optional[str] = None,
+    ) -> bool:
+        sets = ["status = ?"]
+        params: list[object] = [status]
+
+        if started_at is not None:
+            sets.append("started_at = ?")
+            params.append(started_at)
+        if completed_at is not None:
+            sets.append("completed_at = ?")
+            params.append(completed_at)
+        if new_tracks is not None:
+            sets.append("new_tracks = ?")
+            params.append(new_tracks)
+        if skipped_tracks is not None:
+            sets.append("skipped_tracks = ?")
+            params.append(skipped_tracks)
+        if error_count is not None:
+            sets.append("error_count = ?")
+            params.append(error_count)
+        if error_message is not None:
+            sets.append("error_message = ?")
+            params.append(error_message)
+        if log_path is not None:
+            sets.append("log_path = ?")
+            params.append(log_path)
+
+        params.append(job_id)
+        with self._conn() as conn:
+            cur = conn.execute(f"UPDATE download_queue SET {', '.join(sets)} WHERE id = ?", params)
+            return cur.rowcount > 0
+
+    def cancel_queue_job(self, job_id: int) -> bool:
+        now = datetime.now().isoformat()
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE download_queue SET status = 'cancelled', completed_at = ? WHERE id = ? AND status IN ('pending', 'running')",
+                (now, job_id),
+            )
+            return cur.rowcount > 0
+
+    def cancel_all_pending_jobs(self, batch_id: Optional[str] = None) -> int:
+        now = datetime.now().isoformat()
+        query = "UPDATE download_queue SET status = 'cancelled', completed_at = ? WHERE status = 'pending'"
+        params = [now]
+        if batch_id:
+            query += " AND batch_id = ?"
+            params.append(batch_id)
+        with self._conn() as conn:
+            cur = conn.execute(query, params)
+            return cur.rowcount
+
+    def retry_failed_jobs(self, job_ids: Optional[list[int]] = None) -> int:
+        with self._conn() as conn:
+            if job_ids:
+                placeholders = ",".join("?" for _ in job_ids)
+                cur = conn.execute(
+                    f"""
+                    UPDATE download_queue
+                    SET status = 'pending', error_count = 0, error_message = NULL,
+                        started_at = NULL, completed_at = NULL
+                    WHERE id IN ({placeholders}) AND status IN ('error', 'cancelled')
+                    """,
+                    job_ids,
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    UPDATE download_queue
+                    SET status = 'pending', error_count = 0, error_message = NULL,
+                        started_at = NULL, completed_at = NULL
+                    WHERE status IN ('error', 'cancelled')
+                    """
+                )
+            return cur.rowcount
+
+    def clear_completed_queue(self, older_than_days: int = 0) -> int:
+        with self._conn() as conn:
+            if older_than_days <= 0:
+                cur = conn.execute("DELETE FROM download_queue WHERE status IN ('done', 'cancelled', 'error')")
+            else:
+                cutoff = datetime.fromtimestamp(datetime.now().timestamp() - older_than_days * 86400).isoformat()
+                cur = conn.execute(
+                    "DELETE FROM download_queue WHERE status IN ('done', 'cancelled', 'error') AND completed_at < ?",
+                    (cutoff,),
+                )
+            return cur.rowcount
+
+    def reorder_queue_job(self, job_id: int, new_position: int) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute("UPDATE download_queue SET position = ? WHERE id = ?", (new_position, job_id))
+            return cur.rowcount > 0
+
+    def reset_interrupted_jobs(self) -> int:
+        """On server start/crash-recovery, reset any 'running' jobs back to 'pending'."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """
+                UPDATE download_queue
+                SET status = 'pending', started_at = NULL
+                WHERE status = 'running'
+                """
+            )
+            return cur.rowcount
+
 

@@ -6,25 +6,43 @@ interface ApiConnection {
 }
 
 let _connection: ApiConnection | null = null;
+let _isTauri: boolean | null = null;
 
 async function getConnection(): Promise<ApiConnection> {
   if (_connection !== null) return _connection;
-  _connection = await invoke<ApiConnection>("get_api_connection");
-  return _connection;
+  try {
+    _connection = await invoke<ApiConnection>("get_api_connection");
+    _isTauri = true;
+    return _connection;
+  } catch {
+    _isTauri = false;
+    const token = typeof localStorage !== "undefined" ? localStorage.getItem("pies_api_token") || "" : "";
+    const port = typeof window !== "undefined" && window.location.port ? parseInt(window.location.port, 10) : 10025;
+    _connection = { port, capability: token };
+    return _connection;
+  }
 }
 
 async function base(): Promise<string> {
-  return `http://127.0.0.1:${(await getConnection()).port}`;
+  const conn = await getConnection();
+  if (_isTauri) {
+    return `http://127.0.0.1:${conn.port}`;
+  }
+  if (typeof window !== "undefined" && window.location.origin && window.location.hostname !== "tauri.localhost") {
+    return window.location.origin;
+  }
+  return `http://127.0.0.1:${conn.port}`;
 }
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const connection = await getConnection();
+  const headers: Record<string, string> = {
+    ...(connection.capability ? { "X-Pies-Api-Token": connection.capability } : {}),
+    ...(init.headers as Record<string, string>),
+  };
   return fetch(`${await base()}${path}`, {
     ...init,
-    headers: {
-      "X-Pies-Api-Token": connection.capability,
-      ...init.headers,
-    },
+    headers,
   });
 }
 
@@ -189,17 +207,7 @@ export interface IntegrationsHealth {
   strawberry: boolean;
 }
 
-export interface QueueJob {
-  id: string;
-  type: "playlist" | "one-off";
-  playlist_name: string | null;
-  url: string | null;
-}
-
-export interface QueueStatus {
-  active: QueueJob | null;
-  pending: QueueJob[];
-}
+export type QueueStatus = QueueSummary;
 
 export interface DiagnosticCheck {
   label: string;
@@ -415,6 +423,7 @@ export interface GeminiTrackItem {
   rationale: string;
   matched?: boolean;
   in_library?: boolean;
+  artwork_url?: string | null;
   local_track?: LibraryTrack | null;
   am_track?: {
     id: string;
@@ -422,6 +431,7 @@ export interface GeminiTrackItem {
     artist: string;
     album: string;
     url?: string;
+    artwork_url?: string | null;
   } | null;
 }
 
@@ -430,6 +440,73 @@ export interface GeminiPlaylistResult {
   description: string;
   vibe_tags: string[];
   tracks: GeminiTrackItem[];
+}
+
+export interface CatalogSong {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  url?: string;
+  artwork_url?: string | null;
+  isrc?: string;
+}
+
+export interface CatalogTrack {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  track_number: number;
+  disc_number: number;
+  duration_ms: number;
+  url?: string;
+  artwork_url?: string | null;
+  isrc?: string;
+}
+
+export interface CatalogAlbum {
+  id: string;
+  title: string;
+  artist: string;
+  release_date: string;
+  record_label?: string;
+  genre_names?: string[];
+  track_count: number;
+  artwork_url?: string | null;
+  url?: string;
+  is_single?: boolean;
+  is_compilation?: boolean;
+  is_complete?: boolean;
+  tracks?: CatalogTrack[];
+}
+
+export interface CatalogArtist {
+  id: string;
+  name: string;
+  url?: string;
+  artwork_url?: string | null;
+  genres?: string[];
+  genre_names?: string[];
+  album_count?: number;
+  albums?: CatalogAlbum[];
+}
+
+export interface CatalogSearchResult {
+  songs: CatalogSong[];
+  albums: CatalogAlbum[];
+  artists: CatalogArtist[];
+}
+
+export interface StorageTestResult {
+  path: string;
+  exists: boolean;
+  is_dir: boolean;
+  writable: boolean;
+  free_space_bytes: number;
+  free_space_formatted: string;
+  latency_ms: number;
+  message: string;
 }
 
 export const api = {
@@ -526,7 +603,7 @@ export const api = {
     return r.json();
   },
 
-  async queue(): Promise<QueueStatus> {
+  async syncQueue(): Promise<QueueStatus> {
     const r = await request("/sync/queue");
     if (!r.ok) throw new Error(`${r.status}`);
     return r.json();
@@ -900,6 +977,92 @@ export const api = {
     return `http://127.0.0.1:${conn.port}/api/v1/tracks/cover?track_id=${encodeURIComponent(trackId)}&token=${encodeURIComponent(conn.capability)}`;
   },
 
+  async resyncArtwork(): Promise<{ running: boolean; total: number; processed: number; updated: number; message: string; error?: string | null }> {
+    const r = await request("/library/resync-artwork", { method: "POST" });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Artwork resync failed (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async getArtworkResyncStatus(): Promise<{ running: boolean; total: number; processed: number; updated: number; message: string; error?: string | null }> {
+    const r = await request("/library/resync-artwork/status");
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to get artwork status (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async searchCatalog(
+    query: string,
+    types: string[] = ["songs", "albums", "artists"],
+    limit: number = 8,
+  ): Promise<CatalogSearchResult> {
+    const typesParam = types.join(",");
+    const r = await request(`/catalog/search?q=${encodeURIComponent(query)}&types=${encodeURIComponent(typesParam)}&limit=${limit}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Catalog search failed (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async catalogAlbum(idOrUrl: string): Promise<CatalogAlbum> {
+    const isUrl = idOrUrl.startsWith("http");
+    const param = isUrl ? `url=${encodeURIComponent(idOrUrl)}` : `id=${encodeURIComponent(idOrUrl)}`;
+    const r = await request(`/catalog/album?${param}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch album (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async catalogArtist(idOrUrl: string): Promise<CatalogArtist> {
+    const isUrl = idOrUrl.startsWith("http");
+    const param = isUrl ? `url=${encodeURIComponent(idOrUrl)}` : `id=${encodeURIComponent(idOrUrl)}`;
+    const r = await request(`/catalog/artist?${param}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch artist discography (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async downloadAlbum(urlOrId: string, format: string = "ALAC"): Promise<{ queued: number; job_ids: string[] }> {
+    const isUrl = urlOrId.startsWith("http");
+    const payload = isUrl ? { url: urlOrId, format } : { album_id: urlOrId, format };
+    const r = await request("/download/album", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to queue album download (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async downloadArtistAlbums(
+    albums: Array<{ id?: string; album_id?: string; url?: string; title?: string }>,
+    format: string = "ALAC",
+    artistId?: string,
+  ): Promise<{ queued: number; job_ids: string[] }> {
+    const r = await request("/download/artist-albums", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ artist_id: artistId, albums, format }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to queue artist albums (${r.status})`);
+    }
+    return r.json();
+  },
+
   wrapper: {
     async login(email: string, password: string): Promise<{ status: string; msg: string }> {
       const r = await request("/wrapper/login", {
@@ -924,9 +1087,219 @@ export const api = {
       return r.json();
     },
 
-    async status(): Promise<{ running: boolean; needs_2fa: boolean; "2fa_type": string; logs: string[] }> {
+    async status(): Promise<{ running: boolean; logging_in?: boolean; needs_2fa: boolean; "2fa_type": string; logs: string[] }> {
       const r = await request("/wrapper/status");
       return r.json();
     },
   },
+
+  async testStoragePath(path: string): Promise<StorageTestResult> {
+    const r = await request("/api/v1/storage/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Storage test failed (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async resolveSmb(uri: string): Promise<{ uri: string; resolved_path: string | null; found: boolean }> {
+    const r = await request("/api/v1/storage/resolve-smb", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uri }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `SMB resolution failed (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async generateNavidromeToken(password: string): Promise<{ token: string; salt: string }> {
+    const r = await request("/api/v1/integrations/navidrome/generate-token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Token generation failed (${r.status})`);
+    }
+    return r.json();
+  },
+
+  queue: {
+    async get(): Promise<QueueSummary> {
+      const r = await request("/api/v1/queue");
+      if (!r.ok) throw new Error(`Failed to fetch queue (${r.status})`);
+      return r.json();
+    },
+
+    async add(payload: {
+      urls?: string[];
+      items?: Array<{
+        url?: string;
+        id?: string;
+        album_id?: string;
+        title?: string;
+        artist?: string;
+        album?: string;
+        artwork_url?: string | null;
+        total_tracks?: number;
+        item_type?: string;
+      }>;
+      format?: string;
+      batch_id?: string;
+      batch_title?: string;
+    }): Promise<{ queued: number; job_ids: number[]; batch_id?: string }> {
+      const r = await request("/api/v1/queue/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || `Failed to add items to queue (${r.status})`);
+      }
+      return r.json();
+    },
+
+    async cancel(params: { jobId?: number; batchId?: string; cancelAll?: boolean }): Promise<{ cancelled: number }> {
+      const r = await request("/api/v1/queue/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: params.jobId,
+          batch_id: params.batchId,
+          cancel_all: params.cancelAll ?? false,
+        }),
+      });
+      if (!r.ok) throw new Error(`Failed to cancel queue items (${r.status})`);
+      return r.json();
+    },
+
+    async retry(jobIds?: number[]): Promise<{ retried: number }> {
+      const r = await request("/api/v1/queue/retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_ids: jobIds || [] }),
+      });
+      if (!r.ok) throw new Error(`Failed to retry jobs (${r.status})`);
+      return r.json();
+    },
+
+    async clear(olderThanDays: number = 0): Promise<{ cleared: number }> {
+      const r = await request(`/api/v1/queue/clear?older_than_days=${olderThanDays}`, {
+        method: "POST",
+      });
+      if (!r.ok) throw new Error(`Failed to clear queue (${r.status})`);
+      return r.json();
+    },
+
+    async reorder(jobId: number, newPosition: number): Promise<{ reordered: boolean }> {
+      const r = await request("/api/v1/queue/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: jobId, new_position: newPosition }),
+      });
+      if (!r.ok) throw new Error(`Failed to reorder job (${r.status})`);
+      return r.json();
+    },
+  },
+
+  scheduler: {
+    async getStatus(): Promise<SchedulerStatus> {
+      const r = await request("/api/v1/scheduler/status");
+      if (!r.ok) throw new Error(`Failed to get scheduler status (${r.status})`);
+      return r.json();
+    },
+
+    async trigger(): Promise<{ status: string }> {
+      const r = await request("/api/v1/scheduler/trigger", { method: "POST" });
+      if (!r.ok) throw new Error(`Failed to trigger scheduler (${r.status})`);
+      return r.json();
+    },
+
+    async updateConfig(enabled: boolean, intervalMinutes: number): Promise<SchedulerStatus> {
+      const r = await request("/api/v1/scheduler/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled, interval_minutes: intervalMinutes }),
+      });
+      if (!r.ok) throw new Error(`Failed to update scheduler config (${r.status})`);
+      return r.json();
+    },
+  },
+
+  integrations: {
+    async testWebhook(req: {
+      service: string;
+      url?: string;
+      token?: string;
+      chat_id?: string;
+      api_key?: string;
+      user?: string;
+      salt?: string;
+    }): Promise<{ success: boolean; message: string }> {
+      const r = await request("/api/v1/integrations/test-webhook", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+      });
+      if (!r.ok) throw new Error(`Failed to test webhook (${r.status})`);
+      return r.json();
+    },
+  },
 };
+
+export interface SchedulerStatus {
+  enabled: boolean;
+  running: boolean;
+  interval_minutes: number;
+  last_run_time: string | null;
+  last_run_status: string;
+  last_run_message: string;
+  run_count: number;
+}
+
+export interface QueueJob {
+  id: number | string;
+  batch_id?: string | null;
+  batch_title?: string | null;
+  url: string;
+  title: string;
+  artist?: string;
+  album?: string;
+  artwork_url?: string | null;
+  format: string;
+  status: "pending" | "running" | "done" | "error" | "cancelled";
+  item_type?: "album" | "single" | "playlist" | "direct";
+  total_tracks?: number;
+  new_tracks?: number;
+  skipped_tracks?: number;
+  error_count?: number;
+  error_message?: string | null;
+  log_path?: string | null;
+  position?: number;
+  created_at?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface QueueSummary {
+  active: QueueJob | null;
+  pending: QueueJob[];
+  completed: QueueJob[];
+  counts: {
+    pending: number;
+    running: number;
+    done: number;
+    error: number;
+    cancelled: number;
+    total: number;
+  };
+}

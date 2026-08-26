@@ -52,11 +52,11 @@ def test_embed_cover_art_writes_covr_atom(sample_m4a):
     assert audio.tags["covr"][0].imageformat == MP4Cover.FORMAT_JPEG
 
 
-def test_write_and_read_playlist_name(sample_m4a):
+def test_write_and_read_genre(sample_m4a):
     write_tags(sample_m4a, title="Track", artist="Artist",
-               album="Album", track_num=1, playlist_name="Mega Playlist")
+               album="Album", track_num=1, genre="Electronic")
     audio = MP4(sample_m4a)
-    assert audio.tags["©gen"] == ["Mega Playlist"]
+    assert audio.tags["©gen"] == ["Electronic"]
 
 
 def test_save_cover_file_writes_bytes(tmp_path):

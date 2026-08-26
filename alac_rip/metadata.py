@@ -19,12 +19,14 @@ def read_tags(file_path: Path) -> dict:
             track_num = 0
         artist = str(tags.get("artist", [""])[0])
         lyrics = str(tags.get("lyrics", tags.get("unsyncedlyrics", [""]))[0])
+        genre = str(tags.get("genre", [""])[0]) if "genre" in tags else ""
         return {
             "title": str(tags.get("title", [""])[0]),
             "artist": artist,
             "album_artist": str(tags.get("albumartist", [artist])[0]),
             "album": str(tags.get("album", [""])[0]),
             "track_num": track_num,
+            "genre": genre,
             "lyrics": lyrics,
         }
     else:
@@ -33,12 +35,14 @@ def read_tags(file_path: Path) -> dict:
         track_info = tags.get("trkn", [(0, 0)])[0]
         artist = str(tags.get("©ART", [""])[0])
         lyrics = str(tags.get("©lyr", [""])[0])
+        genre = str(tags.get("©gen", [""])[0]) if "©gen" in tags else ""
         return {
             "title": str(tags.get("©nam", [""])[0]),
             "artist": artist,
             "album_artist": str(tags.get("aART", [artist])[0]),
             "album": str(tags.get("©alb", [""])[0]),
             "track_num": int(track_info[0]) if track_info else 0,
+            "genre": genre,
             "lyrics": lyrics,
         }
 
@@ -50,8 +54,9 @@ def write_tags(
     album: str,
     track_num: int,
     album_artist: str = "",
-    playlist_name: str = "",
+    genre: str = "",
     lyrics: str = "",
+    playlist_name: str = "",
 ) -> None:
     if _is_flac(file_path):
         audio = FLAC(file_path)
@@ -60,7 +65,10 @@ def write_tags(
         audio["albumartist"] = album_artist
         audio["album"] = album
         audio["tracknumber"] = str(track_num)
-        audio["genre"] = playlist_name
+        if genre and genre.strip():
+            audio["genre"] = genre.strip()
+        elif "genre" in audio and playlist_name and audio["genre"] and audio["genre"][0] == playlist_name:
+            del audio["genre"]
         if lyrics:
             audio["lyrics"] = lyrics
             audio["unsyncedlyrics"] = lyrics
@@ -74,7 +82,10 @@ def write_tags(
         audio.tags["aART"] = [album_artist]
         audio.tags["©alb"] = [album]
         audio.tags["trkn"] = [(track_num, 0)]
-        audio.tags["©gen"] = [playlist_name]
+        if genre and genre.strip():
+            audio.tags["©gen"] = [genre.strip()]
+        elif "©gen" in audio.tags and playlist_name and audio.tags["©gen"] and audio.tags["©gen"][0] == playlist_name:
+            del audio.tags["©gen"]
         if lyrics:
             audio.tags["©lyr"] = [lyrics]
         audio.save()

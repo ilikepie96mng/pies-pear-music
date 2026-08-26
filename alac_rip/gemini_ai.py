@@ -19,8 +19,8 @@ DEFAULT_GEMINI_MODELS = [
     "gemini-1.5-pro",
 ]
 
-_MAX_PROMPT_LENGTH = 1000
-_MAX_TRACK_COUNT = 100
+_MAX_PROMPT_LENGTH = 2000
+_MAX_TRACK_COUNT = 500
 
 
 class GeminiTrackItem(BaseModel):
@@ -171,6 +171,7 @@ def generate_smart_playlist(
         "generationConfig": {
             "response_mime_type": "application/json",
             "temperature": 0.7,
+            "maxOutputTokens": 8192,
         }
     }
 
