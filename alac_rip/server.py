@@ -191,7 +191,10 @@ def _is_wrapper_port_alive(port: int = 10020) -> bool:
 
 def _credentials_path() -> Path:
     """Encrypted/private credentials fallback path."""
-    p = Path.home() / ".config" / "pies-alac-rip"
+    if DEFAULT_CONFIG_PATH.parent.exists():
+        p = DEFAULT_CONFIG_PATH.parent
+    else:
+        p = Path.home() / ".config" / "pies-alac-rip"
     p.mkdir(parents=True, exist_ok=True)
     return p / ".credentials"
 
@@ -255,7 +258,7 @@ def _secret_service_clear() -> None:
 
 
 def save_credentials(email: str, password: str) -> bool:
-    """Store credentials in Secret Service for the session and persistent keyring."""
+    """Store credentials in Secret Service for desktop, or /config/.credentials for headless containers."""
     global _session_credentials
     _session_credentials = (email, password)
     persisted = _secret_service_store(email, password)
@@ -264,7 +267,22 @@ def save_credentials(email: str, password: str) -> bool:
             _credentials_path().unlink(missing_ok=True)
         except OSError:
             pass
-    return persisted
+        return True
+
+    # In headless / Docker container mode, persist securely to mounted /config/.credentials (0600)
+    if os.environ.get("PIES_HEADLESS") or os.environ.get("PIES_CONFIG_PATH"):
+        try:
+            p = _credentials_path()
+            p.write_text(json.dumps({"email": email, "password": password}), encoding="utf-8")
+            try:
+                p.chmod(0o600)
+            except OSError:
+                pass
+            return True
+        except Exception:
+            return False
+
+    return False
 
 
 def load_credentials() -> tuple[Optional[str], Optional[str]]:
