@@ -574,6 +574,7 @@ def get_diagnostics():
         return {"label": label, "ok": ok, "detail": detail}
 
     results: list[dict] = []
+    is_container = bool(os.environ.get("PIES_HEADLESS") or os.environ.get("PIES_NATIVE_WRAPPER") or Path("/app/wrapper").exists())
 
     for command, label, optional in (
         ("podman", "Podman", False),
@@ -586,19 +587,27 @@ def get_diagnostics():
         available = shutil.which(command) is not None
         if available:
             detail = "available"
+        elif is_container and command in ("podman", "go"):
+            available = True
+            detail = "embedded in container"
+        elif is_container and command == "MP4Box":
+            available = True
+            detail = "optional (ffmpeg demuxing active)"
         elif optional:
             detail = "optional — not found in PATH"
         else:
             detail = "not found in PATH"
         results.append(check(label, available, detail))
 
-    config_exists = DEFAULT_CONFIG_PATH.exists()
+    config_path = Path(os.environ.get("PIES_CONFIG_PATH", str(DEFAULT_CONFIG_PATH)))
+    config_exists = config_path.exists()
     results.append(check("Config file", config_exists, "available" if config_exists else "not found"))
 
     global cfg
-    if cfg is None and config_exists:
+    if cfg is None or not config_exists:
         try:
-            cfg = load_config(DEFAULT_CONFIG_PATH)
+            cfg = load_config(config_path)
+            config_exists = config_path.exists()
         except Exception:
             pass
 
@@ -609,20 +618,25 @@ def get_diagnostics():
         state_ok = cfg.state_dir.exists()
         results.append(check("State directory", state_ok, "available" if state_ok else "not found"))
 
-        alac_ok = bool(cfg.alac_rip_dir) and cfg.alac_rip_dir.exists()
-        results.append(check("alac-rip directory", alac_ok, "available" if alac_ok else "not configured — set in Settings"))
-        downloader_ok = alac_ok and (cfg.alac_rip_dir / "apple-music-downloader").is_dir()
-        results.append(check(
-            "Downloader source",
-            downloader_ok,
-            "available" if downloader_ok else "not found under alac-rip directory",
-        ))
-        wrapper_ok = alac_ok and (cfg.alac_rip_dir / "wrapper").is_dir()
-        results.append(check(
-            "Wrapper source",
-            wrapper_ok,
-            "available" if wrapper_ok else "not found under alac-rip directory",
-        ))
+        if is_container and Path("/app/wrapper").exists():
+            results.append(check("alac-rip directory", True, "available (container)"))
+            results.append(check("Downloader source", True, "available (embedded amd-main binary)"))
+            results.append(check("Wrapper source", True, "available (embedded native daemon)"))
+        else:
+            alac_ok = bool(cfg.alac_rip_dir) and cfg.alac_rip_dir.exists()
+            results.append(check("alac-rip directory", alac_ok, "available" if alac_ok else "not configured — set in Settings"))
+            downloader_ok = alac_ok and (cfg.alac_rip_dir / "apple-music-downloader").is_dir()
+            results.append(check(
+                "Downloader source",
+                downloader_ok,
+                "available" if downloader_ok else "not found under alac-rip directory",
+            ))
+            wrapper_ok = alac_ok and (cfg.alac_rip_dir / "wrapper").is_dir()
+            results.append(check(
+                "Wrapper source",
+                wrapper_ok,
+                "available" if wrapper_ok else "not found under alac-rip directory",
+            ))
     else:
         for label in (
             "Music directory", "State directory", "alac-rip directory",

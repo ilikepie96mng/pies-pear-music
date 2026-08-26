@@ -73,6 +73,17 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
                 data = yaml.safe_load(f) or {}
         except Exception:
             data = {}
+    elif os.environ.get("PIES_HEADLESS") or os.environ.get("PIES_CONFIG_PATH"):
+        try:
+            data = {
+                "music_dir": os.environ.get("PIES_MUSIC_DIR", "/music"),
+                "state_dir": os.environ.get("PIES_STATE_DIR", "/config/.state"),
+                "alac_rip_dir": os.environ.get("PIES_ALAC_RIP_DIR", "/app"),
+                "log_retention_days": 2,
+            }
+            save_config_file(path, data)
+        except Exception:
+            pass
 
     def p(key: str, env_var: str, default: str = "") -> Path:
         val = os.environ.get(env_var) or data.get(key, default)
