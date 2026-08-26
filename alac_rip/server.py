@@ -404,7 +404,10 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
             native_bin = candidate
 
     if native_bin.exists() and (not shutil.which("podman") or os.environ.get("PIES_NATIVE_WRAPPER") or os.environ.get("PIES_HEADLESS")):
-        cmd = [str(native_bin), f"-L={email}:{password}"]
+        if email and password:
+            cmd = [str(native_bin), "-L", f"{email}:{password}"]
+        else:
+            cmd = [str(native_bin)]
         wrapper_logs.append(f"{prefix}Launching native decryption daemon: {native_bin}")
         child_env = os.environ.copy()
         cwd_dir = str(native_bin.parent)

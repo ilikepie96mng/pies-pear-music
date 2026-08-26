@@ -9,9 +9,14 @@ services:
     ports:
       - "10025:10025"
     volumes:
-      - ./config:/config
-      - /tank/media/music/Apple Music:/music
+      - "/tank/media/music/Apple Music/.state:/config"
+      - "/tank/media/music/Apple Music:/music"
       - /tmp/pies-staging:/staging
+    cap_add:
+      - SYS_ADMIN
+      - SYS_CHROOT
+    security_opt:
+      - seccomp:unconfined
     environment:
       - PIES_CONFIG_PATH=/config/config.yaml
       - PIES_STATE_DIR=/config/.state
@@ -19,9 +24,3 @@ services:
       - PIES_WEB_DIR=/app/web
       - PORT=10025
       - HOST=0.0.0.0
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:10025/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
