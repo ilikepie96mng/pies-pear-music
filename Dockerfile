@@ -54,7 +54,7 @@ RUN chmod +x /app/entrypoint.sh
 
 # Configuration defaults for Docker container
 ENV PIES_CONFIG_PATH=/config/config.yaml \
-    PIES_STATE_DIR=/config/.state \
+    PIES_STATE_DIR=/config \
     PIES_MUSIC_DIR=/music \
     PIES_WEB_DIR=/app/web \
     PIES_HEADLESS=1 \
