@@ -47,8 +47,10 @@ RUN chmod +x /usr/local/bin/amd-main
 COPY vendor/wrapper/wrapper /app/wrapper
 COPY vendor/wrapper/rootfs /app/rootfs
 RUN chmod +x /app/wrapper && \
-    mkdir -p /app/rootfs/dev && \
-    ln -sf /dev/urandom /app/rootfs/dev/urandom
+    mkdir -p /app/rootfs/dev
+
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Configuration defaults for Docker container
 ENV PIES_CONFIG_PATH=/config/config.yaml \
@@ -65,4 +67,5 @@ EXPOSE 10025
 
 VOLUME ["/config", "/music", "/staging"]
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python", "-m", "alac_rip.server"]
