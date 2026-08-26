@@ -365,12 +365,50 @@
       saving = false;
     }
   }
+  function applyServerDefaults() {
+    cfg.music_dir = "/music";
+    cfg.state_dir = "/config/.state";
+    cfg.alac_rip_dir = "/app";
+    appearanceMessage = "Applied standard Docker container paths (/music, /config/.state, /app). Click Save to apply!";
+  }
 </script>
 
 <div class="p-8 max-w-2xl h-full overflow-y-auto space-y-8">
   <div>
     <h1 class="text-white text-2xl font-bold tracking-tight">Settings</h1>
-    <p class="text-zinc-500 text-sm mt-1">Saved to <span class="font-mono text-zinc-400 text-xs">~/.config/pies-alac-rip/config.yaml</span></p>
+    <p class="text-zinc-500 text-sm mt-1">Configuring <span class="font-mono text-zinc-400 text-xs">{typeof window !== 'undefined' && window.location.hostname !== 'tauri.localhost' ? 'Headless Docker / Server Mode' : '~/.config/pies-alac-rip/config.yaml'}</span></p>
+  </div>
+
+  <!-- SERVER VS DESKTOP SETUP HELPER -->
+  <div class="p-4 rounded-xl border border-amber-500/30 bg-amber-950/10 space-y-3">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="text-base">💡</span>
+        <span class="text-xs font-bold text-amber-400">Desktop vs Server (Docker) Mode Guide</span>
+      </div>
+      {#if typeof window !== 'undefined' && window.location.hostname !== 'tauri.localhost'}
+        <button
+          onclick={applyServerDefaults}
+          class="px-2.5 py-1 rounded text-[11px] font-bold bg-amber-500 text-black hover:bg-amber-400 transition-colors"
+        >
+          ⚡ Set Container Defaults
+        </button>
+      {/if}
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-[11px] text-zinc-400 leading-relaxed">
+      <div class="p-2.5 rounded-lg bg-black/40 border border-zinc-800 space-y-1">
+        <div class="font-semibold text-zinc-200">🖥️ Desktop App Mode</div>
+        <div>• <strong>Music Dir:</strong> Local path or SMB mount (e.g. <code class="text-zinc-300">/run/user/1000/kio-fuse.../music</code>)</div>
+        <div>• <strong>State Dir:</strong> <code class="text-zinc-300">~/.local/share/pies-alac-rip</code></div>
+        <div>• <strong>ALAC-RIP Dir:</strong> Local clone folder with wrapper & downloader</div>
+      </div>
+      <div class="p-2.5 rounded-lg bg-black/40 border border-zinc-800 space-y-1">
+        <div class="font-semibold text-zinc-200">🐳 Docker / Server Mode</div>
+        <div>• <strong>Music Dir:</strong> <code class="text-amber-300">/music</code> (mounts your NAS/host storage)</div>
+        <div>• <strong>State Dir:</strong> <code class="text-amber-300">/config/.state</code> (mounts your config volume)</div>
+        <div>• <strong>ALAC-RIP Dir:</strong> <code class="text-amber-300">/app</code> (embedded inside container)</div>
+      </div>
+    </div>
   </div>
 
   {#if !loaded}
