@@ -2087,15 +2087,20 @@ def get_library_tracks():
     result = []
     for t in tracks:
         lp = t.get("local_path", "")
-        p = Path(lp).expanduser().resolve() if lp else None
-        exists = p.is_file() if p else False
-        has_lyrics = (p.with_suffix(".lrc").is_file()) if (p and exists) else False
-        size = p.stat().st_size if (p and exists) else 0
-        fmt = p.suffix.lstrip(".").upper() if (p and p.suffix) else "UNKNOWN"
+        fmt = lp.rsplit(".", 1)[-1].upper() if (lp and "." in lp) else "FLAC"
+        size = 0
+        exists = bool(lp)
+        if lp:
+            try:
+                p = Path(lp)
+                if p.is_file():
+                    size = p.stat().st_size
+            except Exception:
+                pass
         result.append({
             **t,
             "exists_on_disk": exists,
-            "has_lyrics": has_lyrics,
+            "has_lyrics": False,
             "file_size": size,
             "format": fmt,
         })

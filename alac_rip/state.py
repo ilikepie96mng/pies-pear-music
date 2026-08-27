@@ -492,12 +492,20 @@ class StateManager:
     def has_track_path(self, path: Path) -> bool:
         """Return whether *path* belongs to a track recorded by this library."""
         target = path.resolve()
+        target_str = str(target)
         with self._conn() as conn:
             paths = conn.execute("SELECT local_path FROM tracks").fetchall()
         for (stored_path,) in paths:
             try:
-                if Path(stored_path).expanduser().resolve() == target:
+                if not stored_path:
+                    continue
+                p_stored = Path(stored_path).expanduser().resolve()
+                if p_stored == target:
                     return True
+                for anchor in ("/artists/", "/playlists/", "artists/", "playlists/"):
+                    if anchor in stored_path and anchor in target_str:
+                        if stored_path.split(anchor, 1)[1] == target_str.split(anchor, 1)[1]:
+                            return True
             except (OSError, RuntimeError):
                 continue
         return False

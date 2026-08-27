@@ -146,7 +146,10 @@
     showSmartPlaylistModal = true;
   }
 
+  let isServer = $state(false);
+
   onMount(() => {
+    isServer = typeof window !== "undefined" && !Boolean((window as any).__TAURI_INTERNALS__);
     loadLibraryData();
   });
 
@@ -420,7 +423,7 @@
           <span>♫</span> Library Stewardship
         </h1>
         <span class="text-xs px-2.5 py-0.5 rounded-full font-medium" style="background:var(--accent-dim);color:var(--accent);border:1px solid rgba(252,211,77,0.2);">
-          Workstation
+          {isServer ? "Server / Headless" : "Workstation"}
         </span>
       </div>
 
