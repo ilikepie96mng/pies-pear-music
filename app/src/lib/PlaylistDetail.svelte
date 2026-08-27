@@ -130,8 +130,7 @@
     loadingTracks = true;
     tracksError = null;
     try {
-      const library = await api.library();
-      tracks = library[playlist.name] ?? [];
+      tracks = await api.playlistTracks(playlist.name);
     } catch (e) {
       tracksError = String(e);
     } finally {

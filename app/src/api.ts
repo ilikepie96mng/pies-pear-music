@@ -515,6 +515,12 @@ export const api = {
     return r.json();
   },
 
+  async playlistTracks(name: string): Promise<Track[]> {
+    const r = await request(`/playlists/${encodeURIComponent(name)}/tracks`);
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
   async addPlaylist(name: string, url: string): Promise<Playlist> {
     const r = await request("/playlists", {
       method: "POST",

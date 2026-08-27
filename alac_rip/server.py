@@ -2036,8 +2036,30 @@ class LibraryRepairRequest(BaseModel):
     file_paths: Optional[list[str]] = None
 
 
+@app.get("/playlists/{name:path}/tracks")
+def get_single_playlist_tracks(name: str):
+    if state is None:
+        raise HTTPException(503, "Database is not ready")
+    tracks = state.get_playlist_tracks(name)
+    return [
+        {
+            "track_id": t.track_id,
+            "title": t.title,
+            "artist": t.artist,
+            "album": t.album,
+            "local_path": t.local_path,
+            "downloaded_at": t.downloaded_at,
+            "artwork_url": t.artwork_url,
+            "has_lyrics": False,
+        }
+        for t in tracks
+    ]
+
+
 @app.get("/library")
 def get_library():
+    if state is None:
+        raise HTTPException(503, "Database is not ready")
     result: dict = {}
     for pl in state.get_playlists():
         tracks = state.get_playlist_tracks(pl.name)
@@ -2050,7 +2072,7 @@ def get_library():
                 "local_path": t.local_path,
                 "downloaded_at": t.downloaded_at,
                 "artwork_url": t.artwork_url,
-                "has_lyrics": Path(t.local_path).with_suffix(".lrc").is_file() if t.local_path else False,
+                "has_lyrics": False,
             }
             for t in tracks
         ]
