@@ -906,6 +906,11 @@ def _run_job(job: dict) -> None:
             amd_cfg["storefront"] = "us"
             updated_cfg = True
 
+        # Sync media_user_token from app config if present
+        if cfg and cfg.media_user_token and cfg.media_user_token != amd_cfg.get("media-user-token"):
+            amd_cfg["media-user-token"] = cfg.media_user_token
+            updated_cfg = True
+
         # Fallback save folder to /staging or state_dir/staging if not configured or points to non-existent home
         cur_save = amd_cfg.get(save_folder_key, "")
         valid_save = False
@@ -2374,6 +2379,7 @@ class ConfigUpdate(BaseModel):
     lastfm_shared_secret: Optional[str] = None
     lastfm_username: Optional[str] = None
     gemini_api_key: Optional[str] = None
+    media_user_token: Optional[str] = None
     api_token: Optional[str] = None
     scheduler: Optional[dict] = None
     integrations: Optional[dict] = None
@@ -2399,6 +2405,32 @@ class ConfigUpdate(BaseModel):
 
 
 _CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key", "lastfm_shared_secret", "gemini_api_key", "github_remote"}
+
+
+def _sync_media_user_token_to_downloader(token: str) -> None:
+    if not token or token == "********":
+        return
+    cand_cfgs = [
+        cfg.alac_rip_dir / "apple-music-downloader" / "config.yaml" if cfg and cfg.alac_rip_dir else None,
+        cfg.alac_rip_dir / "vendor" / "apple-music-downloader" / "config.yaml" if cfg and cfg.alac_rip_dir else None,
+        Path("/app/apple-music-downloader/config.yaml"),
+        Path("/app/vendor/apple-music-downloader/config.yaml"),
+        Path.home() / ".local/share/pies-alac-rip/apple-music-downloader/config.yaml",
+        Path.home() / "Documents/VS-Projects/pies-alac-rip-tool/vendor/apple-music-downloader/config.yaml",
+        cfg.state_dir / "apple-music-downloader" / "config.yaml" if cfg else None,
+    ]
+    for c in cand_cfgs:
+        if c and c.parent.exists():
+            try:
+                amd_cfg = {}
+                if c.exists():
+                    with open(c) as f:
+                        amd_cfg = yaml.safe_load(f) or {}
+                amd_cfg["media-user-token"] = token
+                with open(c, "w") as f:
+                    yaml.dump(amd_cfg, f)
+            except Exception:
+                pass
 
 
 def _sanitize_config_dict(data: dict) -> dict:
@@ -2436,6 +2468,9 @@ def get_config():
     sanitized["gemini_api_key_configured"] = bool(data.get("gemini_api_key"))
     sanitized["lastfm_api_key_configured"] = bool(data.get("lastfm_api_key"))
     sanitized["lastfm_shared_secret_configured"] = bool(data.get("lastfm_shared_secret"))
+    sanitized["media_user_token_configured"] = bool(data.get("media_user_token"))
+    if data.get("media_user_token"):
+        sanitized["media_user_token"] = "********"
     return sanitized
 
 
@@ -2448,6 +2483,12 @@ def update_config(body: ConfigUpdate):
     current.pop("github_remote", None)
 
     updates = body.model_dump(exclude_none=True)
+    if updates.get("media_user_token") == "********":
+        updates.pop("media_user_token")
+    elif "media_user_token" in updates:
+        current["media_user_token"] = updates["media_user_token"]
+        _sync_media_user_token_to_downloader(updates["media_user_token"])
+
     # Preserve existing secrets if masked values were sent back
     if "integrations" in updates and isinstance(updates["integrations"], dict):
         cur_integ = current.get("integrations", {})

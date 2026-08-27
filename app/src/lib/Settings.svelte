@@ -333,6 +333,19 @@
       ],
     },
     {
+      title: "Apple Music Authentication",
+      hint: "Subscriber cookie required for decrypting lossless ALAC/AAC streams, synced LRC lyrics, and artwork.",
+      fields: [
+        {
+          key: "media_user_token",
+          label: "Apple Media User Token (Cookie)",
+          hint: "Grab from music.apple.com → DevTools (F12) → Application → Cookies → media-user-token. Stored securely mode 0600.",
+          type: "password",
+          mono: true,
+        },
+      ],
+    },
+    {
       title: "Security & Multi-Device Access",
       fields: [
         { key: "api_token", label: "Headless Web API Token", hint: "Optional static token required for web browser access when self-hosting with Docker.", type: "password" },
