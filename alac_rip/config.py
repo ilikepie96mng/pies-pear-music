@@ -5,7 +5,15 @@ from typing import Any
 
 import yaml
 
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "pies-alac-rip" / "config.yaml"
+def get_default_config_path() -> Path:
+    if os.environ.get("PIES_CONFIG_PATH"):
+        return Path(os.environ["PIES_CONFIG_PATH"])
+    if Path("/config").is_dir():
+        return Path("/config/config.yaml")
+    return Path.home() / ".config" / "pies-alac-rip" / "config.yaml"
+
+
+DEFAULT_CONFIG_PATH = get_default_config_path()
 
 
 @dataclass
