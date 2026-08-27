@@ -2594,24 +2594,49 @@ func extractMedia(b string, more_mode bool) (string, string, error) {
 			if variant.Codecs == "alac" {
 				split := strings.Split(variant.Audio, "-")
 				length := len(split)
-				length_int, err := strconv.Atoi(split[length-2])
-				if err != nil {
-					return "", "", err
+				length_int := 44100
+				bitDepth := "24"
+				if length >= 2 {
+					if val, err := strconv.Atoi(split[length-2]); err == nil {
+						length_int = val
+					}
+					bitDepth = split[length-1]
 				}
-				if length_int <= Config.AlacMax {
+				maxLimit := Config.AlacMax
+				if maxLimit <= 0 {
+					maxLimit = 192000
+				}
+				if length_int <= maxLimit {
 					if !debug_mode && !more_mode {
-						fmt.Printf("%s-bit / %s Hz\n", split[length-1], split[length-2])
+						fmt.Printf("%s-bit / %d Hz\n", bitDepth, length_int)
 					}
 					streamUrlTemp, err := masterUrl.Parse(variant.URI)
-					if err != nil {
-						panic(err)
+					if err == nil {
+						streamUrl = streamUrlTemp
+						KHZ := float64(length_int) / 1000.0
+						Quality = fmt.Sprintf("%sB-%.1fkHz", bitDepth, KHZ)
+						break
 					}
+				}
+			}
+		}
+	}
+	if streamUrl == nil {
+		// Fallback: try best available audio variant (AAC or any available stream)
+		for _, variant := range master.Variants {
+			if variant.Codecs == "mp4a.40.2" || strings.Contains(variant.Codecs, "mp4a") || variant.Codecs == "alac" {
+				if streamUrlTemp, err := masterUrl.Parse(variant.URI); err == nil {
 					streamUrl = streamUrlTemp
-					KHZ := float64(length_int) / 1000.0
-					Quality = fmt.Sprintf("%sB-%.1fkHz", split[length-1], KHZ)
+					Quality = "256Kbps"
 					break
 				}
 			}
+		}
+	}
+	if streamUrl == nil && len(master.Variants) > 0 {
+		if streamUrlTemp, err := masterUrl.Parse(master.Variants[0].URI); err == nil {
+			streamUrl = streamUrlTemp
+			Quality = "Standard"
 		}
 	}
 	if streamUrl == nil {

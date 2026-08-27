@@ -974,6 +974,10 @@ def _run_job(job: dict) -> None:
     skip_file_path: Optional[Path] = None
     _artwork_map: dict[str, str] = {}  # saved for post-manifest artwork backfill
 
+    mut = (cfg.media_user_token if cfg else "") or amd_cfg.get("media-user-token", "")
+    if not mut or len(mut) < 20:
+        emit_log("preflight", "⚠️ Notice: Apple Media User Token is not set. Go to Settings → Apple Music Authentication to paste your subscriber cookie if downloads fail.")
+
     if playlist_name and "music.apple.com" in url and "/playlist/gemini-" not in url:
         try:
             emit_log("preflight", "Checking playlist for new tracks…")
