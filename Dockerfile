@@ -35,6 +35,7 @@ RUN pip install --no-cache-dir .
 
 # Copy application source
 COPY alac_rip/ ./alac_rip/
+COPY vendor/apple-music-downloader/ ./apple-music-downloader/
 
 # Copy built frontend SPA from Stage 1
 COPY --from=frontend-builder /app/build ./web

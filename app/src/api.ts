@@ -646,6 +646,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ server_url: serverUrl, api_key: apiKey }),
     });
+    if (!r.ok) {
+      const text = await r.text();
+      return { success: false, message: `Server error (${r.status}): ${text}` };
+    }
     return r.json();
   },
 
@@ -655,6 +659,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ server_url: serverUrl, user, token, salt }),
     });
+    if (!r.ok) {
+      const text = await r.text();
+      return { success: false, message: `Server error (${r.status}): ${text}` };
+    }
     return r.json();
   },
 

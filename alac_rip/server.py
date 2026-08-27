@@ -807,7 +807,24 @@ def _run_job(job: dict) -> None:
                 pass
         return
 
-    amd_dir = cfg.alac_rip_dir / "apple-music-downloader"
+    cand_dirs = [
+        cfg.alac_rip_dir / "apple-music-downloader" if cfg.alac_rip_dir else None,
+        cfg.alac_rip_dir / "vendor" / "apple-music-downloader" if cfg.alac_rip_dir else None,
+        Path("/app/apple-music-downloader"),
+        Path("/app/vendor/apple-music-downloader"),
+        Path.home() / ".local" / "share" / "pies-alac-rip" / "apple-music-downloader",
+        Path.home() / "Documents/VS-Projects/pies-alac-rip-tool/vendor/apple-music-downloader",
+        cfg.state_dir / "apple-music-downloader",
+    ]
+    amd_dir = None
+    for cand in cand_dirs:
+        if cand and cand.exists():
+            amd_dir = cand
+            break
+    if amd_dir is None:
+        amd_dir = cfg.state_dir / "apple-music-downloader"
+        amd_dir.mkdir(parents=True, exist_ok=True)
+
     logs_dir = cfg.state_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     if cfg.log_retention_days > 0:
@@ -835,11 +852,51 @@ def _run_job(job: dict) -> None:
         write_log(f"[{phase}] {message}")
         emit({"status": "running", "phase": phase, "message": message, "log_path": str(log_path)})
 
+    def handle_early_error(msg: str) -> None:
+        emit({"status": "error", "message": msg, "log_path": str(log_path)})
+        if playlist_name:
+            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
+                                  "error", 0, 0, 0, str(log_path), msg)
+        if db_id and state:
+            try:
+                state.update_job_status(db_id, "error", completed_at=datetime.now().isoformat(), error_message=msg)
+            except Exception:
+                pass
+
     write_log(f"[session] type={job['type']} url={url}")
 
     save_folder_key = {"ATMOS": "atmos-save-folder", "AAC": "aac-save-folder"}.get(format_, "alac-save-folder")
     try:
         cfg_file = amd_dir / "config.yaml"
+        if not cfg_file.exists():
+            # Attempt to copy from known vendor templates
+            copied = False
+            for tmpl in [
+                Path("/app/vendor/apple-music-downloader/config.yaml"),
+                Path("/app/apple-music-downloader/config.yaml"),
+                Path.home() / "Documents/VS-Projects/pies-alac-rip-tool/vendor/apple-music-downloader/config.yaml",
+            ]:
+                if tmpl.exists():
+                    shutil.copy2(tmpl, cfg_file)
+                    copied = True
+                    break
+            if not copied:
+                staging_p = "/staging" if Path("/staging").exists() else str(cfg.state_dir / "staging")
+                Path(staging_p).mkdir(parents=True, exist_ok=True)
+                default_cfg = {
+                    "aac-save-folder": staging_p,
+                    "alac-save-folder": staging_p,
+                    "atmos-save-folder": staging_p,
+                    "storefront": "us",
+                    "convert-after-download": True,
+                    "convert-format": "flac",
+                    "decrypt-m3u8-port": "127.0.0.1:10020",
+                    "get-m3u8-port": "127.0.0.1:20020",
+                    "get-m3u8-mode": "hires",
+                }
+                with open(cfg_file, "w") as f:
+                    yaml.dump(default_cfg, f)
+
         with open(cfg_file) as f:
             amd_cfg = yaml.safe_load(f) or {}
 
@@ -848,6 +905,27 @@ def _run_job(job: dict) -> None:
         if amd_cfg.get("storefront") in ("", "enter your account storefront"):
             amd_cfg["storefront"] = "us"
             updated_cfg = True
+
+        # Fallback save folder to /staging or state_dir/staging if not configured or points to non-existent home
+        cur_save = amd_cfg.get(save_folder_key, "")
+        valid_save = False
+        if cur_save:
+            try:
+                p_cand = Path(cur_save).expanduser()
+                if not p_cand.exists():
+                    p_cand.mkdir(parents=True, exist_ok=True)
+                valid_save = p_cand.exists() and p_cand.is_dir()
+            except (OSError, PermissionError):
+                valid_save = False
+
+        if not valid_save:
+            staging_fallback = "/staging" if Path("/staging").exists() else str(cfg.state_dir / "staging")
+            Path(staging_fallback).mkdir(parents=True, exist_ok=True)
+            amd_cfg["aac-save-folder"] = staging_fallback
+            amd_cfg["alac-save-folder"] = staging_fallback
+            amd_cfg["atmos-save-folder"] = staging_fallback
+            updated_cfg = True
+
         if updated_cfg:
             with open(cfg_file, "w") as f:
                 yaml.dump(amd_cfg, f)
@@ -855,20 +933,16 @@ def _run_job(job: dict) -> None:
         save_folder = Path(amd_cfg.get(save_folder_key, "")).expanduser()
     except Exception as exc:
         msg = _redact_runtime_paths(f"Cannot read downloader config: {exc}")
-        emit({"status": "error", "message": msg, "log_path": str(log_path)})
-        if playlist_name:
-            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
-                                  "error", 0, 0, 0, str(log_path), msg)
+        handle_early_error(msg)
         return
+
     if not save_folder or not save_folder.is_absolute():
         msg = f"Downloader save folder not configured ({save_folder_key})"
-        emit({"status": "error", "message": msg, "log_path": str(log_path)})
-        if playlist_name:
-            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
-                                  "error", 0, 0, 0, str(log_path), msg)
+        handle_early_error(msg)
         return
 
     try:
+        save_folder.mkdir(parents=True, exist_ok=True)
         save_folder = validate_staging_dir(
             save_folder,
             cfg.music_dir,
@@ -877,10 +951,7 @@ def _run_job(job: dict) -> None:
         )
     except StagingValidationError as sve:
         msg = _redact_runtime_paths(f"Invalid downloader staging folder: {sve}")
-        emit({"status": "error", "message": msg, "log_path": str(log_path)})
-        if playlist_name:
-            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
-                                  "error", 0, 0, 0, str(log_path), msg)
+        handle_early_error(msg)
         return
 
 
@@ -987,8 +1058,11 @@ def _run_job(job: dict) -> None:
 
     system_amd = shutil.which("amd-main")
     patched_bin = Path.home() / ".local" / "share" / "pies-alac-rip" / "amd-main"
+    usr_bin_amd = Path("/usr/local/bin/amd-main")
     if system_amd:
-        _amd_bin: list[str] = [system_amd]
+        _amd_bin = [system_amd]
+    elif usr_bin_amd.exists() and os.access(usr_bin_amd, os.X_OK):
+        _amd_bin = [str(usr_bin_amd)]
     elif patched_bin.exists() and os.access(patched_bin, os.X_OK):
         _amd_bin = [str(patched_bin)]
     else:
@@ -1027,10 +1101,7 @@ def _run_job(job: dict) -> None:
     except Exception as exc:
         msg = _redact_runtime_paths(str(exc))
         write_log(f"[error] {msg}")
-        emit({"status": "error", "message": msg, "log_path": str(log_path)})
-        if playlist_name:
-            state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
-                                  "error", 0, 0, 0, str(log_path), msg)
+        handle_early_error(msg)
         return
 
     last_progress_emit = 0.0
@@ -2817,11 +2888,17 @@ class JellyfinTestRequest(BaseModel):
 def post_test_jellyfin(req: JellyfinTestRequest):
     server_url = req.server_url
     api_key = req.api_key
-    if cfg and cfg.integrations.jellyfin:
+    if cfg and isinstance(cfg.integrations, dict):
+        jf_cfg = cfg.integrations.get("jellyfin", {})
         if not server_url:
-            server_url = cfg.integrations.jellyfin.server_url
+            server_url = jf_cfg.get("server_url", "")
         if api_key == "********" or not api_key:
-            api_key = cfg.integrations.jellyfin.api_key
+            api_key = jf_cfg.get("api_key", "")
+    elif cfg and getattr(cfg.integrations, "jellyfin", None):
+        if not server_url:
+            server_url = getattr(cfg.integrations.jellyfin, "server_url", "")
+        if api_key == "********" or not api_key:
+            api_key = getattr(cfg.integrations.jellyfin, "api_key", "")
     ok, msg = integrations.test_jellyfin_connection(server_url, api_key)
     return {"success": ok, "message": msg}
 
@@ -2839,15 +2916,25 @@ def post_test_navidrome(req: NavidromeTestRequest):
     user = req.user
     token = req.token
     salt = req.salt
-    if cfg and cfg.integrations.navidrome:
+    if cfg and isinstance(cfg.integrations, dict):
+        nav_cfg = cfg.integrations.get("navidrome", {})
         if not server_url:
-            server_url = cfg.integrations.navidrome.server_url
+            server_url = nav_cfg.get("server_url", "")
         if not user:
-            user = cfg.integrations.navidrome.user
+            user = nav_cfg.get("user", "")
         if token == "********" or not token:
-            token = cfg.integrations.navidrome.token
+            token = nav_cfg.get("token", "")
         if salt == "********" or not salt:
-            salt = cfg.integrations.navidrome.salt
+            salt = nav_cfg.get("salt", "")
+    elif cfg and getattr(cfg.integrations, "navidrome", None):
+        if not server_url:
+            server_url = getattr(cfg.integrations.navidrome, "server_url", "")
+        if not user:
+            user = getattr(cfg.integrations.navidrome, "user", "")
+        if token == "********" or not token:
+            token = getattr(cfg.integrations.navidrome, "token", "")
+        if salt == "********" or not salt:
+            salt = getattr(cfg.integrations.navidrome, "salt", "")
     ok, msg = integrations.test_navidrome_connection(server_url, user, token, salt)
     return {"success": ok, "message": msg}
 
@@ -3213,17 +3300,25 @@ def post_gemini_save_playlist(req: GeminiSavePlaylistRequest):
 # ── Catalog & Discography Download Endpoints ─────────────────────────────────
 
 def _get_storefront() -> str:
-    if cfg and cfg.alac_rip_dir:
-        try:
-            cfg_file = cfg.alac_rip_dir / "apple-music-downloader" / "config.yaml"
-            if cfg_file.exists():
-                with open(cfg_file) as f:
+    cand_cfgs = [
+        cfg.alac_rip_dir / "apple-music-downloader" / "config.yaml" if cfg and cfg.alac_rip_dir else None,
+        cfg.alac_rip_dir / "vendor" / "apple-music-downloader" / "config.yaml" if cfg and cfg.alac_rip_dir else None,
+        Path("/app/apple-music-downloader/config.yaml"),
+        Path("/app/vendor/apple-music-downloader/config.yaml"),
+        Path.home() / ".local/share/pies-alac-rip/apple-music-downloader/config.yaml",
+        Path.home() / "Documents/VS-Projects/pies-alac-rip-tool/vendor/apple-music-downloader/config.yaml",
+        cfg.state_dir / "apple-music-downloader" / "config.yaml" if cfg else None,
+    ]
+    for c in cand_cfgs:
+        if c and c.exists():
+            try:
+                with open(c) as f:
                     amd_cfg = yaml.safe_load(f) or {}
                 sf = amd_cfg.get("storefront")
-                if sf and sf != "enter your account storefront":
+                if sf and sf not in ("", "enter your account storefront"):
                     return sf
-        except Exception:
-            pass
+            except Exception:
+                pass
     return "us"
 
 
