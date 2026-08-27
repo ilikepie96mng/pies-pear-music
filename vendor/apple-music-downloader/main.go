@@ -2106,13 +2106,7 @@ func main() {
 			}
 		}
 		fmt.Printf("=======  [\u2714 ] Completed: %d/%d  |  [\u26A0 ] Warnings: %d  |  [\u2716 ] Errors: %d  =======\n", counter.Success, counter.Total, counter.Unavailable+counter.NotSong, counter.Error)
-		if counter.Error == 0 {
-			break
-		}
-		fmt.Println("Error detected, press Enter to try again...")
-		fmt.Scanln()
-		fmt.Println("Start trying again...")
-		counter = structs.Counter{}
+		break
 	}
 
 	// Print JSON output
