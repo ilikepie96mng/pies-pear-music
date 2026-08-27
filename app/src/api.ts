@@ -623,6 +623,17 @@ export const api = {
     if (!r.ok) throw new Error(await r.text());
   },
 
+  async importDatabase(file: File): Promise<{ status: string; total_tracks: number; total_playlists: number }> {
+    const arrayBuffer = await file.arrayBuffer();
+    const r = await request("/database/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: arrayBuffer,
+    });
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
   async testJellyfin(serverUrl: string, apiKey: string): Promise<{ success: boolean; message: string }> {
     const r = await request("/integrations/jellyfin/test", {
       method: "POST",

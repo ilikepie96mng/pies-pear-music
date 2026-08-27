@@ -48,6 +48,30 @@
   let naviGenerating = $state(false);
   let naviGenResult = $state<string | null>(null);
 
+  // Database import/export state
+  let dbImporting = $state(false);
+  let dbImportResult = $state<string | null>(null);
+
+  async function handleDatabaseUpload(e: Event) {
+    const input = e.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+    dbImporting = true;
+    dbImportResult = null;
+    try {
+      const res = await api.importDatabase(file);
+      dbImportResult = `✓ Database restored! Loaded ${res.total_tracks} tracks and ${res.total_playlists} playlists.`;
+      setTimeout(() => {
+        if (typeof window !== "undefined") window.location.reload();
+      }, 1200);
+    } catch (err) {
+      dbImportResult = `✗ Failed to import database: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      dbImporting = false;
+      input.value = "";
+    }
+  }
+
   async function testStorageAccess() {
     const target = cfg.music_dir?.toString().trim();
     if (!target) return;
@@ -599,6 +623,37 @@
         </div>
       </div>
     {/each}
+
+    <!-- DATABASE & LIBRARY STATE BACKUP / RESTORE -->
+    <div class="space-y-3">
+      <span class="text-zinc-200 text-sm font-semibold">Database & Library State Management</span>
+      <div class="p-4 rounded-xl border space-y-3" style="background:var(--surface);border-color:var(--border);">
+        <div class="flex items-center justify-between">
+          <div>
+            <div class="text-xs font-bold text-white">Database Backup & 1-Click Restore</div>
+            <p class="text-[11px] text-zinc-400 mt-0.5">Export or import your SQLite database (<code class="text-amber-300">downloaded.db</code>) with full playlist and sync history.</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <a
+              href="/database/export"
+              download="downloaded.db"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-white/10 transition-colors"
+            >
+              📥 Export Database
+            </a>
+            <label class="px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-500 text-black hover:bg-amber-400 cursor-pointer transition-colors">
+              <span>{dbImporting ? "Restoring…" : "📤 Import downloaded.db"}</span>
+              <input type="file" accept=".db,application/x-sqlite3" onchange={handleDatabaseUpload} disabled={dbImporting} class="hidden" />
+            </label>
+          </div>
+        </div>
+        {#if dbImportResult}
+          <div class="text-xs font-mono {dbImportResult.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}">
+            {dbImportResult}
+          </div>
+        {/if}
+      </div>
+    </div>
 
     <!-- HOME MEDIA ECOSYSTEM INTEGRATIONS (Jellyfin / Navidrome) -->
     <div class="space-y-4">

@@ -2386,6 +2386,59 @@ def update_config(body: ConfigUpdate):
     return {"status": "ok"}
 
 
+@app.get("/database/export")
+def export_database():
+    if cfg is None:
+        raise HTTPException(503, "Config not ready")
+    db_file = resolve_db_path(cfg.state_dir)
+    if not db_file.exists():
+        raise HTTPException(404, "Database file not found")
+    return FileResponse(
+        path=str(db_file),
+        filename="downloaded.db",
+        media_type="application/x-sqlite3",
+    )
+
+
+@app.post("/database/import")
+async def import_database(request: Request):
+    global state, cfg
+    if cfg is None:
+        raise HTTPException(503, "Config not ready")
+
+    db_target = resolve_db_path(cfg.state_dir)
+    db_target.parent.mkdir(parents=True, exist_ok=True)
+    temp_target = db_target.with_suffix(".tmp_import")
+
+    content = await request.body()
+    if len(content) < 100:
+        raise HTTPException(400, "Uploaded file is too small to be a valid SQLite database")
+
+    temp_target.write_bytes(content)
+    try:
+        test_conn = sqlite3.connect(temp_target)
+        test_conn.execute("SELECT count(*) FROM tracks").fetchone()
+        test_conn.close()
+    except Exception as e:
+        if temp_target.exists():
+            temp_target.unlink()
+        raise HTTPException(400, f"Invalid database file: {e}")
+
+    temp_target.replace(db_target)
+    state = StateManager(db_target)
+    try:
+        state.auto_rebase_paths(cfg.music_dir)
+    except Exception:
+        pass
+
+    stats = state.get_library_stats()
+    return {
+        "status": "ok",
+        "total_tracks": stats.get("total_tracks", 0),
+        "total_playlists": stats.get("total_playlists", 0),
+    }
+
+
 
 # ── Wrapper routes ────────────────────────────────────────────────────────────
 
