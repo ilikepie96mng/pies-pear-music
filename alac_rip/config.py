@@ -26,7 +26,6 @@ class Config:
     lastfm_shared_secret: str = ""
     lastfm_username: str = ""
     gemini_api_key: str = ""
-    media_user_token: str = ""
     api_token: str = ""
     web_dir: Path = field(default_factory=lambda: Path(""))
     scheduler: dict[str, Any] = field(default_factory=dict)
@@ -110,7 +109,6 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         lastfm_shared_secret=data.get("lastfm_shared_secret", ""),
         lastfm_username=data.get("lastfm_username", ""),
         gemini_api_key=data.get("gemini_api_key", ""),
-        media_user_token=os.environ.get("PIES_MEDIA_USER_TOKEN") or data.get("media_user_token", ""),
         api_token=api_token,
         web_dir=web_dir_resolved,
         scheduler=data.get("scheduler", {}),

@@ -906,11 +906,6 @@ def _run_job(job: dict) -> None:
             amd_cfg["storefront"] = "us"
             updated_cfg = True
 
-        # Sync media_user_token from app config if present
-        if cfg and cfg.media_user_token and cfg.media_user_token != amd_cfg.get("media-user-token"):
-            amd_cfg["media-user-token"] = cfg.media_user_token
-            updated_cfg = True
-
         # Fallback save folder to /staging or state_dir/staging if not configured or points to non-existent home
         cur_save = amd_cfg.get(save_folder_key, "")
         valid_save = False
@@ -973,10 +968,6 @@ def _run_job(job: dict) -> None:
     # ── Pre-flight: diff AM playlist against local DB ─────────────────────────
     skip_file_path: Optional[Path] = None
     _artwork_map: dict[str, str] = {}  # saved for post-manifest artwork backfill
-
-    mut = (cfg.media_user_token if cfg else "") or amd_cfg.get("media-user-token", "")
-    if not mut or len(mut) < 20:
-        emit_log("preflight", "⚠️ Notice: Apple Media User Token is not set. Go to Settings → Apple Music Authentication to paste your subscriber cookie if downloads fail.")
 
     if playlist_name and "music.apple.com" in url and "/playlist/gemini-" not in url:
         try:
@@ -1201,32 +1192,14 @@ def _run_job(job: dict) -> None:
             result.new_count, result.skipped_count, result.error_count, str(log_path),
         )
 
-    # Trigger media server webhooks (Jellyfin / Navidrome) & notifications (Discord / Telegram / Gotify) asynchronously
+    # Trigger media server webhooks (Jellyfin / Navidrome) asynchronously
     try:
         if DEFAULT_CONFIG_PATH.exists():
             with open(DEFAULT_CONFIG_PATH) as f_cfg:
                 raw_cfg = yaml.safe_load(f_cfg) or {}
-
-            # 1. Media server auto-scan webhooks
             threading.Thread(
                 target=integrations.dispatch_media_webhooks,
                 args=(raw_cfg,),
-                daemon=True
-            ).start()
-
-            # 2. Notification webhooks (Discord, Telegram, Gotify)
-            title = f"♫ Sync Complete: {playlist_name}" if playlist_name else f"♫ Download Complete: {job.get('title', 'Audio')}"
-            desc = f"Finished processing **{result.new_count}** new tracks ({result.skipped_count} skipped, {result.error_count} errors)."
-            fields = [
-                {"name": "New Tracks", "value": f"+{result.new_count}", "inline": True},
-                {"name": "Skipped", "value": f"{result.skipped_count}", "inline": True},
-                {"name": "Format", "value": format_, "inline": True},
-            ]
-            thumb = job.get("artwork_url") or (_artwork_map.get(list(_artwork_map.keys())[0]) if _artwork_map else None)
-
-            threading.Thread(
-                target=integrations.dispatch_completion_notifications,
-                args=(raw_cfg, title, desc, fields, thumb),
                 daemon=True
             ).start()
     except Exception as e:
@@ -2401,7 +2374,6 @@ class ConfigUpdate(BaseModel):
     lastfm_shared_secret: Optional[str] = None
     lastfm_username: Optional[str] = None
     gemini_api_key: Optional[str] = None
-    media_user_token: Optional[str] = None
     api_token: Optional[str] = None
     scheduler: Optional[dict] = None
     integrations: Optional[dict] = None
@@ -2427,32 +2399,6 @@ class ConfigUpdate(BaseModel):
 
 
 _CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key", "lastfm_shared_secret", "gemini_api_key", "github_remote"}
-
-
-def _sync_media_user_token_to_downloader(token: str) -> None:
-    if not token or token == "********":
-        return
-    cand_cfgs = [
-        cfg.alac_rip_dir / "apple-music-downloader" / "config.yaml" if cfg and cfg.alac_rip_dir else None,
-        cfg.alac_rip_dir / "vendor" / "apple-music-downloader" / "config.yaml" if cfg and cfg.alac_rip_dir else None,
-        Path("/app/apple-music-downloader/config.yaml"),
-        Path("/app/vendor/apple-music-downloader/config.yaml"),
-        Path.home() / ".local/share/pies-alac-rip/apple-music-downloader/config.yaml",
-        Path.home() / "Documents/VS-Projects/pies-alac-rip-tool/vendor/apple-music-downloader/config.yaml",
-        cfg.state_dir / "apple-music-downloader" / "config.yaml" if cfg else None,
-    ]
-    for c in cand_cfgs:
-        if c and c.parent.exists():
-            try:
-                amd_cfg = {}
-                if c.exists():
-                    with open(c) as f:
-                        amd_cfg = yaml.safe_load(f) or {}
-                amd_cfg["media-user-token"] = token
-                with open(c, "w") as f:
-                    yaml.dump(amd_cfg, f)
-            except Exception:
-                pass
 
 
 def _sanitize_config_dict(data: dict) -> dict:
@@ -2490,9 +2436,6 @@ def get_config():
     sanitized["gemini_api_key_configured"] = bool(data.get("gemini_api_key"))
     sanitized["lastfm_api_key_configured"] = bool(data.get("lastfm_api_key"))
     sanitized["lastfm_shared_secret_configured"] = bool(data.get("lastfm_shared_secret"))
-    sanitized["media_user_token_configured"] = bool(data.get("media_user_token"))
-    if data.get("media_user_token"):
-        sanitized["media_user_token"] = "********"
     return sanitized
 
 
@@ -2505,12 +2448,6 @@ def update_config(body: ConfigUpdate):
     current.pop("github_remote", None)
 
     updates = body.model_dump(exclude_none=True)
-    if updates.get("media_user_token") == "********":
-        updates.pop("media_user_token")
-    elif "media_user_token" in updates:
-        current["media_user_token"] = updates["media_user_token"]
-        _sync_media_user_token_to_downloader(updates["media_user_token"])
-
     # Preserve existing secrets if masked values were sent back
     if "integrations" in updates and isinstance(updates["integrations"], dict):
         cur_integ = current.get("integrations", {})
@@ -3903,73 +3840,44 @@ class TestWebhookRequest(BaseModel):
 @app.post("/api/v1/integrations/test-webhook")
 def test_webhook_endpoint(req: TestWebhookRequest):
     svc = req.service.lower().strip()
-    integ = cfg.integrations if (cfg and isinstance(cfg.integrations, dict)) else {}
-
     if svc == "discord":
-        url = req.url
-        if not url or url == "********":
-            url = integ.get("discord", {}).get("webhook_url", "")
-        if not url:
-            raise HTTPException(400, "Discord Webhook URL is required")
+        if not req.url:
+            raise HTTPException(400, "Webhook URL is required")
         ok, msg = integrations.send_discord_webhook(
-            webhook_url=url,
-            title="♫ Pies Pear Music Test",
-            description="Test notification from Pies Pear Music server: Online & Reachable.",
-            fields=[{"name": "Status", "value": "✓ Reachable", "inline": True}],
+            webhook_url=req.url,
+            title="Pies Pear Music Test",
+            description="Test notification from Pies Pear Music server.",
+            fields=[{"name": "Status", "value": "Online & Reachable", "inline": True}],
         )
         return {"success": ok, "message": msg}
     elif svc == "telegram":
-        token = req.token
-        chat_id = req.chat_id
-        if not token or token == "********":
-            token = integ.get("telegram", {}).get("bot_token", "")
-        if not chat_id:
-            chat_id = integ.get("telegram", {}).get("chat_id", "")
-        if not token or not chat_id:
+        if not req.token or not req.chat_id:
             raise HTTPException(400, "Bot token and Chat ID are required")
         ok, msg = integrations.send_telegram_notification(
-            bot_token=token,
-            chat_id=chat_id,
-            message="<b>♫ Pies Pear Music</b>\n\nTest notification from server: Online & Reachable.",
+            bot_token=req.token,
+            chat_id=req.chat_id,
+            message="<b>Pies Pear Music</b>\n\nTest notification from server: Online & Reachable.",
         )
         return {"success": ok, "message": msg}
     elif svc == "gotify":
-        url = req.url
-        token = req.token
-        if not url:
-            url = integ.get("gotify", {}).get("server_url", "")
-        if not token or token == "********":
-            token = integ.get("gotify", {}).get("token", "")
-        if not url or not token:
+        if not req.url or not req.token:
             raise HTTPException(400, "Server URL and App token are required")
         ok, msg = integrations.send_gotify_notification(
-            server_url=url,
-            token=token,
-            title="♫ Pies Pear Music Test",
-            message="Test notification from Pies Pear Music server: Online & Reachable.",
+            server_url=req.url,
+            token=req.token,
+            title="Pies Pear Music Test",
+            message="Test notification from Pies Pear Music server.",
         )
         return {"success": ok, "message": msg}
     elif svc == "jellyfin":
-        url = req.url or integ.get("jellyfin", {}).get("server_url", "")
-        api_key = req.api_key
-        if not api_key or api_key == "********":
-            api_key = integ.get("jellyfin", {}).get("api_key", "")
-        if not url or not api_key:
+        if not req.url or not req.api_key:
             raise HTTPException(400, "Server URL and API Key are required")
-        ok, msg = integrations.test_jellyfin_connection(url, api_key)
+        ok, msg = integrations.test_jellyfin_connection(req.url, req.api_key)
         return {"success": ok, "message": msg}
     elif svc == "navidrome":
-        url = req.url or integ.get("navidrome", {}).get("server_url", "")
-        user = req.user or integ.get("navidrome", {}).get("user", "")
-        token = req.token
-        if not token or token == "********":
-            token = integ.get("navidrome", {}).get("token", "")
-        salt = req.salt
-        if not salt or salt == "********":
-            salt = integ.get("navidrome", {}).get("salt", "")
-        if not url or not user or not token:
-            raise HTTPException(400, "Server URL, user, and token are required")
-        ok, msg = integrations.test_navidrome_connection(url, user, token, salt)
+        if not req.url or not req.user or not req.token or not req.salt:
+            raise HTTPException(400, "Server URL, user, token, and salt are required")
+        ok, msg = integrations.test_navidrome_connection(req.url, req.user, req.token, req.salt)
         return {"success": ok, "message": msg}
     else:
         raise HTTPException(400, f"Unsupported service '{req.service}'")

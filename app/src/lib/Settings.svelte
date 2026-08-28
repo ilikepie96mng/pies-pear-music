@@ -333,19 +333,6 @@
       ],
     },
     {
-      title: "Apple Music Authentication",
-      hint: "Subscriber cookie required for decrypting lossless ALAC/AAC streams, synced LRC lyrics, and artwork.",
-      fields: [
-        {
-          key: "media_user_token",
-          label: "Apple Media User Token (Cookie)",
-          hint: "Grab from music.apple.com → DevTools (F12) → Application → Cookies → media-user-token. Stored securely mode 0600.",
-          type: "password",
-          mono: true,
-        },
-      ],
-    },
-    {
       title: "Security & Multi-Device Access",
       fields: [
         { key: "api_token", label: "Headless Web API Token", hint: "Optional static token required for web browser access when self-hosting with Docker.", type: "password" },
@@ -547,58 +534,6 @@
       <p class="text-xs" style="color:var(--text-muted);">
         Primary text contrast: {contrast.toFixed(1)}:1 (WCAG AAA standard: 7.0+:1)
       </p>
-    </div>
-
-    <!-- APPLE MUSIC SUBSCRIBER AUTHENTICATION -->
-    <div class="p-5 rounded-2xl border space-y-4 shadow-lg" style="background:var(--surface);border-color:var(--border);">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <span class="text-2xl">🍎</span>
-          <div>
-            <div class="text-sm font-bold text-white flex items-center gap-2">
-              <span>Apple Music Subscriber Authentication</span>
-              {#if cfg.media_user_token_configured || (cfg.media_user_token && cfg.media_user_token !== "")}
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-950/80 text-green-400 border border-green-500/40">
-                  ✓ Token Configured
-                </span>
-              {:else}
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950/80 text-amber-400 border border-amber-500/40">
-                  ⚠️ Required for Lossless Downloads
-                </span>
-              {/if}
-            </div>
-            <p class="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
-              Your active subscriber cookie used to decrypt Hi-Res ALAC/AAC streams, download synced LRC lyrics, and fetch album covers.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div class="space-y-2 pt-2 border-t border-[rgba(255,255,255,0.06)]">
-        <div class="flex items-center justify-between">
-          <label for="media_user_token_main" class="text-zinc-400 text-[10px] uppercase tracking-widest font-semibold">
-            Media User Token Cookie
-          </label>
-        </div>
-        <input
-          id="media_user_token_main"
-          type="password"
-          bind:value={cfg.media_user_token}
-          placeholder={cfg.media_user_token_configured ? "••••••••••••••••••••••••••••••••" : "Paste your media-user-token cookie here"}
-          class="w-full bg-[#0d0d0d] border border-[#2a2a2a] focus:border-amber-500 rounded-xl px-3.5 py-2.5 text-white font-mono text-xs outline-none transition-colors"
-        />
-        <div class="p-3 bg-black/40 border border-zinc-800/80 rounded-xl text-[11px] text-zinc-400 space-y-1.5">
-          <div class="font-semibold text-zinc-300 flex items-center gap-1.5">
-            <span>ℹ️</span> How to get your Media User Token (30 seconds):
-          </div>
-          <div class="space-y-0.5 text-[10.5px] leading-relaxed">
-            <div>1. Open <a href="https://music.apple.com" target="_blank" rel="noreferrer" class="text-amber-400 underline">music.apple.com</a> in your browser and sign in.</div>
-            <div>2. Open DevTools (<kbd class="px-1 py-0.2 rounded bg-zinc-800 text-zinc-300 font-mono text-[10px]">F12</kbd> or Right-click → Inspect).</div>
-            <div>3. Go to <strong>Application</strong> tab (or <strong>Storage</strong> in Firefox) → <strong>Cookies</strong> → <code>https://music.apple.com</code>.</div>
-            <div>4. Copy the value of <code>media-user-token</code> and paste it above, then click <strong>Save Settings</strong>.</div>
-          </div>
-        </div>
-      </div>
     </div>
 
     <!-- CORE CONFIG SECTIONS -->
