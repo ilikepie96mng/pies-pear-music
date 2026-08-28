@@ -926,6 +926,12 @@ def _run_job(job: dict) -> None:
             amd_cfg["atmos-save-folder"] = staging_fallback
             updated_cfg = True
 
+        # Sync active media_user_token from app config into downloader config
+        token_to_sync = (cfg.media_user_token if cfg else "") or ""
+        if token_to_sync and token_to_sync != amd_cfg.get("media-user-token"):
+            amd_cfg["media-user-token"] = token_to_sync
+            updated_cfg = True
+
         if updated_cfg:
             with open(cfg_file, "w") as f:
                 yaml.dump(amd_cfg, f)
@@ -2888,17 +2894,24 @@ class JellyfinTestRequest(BaseModel):
 def post_test_jellyfin(req: JellyfinTestRequest):
     server_url = req.server_url
     api_key = req.api_key
+    if DEFAULT_CONFIG_PATH.exists():
+        try:
+            with open(DEFAULT_CONFIG_PATH) as f:
+                disk_cfg = yaml.safe_load(f) or {}
+                if isinstance(disk_cfg.get("integrations"), dict):
+                    jf_cfg = disk_cfg["integrations"].get("jellyfin", {})
+                    if not server_url:
+                        server_url = jf_cfg.get("server_url", "")
+                    if not api_key or api_key.startswith("•") or api_key.startswith("*"):
+                        api_key = jf_cfg.get("api_key", "")
+        except Exception:
+            pass
     if cfg and isinstance(cfg.integrations, dict):
         jf_cfg = cfg.integrations.get("jellyfin", {})
         if not server_url:
             server_url = jf_cfg.get("server_url", "")
-        if api_key == "********" or not api_key:
+        if not api_key or api_key.startswith("•") or api_key.startswith("*"):
             api_key = jf_cfg.get("api_key", "")
-    elif cfg and getattr(cfg.integrations, "jellyfin", None):
-        if not server_url:
-            server_url = getattr(cfg.integrations.jellyfin, "server_url", "")
-        if api_key == "********" or not api_key:
-            api_key = getattr(cfg.integrations.jellyfin, "api_key", "")
     ok, msg = integrations.test_jellyfin_connection(server_url, api_key)
     return {"success": ok, "message": msg}
 
@@ -2916,25 +2929,32 @@ def post_test_navidrome(req: NavidromeTestRequest):
     user = req.user
     token = req.token
     salt = req.salt
+    if DEFAULT_CONFIG_PATH.exists():
+        try:
+            with open(DEFAULT_CONFIG_PATH) as f:
+                disk_cfg = yaml.safe_load(f) or {}
+                if isinstance(disk_cfg.get("integrations"), dict):
+                    nav_cfg = disk_cfg["integrations"].get("navidrome", {})
+                    if not server_url:
+                        server_url = nav_cfg.get("server_url", "")
+                    if not user:
+                        user = nav_cfg.get("user", "")
+                    if not token or token.startswith("•") or token.startswith("*"):
+                        token = nav_cfg.get("token", "")
+                    if not salt or salt.startswith("•") or salt.startswith("*"):
+                        salt = nav_cfg.get("salt", "")
+        except Exception:
+            pass
     if cfg and isinstance(cfg.integrations, dict):
         nav_cfg = cfg.integrations.get("navidrome", {})
         if not server_url:
             server_url = nav_cfg.get("server_url", "")
         if not user:
             user = nav_cfg.get("user", "")
-        if token == "********" or not token:
+        if not token or token.startswith("•") or token.startswith("*"):
             token = nav_cfg.get("token", "")
-        if salt == "********" or not salt:
+        if not salt or salt.startswith("•") or salt.startswith("*"):
             salt = nav_cfg.get("salt", "")
-    elif cfg and getattr(cfg.integrations, "navidrome", None):
-        if not server_url:
-            server_url = getattr(cfg.integrations.navidrome, "server_url", "")
-        if not user:
-            user = getattr(cfg.integrations.navidrome, "user", "")
-        if token == "********" or not token:
-            token = getattr(cfg.integrations.navidrome, "token", "")
-        if salt == "********" or not salt:
-            salt = getattr(cfg.integrations.navidrome, "salt", "")
     ok, msg = integrations.test_navidrome_connection(server_url, user, token, salt)
     return {"success": ok, "message": msg}
 

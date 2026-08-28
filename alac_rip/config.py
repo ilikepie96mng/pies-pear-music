@@ -30,6 +30,7 @@ class Config:
     web_dir: Path = field(default_factory=lambda: Path(""))
     scheduler: dict[str, Any] = field(default_factory=dict)
     integrations: dict[str, Any] = field(default_factory=dict)
+    media_user_token: str = ""
 
 
 def resolve_kio_fuse_path(p: Path) -> Path:
@@ -113,6 +114,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         web_dir=web_dir_resolved,
         scheduler=data.get("scheduler", {}),
         integrations=data.get("integrations", {}),
+        media_user_token=str(data.get("media_user_token", "")).strip(),
     )
 
 
