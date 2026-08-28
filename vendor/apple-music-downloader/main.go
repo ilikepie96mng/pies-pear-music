@@ -1039,19 +1039,17 @@ func ripTrack(track *task.Track, token string, mediaUserToken string) {
 		tags = append(tags, fmt.Sprintf("cover=%s", track.CoverPath))
 	}
 	tagsString := strings.Join(tags, ":")
-	cmd := exec.Command("MP4Box", "-itags", tagsString, trackPath)
-	cmd.Dir = filepath.Dir(trackPath)
-	if err := cmd.Run(); err != nil {
-		fmt.Printf("Embed failed: %v\n", err)
-		counter.Error++
-		return
-	}
-	if (strings.Contains(track.PreID, "pl.") || strings.Contains(track.PreID, "ra.")) && Config.DlAlbumcoverForPlaylist {
-		if err := os.Remove(track.CoverPath); err != nil {
-			fmt.Printf("Error deleting file: %s\n", track.CoverPath)
-			counter.Error++
-			return
+	if _, err := exec.LookPath("MP4Box"); err == nil {
+		cmd := exec.Command("MP4Box", "-itags", tagsString, trackPath)
+		cmd.Dir = filepath.Dir(trackPath)
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("MP4Box embed warning (continuing with native tagging): %v\n", err)
 		}
+	} else {
+		fmt.Println("MP4Box not in PATH, continuing with native tagging...")
+	}
+	if (strings.Contains(track.PreID, "pl.") || strings.Contains(track.PreID, "ra.")) && Config.DlAlbumcoverForPlaylist && track.CoverPath != "" {
+		_ = os.Remove(track.CoverPath)
 	}
 	track.SavePath = trackPath
 	err = writeMP4Tags(track, lrc)
