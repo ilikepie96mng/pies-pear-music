@@ -15,6 +15,7 @@ class Track:
     local_path: str
     downloaded_at: str
     artwork_url: Optional[str] = None
+    am_track_id: Optional[str] = None
 
 
 @dataclass
@@ -360,7 +361,7 @@ class StateManager:
     def get_track(self, track_id: str) -> Optional[Track]:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url FROM tracks WHERE track_id = ?",
+                "SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url, am_track_id FROM tracks WHERE track_id = ?",
                 (track_id,),
             ).fetchone()
             if not row:
@@ -373,6 +374,7 @@ class StateManager:
                 local_path=row[4],
                 downloaded_at=row[5],
                 artwork_url=row[6],
+                am_track_id=row[7] if len(row) > 7 else None,
             )
 
     def get_track_by_path(self, path: str) -> Optional[Track]:
