@@ -16,9 +16,14 @@ COPY vendor/apple-music-downloader/ ./
 RUN go build -ldflags="-s -w" -o /bin/amd-main main.go
 
 # ── Stage 3: Backend Runtime ──────────────────────────────────────────────────
-FROM docker.io/library/python:3.12-slim-bookworm
+FROM docker.io/library/ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
     ffmpeg \
     flac \
     gpac \
@@ -32,7 +37,7 @@ WORKDIR /app
 
 # Install python dependencies
 COPY pyproject.toml .
-RUN pip install --no-cache-dir .
+RUN pip3 install --no-cache-dir --break-system-packages .
 
 # Copy application source
 COPY alac_rip/ ./alac_rip/
@@ -70,4 +75,4 @@ EXPOSE 10025
 VOLUME ["/config", "/music", "/staging"]
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["python", "-m", "alac_rip.server"]
+CMD ["python3", "-m", "alac_rip.server"]
