@@ -461,6 +461,27 @@ class StateManager:
                     )
                     if res.rowcount > 0:
                         count += 1
+
+            # 3. Match and repair any "Unknown Artist" / unparsed tracks by matching title
+            import re
+            unknown_rows = conn.execute(
+                "SELECT track_id, title, local_path FROM tracks WHERE artist = 'Unknown Artist' OR album = 'Unknown Album' OR title LIKE '%. %'"
+            ).fetchall()
+            for tid, t_title, lpath in unknown_rows:
+                clean_t = re.sub(r"^\d+\.\s*", "", t_title).strip().lower()
+                for t in am_tracks:
+                    am_t = str(t.get("title", "")).strip().lower()
+                    if clean_t == am_t or (clean_t and clean_t in am_t) or (am_t and am_t in clean_t):
+                        conn.execute(
+                            "UPDATE tracks SET title = ?, artist = ?, album = ?, am_track_id = ? WHERE track_id = ?",
+                            (t.get("title", clean_t), t.get("artist", "Unknown Artist"), t.get("album", "Unknown Album"), str(t.get("id", "")), tid)
+                        )
+                        conn.execute(
+                            "INSERT OR IGNORE INTO playlist_tracks VALUES (?, ?)",
+                            (playlist_name, tid)
+                        )
+                        count += 1
+                        break
         return count
 
     def get_playlist_tracks(self, playlist_name: str) -> list[Track]:
