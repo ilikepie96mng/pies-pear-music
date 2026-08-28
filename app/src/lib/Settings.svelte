@@ -666,13 +666,23 @@
             <input type="checkbox" id="jf-enable" bind:checked={cfg.integrations.jellyfin.enabled} class="accent-amber-400" />
             <label for="jf-enable" class="text-xs font-bold text-white cursor-pointer">Jellyfin Server Integration</label>
           </div>
-          <button
-            onclick={testJellyfin}
-            disabled={jfTesting || !cfg.integrations.jellyfin.server_url}
-            class="px-2.5 py-1 rounded text-[11px] font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-200"
-          >
-            {jfTesting ? "Testing…" : "Test Connection"}
-          </button>
+          <div class="flex items-center gap-2">
+            {#if jfStatus}
+              <span class="text-[11px] font-mono {jfStatus.startsWith('✓') ? 'text-emerald-400 font-bold' : 'text-red-400'}">{jfStatus}</span>
+            {/if}
+            <button
+              onclick={testJellyfin}
+              disabled={jfTesting}
+              class="px-3 py-1 rounded-lg text-[11px] font-bold bg-amber-500 text-black hover:bg-amber-400 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+            >
+              {#if jfTesting}
+                <span class="w-2.5 h-2.5 border border-black border-t-transparent rounded-full animate-spin"></span>
+                <span>Testing…</span>
+              {:else}
+                <span>⚡ Test Connection</span>
+              {/if}
+            </button>
+          </div>
         </div>
 
         {#if cfg.integrations.jellyfin.enabled}
@@ -696,10 +706,6 @@
             </div>
           </div>
         {/if}
-
-        {#if jfStatus}
-          <div class="text-[11px] font-mono {jfStatus.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}">{jfStatus}</div>
-        {/if}
       </div>
 
       <!-- Navidrome -->
@@ -709,13 +715,23 @@
             <input type="checkbox" id="navi-enable" bind:checked={cfg.integrations.navidrome.enabled} class="accent-amber-400" />
             <label for="navi-enable" class="text-xs font-bold text-white cursor-pointer">Navidrome / Subsonic Integration</label>
           </div>
-          <button
-            onclick={testNavidrome}
-            disabled={naviTesting || !cfg.integrations.navidrome.server_url}
-            class="px-2.5 py-1 rounded text-[11px] font-semibold bg-zinc-800 hover:bg-zinc-700 text-zinc-200"
-          >
-            {naviTesting ? "Testing…" : "Test Connection"}
-          </button>
+          <div class="flex items-center gap-2">
+            {#if naviStatus}
+              <span class="text-[11px] font-mono {naviStatus.startsWith('✓') ? 'text-emerald-400 font-bold' : 'text-red-400'}">{naviStatus}</span>
+            {/if}
+            <button
+              onclick={testNavidrome}
+              disabled={naviTesting}
+              class="px-3 py-1 rounded-lg text-[11px] font-bold bg-amber-500 text-black hover:bg-amber-400 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+            >
+              {#if naviTesting}
+                <span class="w-2.5 h-2.5 border border-black border-t-transparent rounded-full animate-spin"></span>
+                <span>Testing…</span>
+              {:else}
+                <span>⚡ Test Connection</span>
+              {/if}
+            </button>
+          </div>
         </div>
 
         {#if cfg.integrations.navidrome.enabled}
