@@ -957,6 +957,7 @@ func ripTrack(track *task.Track, token string, mediaUserToken string) {
 		fmt.Println("Track already exists locally.")
 		counter.Success++
 		okDict[track.PreID] = append(okDict[track.PreID], track.TaskNum)
+		track.SavePath = trackPath
 
 		tArtistId := ""
 		if len(track.Resp.Relationships.Artists.Data) > 0 {
@@ -977,6 +978,7 @@ func ripTrack(track *task.Track, token string, mediaUserToken string) {
 			fmt.Println("Converted track already exists locally.")
 			counter.Success++
 			okDict[track.PreID] = append(okDict[track.PreID], track.TaskNum)
+			track.SavePath = convertedPath
 
 			tArtistId := ""
 			if len(track.Resp.Relationships.Artists.Data) > 0 {

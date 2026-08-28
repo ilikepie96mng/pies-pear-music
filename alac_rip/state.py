@@ -423,6 +423,44 @@ class StateManager:
                 (playlist_name, track_id),
             )
 
+    def find_and_associate_existing_tracks_to_playlist(self, playlist_name: str, am_tracks: list[dict]) -> int:
+        """Ensure all tracks present in am_tracks that already exist in library are linked to playlist."""
+        if not am_tracks:
+            return 0
+        count = 0
+        with self._conn() as conn:
+            # 1. Direct match on am_track_id
+            am_ids = [str(t["id"]) for t in am_tracks if t.get("id")]
+            if am_ids:
+                placeholders = ",".join("?" * len(am_ids))
+                rows = conn.execute(
+                    f"SELECT track_id, am_track_id FROM tracks WHERE am_track_id IN ({placeholders})",
+                    am_ids
+                ).fetchall()
+                for (tid, am_id) in rows:
+                    res = conn.execute(
+                        "INSERT OR IGNORE INTO playlist_tracks VALUES (?, ?)",
+                        (playlist_name, tid)
+                    )
+                    if res.rowcount > 0:
+                        count += 1
+            # 2. Match by normalized title + artist
+            all_rows = conn.execute("SELECT track_id, title, artist FROM tracks").fetchall()
+            lib_by_key: dict[tuple[str, str], str] = {}
+            for tid, t_title, t_artist in all_rows:
+                k = (t_title.strip().lower(), t_artist.strip().lower())
+                lib_by_key[k] = tid
+            for t in am_tracks:
+                k = (str(t.get("title", "")).strip().lower(), str(t.get("artist", "")).strip().lower())
+                if k in lib_by_key:
+                    res = conn.execute(
+                        "INSERT OR IGNORE INTO playlist_tracks VALUES (?, ?)",
+                        (playlist_name, lib_by_key[k])
+                    )
+                    if res.rowcount > 0:
+                        count += 1
+        return count
+
     def get_playlist_tracks(self, playlist_name: str) -> list[Track]:
         with self._conn() as conn:
             rows = conn.execute(

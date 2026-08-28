@@ -1009,6 +1009,11 @@ def _run_job(job: dict) -> None:
                 state.bulk_store_artwork(artwork_map)
                 _artwork_map = artwork_map
 
+            # Auto-link any tracks that already exist in local library into this playlist
+            linked_count = state.find_and_associate_existing_tracks_to_playlist(playlist_name, am_tracks)
+            if linked_count > 0:
+                emit_log("preflight", f"Linked {linked_count} already downloaded track(s) to playlist")
+
             owned = state.get_playlist_am_ids(playlist_name)
             new_ids = am_ids_set - owned
             skip_ids = owned & am_ids_set
@@ -1192,6 +1197,10 @@ def _run_job(job: dict) -> None:
     shutil.rmtree(_tmp, ignore_errors=True)
 
     if playlist_name:
+        try:
+            engine._write_m3u8()
+        except Exception as exc:
+            write_log(f"[playlist] warning: could not write m3u8 playlist: {exc}")
         state.update_playlist_synced(playlist_name)
         state.record_sync_run(
             playlist_name, started_at.isoformat(), datetime.now().isoformat(), "success",
