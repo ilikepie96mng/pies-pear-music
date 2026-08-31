@@ -2569,18 +2569,82 @@ def login_wrapper(body: WrapperLoginRequest):
     return {"status": "error", "msg": wrapper_logs[-1] if wrapper_logs else "Failed to start wrapper"}
 
 
+def force_stop_wrapper() -> bool:
+    global wrapper_process, wrapper_running, wrapper_logging_in, wrapper_needs_2fa, wrapper_2fa_type
+    stopped_any = False
+    if wrapper_process is not None:
+        try:
+            if wrapper_process.poll() is None:
+                if hasattr(wrapper_process, "terminate"):
+                    wrapper_process.terminate()
+                if hasattr(wrapper_process, "wait"):
+                    try:
+                        wrapper_process.wait(timeout=1.5)
+                    except Exception:
+                        if hasattr(wrapper_process, "kill"):
+                            wrapper_process.kill()
+                            try:
+                                wrapper_process.wait(timeout=1.0)
+                            except Exception:
+                                pass
+                stopped_any = True
+        except Exception:
+            pass
+        wrapper_process = None
+
+    try:
+        res = subprocess.run(["podman", "stop", "-t", "1", CONTAINER_NAME], capture_output=True, timeout=3)
+        if res.returncode == 0:
+            stopped_any = True
+        subprocess.run(["podman", "rm", "-f", CONTAINER_NAME], capture_output=True, timeout=3)
+    except Exception:
+        pass
+
+    try:
+        subprocess.run(["pkill", "-9", "-f", "wrapper"], capture_output=True, timeout=2)
+    except Exception:
+        pass
+
+    was_running = wrapper_running
+    wrapper_running = False
+    wrapper_logging_in = False
+    wrapper_needs_2fa = False
+    wrapper_2fa_type = ""
+    return stopped_any or was_running
+
+
 @app.post("/wrapper/stop")
 def stop_wrapper():
-    global wrapper_process, wrapper_running, wrapper_logs, wrapper_needs_2fa, wrapper_2fa_type
-    if wrapper_process and wrapper_process.poll() is None:
-        subprocess.run(["podman", "stop", CONTAINER_NAME], capture_output=True)
-        wrapper_process.terminate()
-        wrapper_logs.append("Wrapper stopped by user")
-        wrapper_running = False
-        wrapper_needs_2fa = False
-        wrapper_2fa_type = ""
-        return {"status": "ok", "msg": "Wrapper stopped"}
-    return {"status": "error", "msg": "Wrapper not running"}
+    global wrapper_logs
+    stopped = force_stop_wrapper()
+    wrapper_logs.append("Wrapper stopped by user")
+    return {"status": "ok", "msg": "Wrapper stopped" if stopped else "Wrapper was not running"}
+
+
+@app.post("/wrapper/restart")
+@app.post("/wrapper/reconnect")
+def restart_wrapper():
+    global wrapper_logs
+    force_stop_wrapper()
+    email, password = load_credentials()
+    if not email or not password:
+        wrapper_logs.append("Cannot reconnect: No saved credentials found. Please log in with Apple ID.")
+        return {"status": "error", "msg": "No saved credentials found. Please log in again."}
+
+    wrapper_logs.append("Refreshing FairPlay decryption session with saved credentials...")
+    started = start_wrapper_login(email, password, auto_login=True)
+    if started:
+        return {"status": "ok", "msg": "Reconnecting with saved credentials..."}
+    return {"status": "error", "msg": wrapper_logs[-1] if wrapper_logs else "Failed to restart wrapper"}
+
+
+@app.post("/wrapper/logout")
+def logout_wrapper():
+    global wrapper_logs
+    force_stop_wrapper()
+    delete_credentials()
+    wrapper_logs.append("Logged out and deleted saved credentials")
+    return {"status": "ok", "msg": "Logged out successfully"}
 
 
 class TwoFARequest(BaseModel):
@@ -2611,11 +2675,13 @@ def get_wrapper_status():
     if wrapper_process and wrapper_process.poll() is not None and wrapper_running:
         wrapper_running = False
         wrapper_logging_in = False
+    email, _ = load_credentials()
     return {
         "running": wrapper_running,
         "logging_in": wrapper_logging_in,
         "needs_2fa": wrapper_needs_2fa,
         "2fa_type": wrapper_2fa_type,
+        "has_saved_credentials": bool(email),
         "logs": list(wrapper_logs),
     }
 

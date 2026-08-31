@@ -36,6 +36,8 @@
   let wrapperLoggingIn = $state(false);
   let wrapperNeeds2fa = $state(false);
   let wrapper2faType = $state("");
+  let hasSavedCredentials = $state(false);
+  let showManualLogin = $state(false);
   let wrapperLogs = $state<string[]>([]);
   let wrapperEmail = $state("");
   let wrapperPassword = $state("");
@@ -44,6 +46,10 @@
   let wrapperError = $state<string | null>(null);
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  let hasFairplayError = $derived(
+    wrapperLogs.some(l => l.includes("KDCanProcessCKC status: -42786") || l.includes("Fairplay error"))
+  );
+
   async function pollWrapper() {
     try {
       const s = await api.wrapper.status();
@@ -51,7 +57,8 @@
       wrapperLoggingIn = Boolean(s.logging_in);
       wrapperNeeds2fa = s.needs_2fa;
       wrapper2faType = s["2fa_type"];
-      wrapperLogs = s.logs;
+      hasSavedCredentials = Boolean(s.has_saved_credentials);
+      wrapperLogs = s.logs || [];
     } catch {}
   }
 
@@ -66,13 +73,50 @@
       wrapperError = String(e);
     } finally {
       wrapperBusy = false;
+      await pollWrapper();
+    }
+  }
+
+  async function restartWrapper() {
+    wrapperBusy = true;
+    wrapperError = null;
+    try {
+      const res = await api.wrapper.restart();
+      if (res.status === "error") wrapperError = res.msg;
+    } catch (e) {
+      wrapperError = String(e);
+    } finally {
+      wrapperBusy = false;
+      await pollWrapper();
     }
   }
 
   async function stopWrapper() {
     wrapperBusy = true;
-    try { await api.wrapper.stop(); } catch {}
-    wrapperBusy = false;
+    wrapperError = null;
+    try {
+      await api.wrapper.stop();
+    } catch (e) {
+      wrapperError = String(e);
+    } finally {
+      wrapperBusy = false;
+      await pollWrapper();
+    }
+  }
+
+  async function logoutWrapper() {
+    if (!confirm("Are you sure you want to disconnect and delete saved Apple credentials?")) return;
+    wrapperBusy = true;
+    wrapperError = null;
+    try {
+      await api.wrapper.logout();
+      showManualLogin = false;
+    } catch (e) {
+      wrapperError = String(e);
+    } finally {
+      wrapperBusy = false;
+      await pollWrapper();
+    }
   }
 
   async function submit2fa() {
@@ -83,6 +127,7 @@
       twoFaCode = "";
     } catch {}
     wrapperBusy = false;
+    await pollWrapper();
   }
 
   onMount(async () => {
@@ -321,20 +366,33 @@
 
       <div class="px-4 py-3">
         {#if wrapperRunning}
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-zinc-400">Wrapper is running and ready for downloads.</span>
-            <button onclick={stopWrapper} disabled={wrapperBusy}
-              class="px-3 py-1.5 rounded-lg text-xs bg-[#1a1a1a] text-zinc-400 hover:text-red-400 hover:bg-red-950/30 transition-colors disabled:opacity-50">
-              Disconnect
-            </button>
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div class="text-sm font-medium text-zinc-200">Decryption wrapper is running and active</div>
+              <div class="text-[11px] text-zinc-500 mt-0.5">Ready for ALAC/AAC downloads & playback decryption</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick={restartWrapper} disabled={wrapperBusy} title="Restart the daemon to renew expired FairPlay / DRM session keys using saved credentials"
+                class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 transition-all flex items-center gap-1.5 disabled:opacity-50">
+                <span class={wrapperBusy ? "animate-spin" : ""}>🔄</span> Reconnect
+              </button>
+              <button onclick={stopWrapper} disabled={wrapperBusy} title="Stop the decryption daemon process"
+                class="px-3 py-1.5 rounded-lg text-xs bg-[#1a1a1a] border border-[#2a2a2a] text-zinc-300 hover:text-red-300 hover:border-red-800/40 hover:bg-red-950/30 transition-colors disabled:opacity-50">
+                Disconnect
+              </button>
+              <button onclick={logoutWrapper} disabled={wrapperBusy} title="Stop wrapper and delete saved credentials"
+                class="px-2.5 py-1.5 rounded-lg text-xs bg-[#141414] text-zinc-500 hover:text-red-400 transition-colors disabled:opacity-50">
+                Logout
+              </button>
+            </div>
           </div>
 
         {:else if wrapperLoggingIn}
           <div class="flex items-center gap-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
             <span class="w-4 h-4 rounded-full border-2 border-amber-400 border-t-transparent animate-spin flex-shrink-0"></span>
             <div class="flex-1 min-w-0">
-              <div class="text-xs font-semibold text-amber-300">Auto-authenticating with saved credentials…</div>
-              <div class="text-[10px] text-zinc-400 mt-0.5">Initializing Apple Music downloader container in background</div>
+              <div class="text-xs font-semibold text-amber-300">Authenticating Apple Music session…</div>
+              <div class="text-[10px] text-zinc-400 mt-0.5">Initializing decryption daemon and requesting FairPlay keys</div>
             </div>
           </div>
 
@@ -356,27 +414,76 @@
           </div>
 
         {:else}
-          <div class="flex flex-col gap-2">
-            <div class="flex gap-2">
-              <input bind:value={wrapperEmail} type="email" placeholder="Apple ID email"
-                class="flex-1 bg-[#0d0d0d] border border-[#2a2a2a] focus:border-amber-700 rounded-lg px-3 py-2 text-white text-sm outline-none transition-colors" />
-              <input bind:value={wrapperPassword} type="password" placeholder="Password"
-                class="flex-1 bg-[#0d0d0d] border border-[#2a2a2a] focus:border-amber-700 rounded-lg px-3 py-2 text-white text-sm outline-none transition-colors" />
-              <button onclick={loginWrapper} disabled={wrapperBusy || !wrapperEmail || !wrapperPassword}
-                class="px-4 py-2 rounded-lg text-sm font-bold bg-amber-700 hover:bg-amber-600 text-white transition-colors disabled:opacity-50">
-                {wrapperBusy ? "…" : "Connect"}
-              </button>
+          {#if hasSavedCredentials && !showManualLogin}
+            <div class="flex flex-col gap-3">
+              <div class="flex flex-wrap items-center justify-between gap-3 p-3 rounded-lg bg-[#141210] border border-[rgba(255,255,255,0.06)]">
+                <div class="flex items-center gap-2.5">
+                  <span class="text-base">🔐</span>
+                  <div>
+                    <div class="text-xs font-semibold text-zinc-200">Saved Apple Account Ready</div>
+                    <div class="text-[10px] text-zinc-500">Reconnect with saved credentials without re-entering your password</div>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button onclick={restartWrapper} disabled={wrapperBusy}
+                    class="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50">
+                    <span class={wrapperBusy ? "animate-spin" : ""}>⚡</span> Reconnect
+                  </button>
+                  <button onclick={logoutWrapper} disabled={wrapperBusy} title="Clear saved credentials"
+                    class="px-2.5 py-1.5 rounded-lg text-xs bg-[#1a1a1a] text-zinc-400 hover:text-red-400 transition-colors disabled:opacity-50">
+                    Forget
+                  </button>
+                </div>
+              </div>
+              <div class="flex justify-end">
+                <button onclick={() => (showManualLogin = true)} class="text-[11px] text-zinc-500 hover:text-zinc-300 underline transition-colors">
+                  Log in with a different Apple ID
+                </button>
+              </div>
             </div>
-            {#if wrapperError}
-              <p class="text-red-400 text-xs">{wrapperError}</p>
-            {/if}
+          {:else}
+            <div class="flex flex-col gap-2">
+              <div class="flex gap-2">
+                <input bind:value={wrapperEmail} type="email" placeholder="Apple ID email"
+                  class="flex-1 bg-[#0d0d0d] border border-[#2a2a2a] focus:border-amber-700 rounded-lg px-3 py-2 text-white text-sm outline-none transition-colors" />
+                <input bind:value={wrapperPassword} type="password" placeholder="Password"
+                  class="flex-1 bg-[#0d0d0d] border border-[#2a2a2a] focus:border-amber-700 rounded-lg px-3 py-2 text-white text-sm outline-none transition-colors" />
+                <button onclick={loginWrapper} disabled={wrapperBusy || !wrapperEmail || !wrapperPassword}
+                  class="px-4 py-2 rounded-lg text-sm font-bold bg-amber-700 hover:bg-amber-600 text-white transition-colors disabled:opacity-50">
+                  {wrapperBusy ? "…" : "Connect"}
+                </button>
+              </div>
+              {#if hasSavedCredentials && showManualLogin}
+                <div class="flex justify-start">
+                  <button onclick={() => (showManualLogin = false)} class="text-[11px] text-amber-500 hover:text-amber-400 underline transition-colors">
+                    ← Back to saved account
+                  </button>
+                </div>
+              {/if}
+              {#if wrapperError}
+                <p class="text-red-400 text-xs">{wrapperError}</p>
+              {/if}
+            </div>
+          {/if}
+        {/if}
+
+        {#if hasFairplayError}
+          <div class="mt-2.5 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2 text-xs text-amber-300 min-w-0">
+              <span class="text-base flex-shrink-0">⚠️</span>
+              <span class="truncate"><strong>FairPlay Key Expired:</strong> Apple's DRM session has timed out. Click Reconnect to refresh keys.</span>
+            </div>
+            <button onclick={restartWrapper} disabled={wrapperBusy}
+              class="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold transition-colors flex-shrink-0 flex items-center gap-1">
+              <span>⚡</span> Reconnect
+            </button>
           </div>
         {/if}
 
         {#if wrapperLogs.length > 0}
-          <div class="mt-2 bg-[#0a0a0a] border border-[#181818] rounded-lg px-3 py-2 max-h-24 overflow-y-auto">
-            {#each wrapperLogs.slice(-10) as line}
-              <div class="text-zinc-600 text-[10px] font-mono leading-relaxed">{line}</div>
+          <div class="mt-2.5 bg-[#0a0a0a] border border-[#181818] rounded-lg px-3 py-2 max-h-32 overflow-y-auto">
+            {#each wrapperLogs.slice(-15) as line}
+              <div class="text-zinc-600 text-[10px] font-mono leading-relaxed truncate {line.includes('KDCanProcessCKC') || line.includes('Fairplay error') ? 'text-amber-400/90 font-semibold' : ''}">{line}</div>
             {/each}
           </div>
         {/if}

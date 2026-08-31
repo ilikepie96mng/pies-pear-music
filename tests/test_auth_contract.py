@@ -158,7 +158,6 @@ def test_login_command_shape_is_frozen_by_contract(monkeypatch, tmp_path):
     assert server.wrapper_running is True
 
 
-
 def test_shutdown_contract_terminates_the_active_wrapper_once(monkeypatch):
     process = FakeProcess()
     monkeypatch.setattr(server, "wrapper_process", process)
@@ -170,6 +169,38 @@ def test_shutdown_contract_terminates_the_active_wrapper_once(monkeypatch):
     assert result == {"status": "ok", "msg": "Wrapper stopped"}
     assert process.terminated is True
     assert server.wrapper_running is False
+
+
+def test_restart_wrapper_reauthenticates_with_saved_credentials(monkeypatch):
+    calls = []
+    monkeypatch.setattr(server, "load_credentials", lambda: ("contract@example.invalid", "synthetic-password"))
+    monkeypatch.setattr(
+        server,
+        "start_wrapper_login",
+        lambda email, password, auto_login: calls.append((email, password, auto_login)) or True,
+    )
+    monkeypatch.setattr(server.subprocess, "run", lambda *args, **kwargs: None)
+
+    result = server.restart_wrapper()
+
+    assert result == {"status": "ok", "msg": "Reconnecting with saved credentials..."}
+    assert calls == [("contract@example.invalid", "synthetic-password", True)]
+
+
+def test_logout_wrapper_stops_and_deletes_credentials(monkeypatch):
+    process = FakeProcess()
+    monkeypatch.setattr(server, "wrapper_process", process)
+    monkeypatch.setattr(server, "wrapper_running", True)
+    deleted = []
+    monkeypatch.setattr(server, "delete_credentials", lambda: deleted.append(True))
+    monkeypatch.setattr(server.subprocess, "run", lambda *args, **kwargs: None)
+
+    result = server.logout_wrapper()
+
+    assert result == {"status": "ok", "msg": "Logged out successfully"}
+    assert process.terminated is True
+    assert server.wrapper_running is False
+    assert deleted == [True]
 
 
 def test_2fa_code_contract_writes_one_newline_terminated_value():

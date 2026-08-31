@@ -1103,6 +1103,16 @@ export const api = {
       return r.json();
     },
 
+    async restart(): Promise<{ status: string; msg: string }> {
+      const r = await request("/wrapper/restart", { method: "POST" });
+      return r.json();
+    },
+
+    async logout(): Promise<{ status: string; msg: string }> {
+      const r = await request("/wrapper/logout", { method: "POST" });
+      return r.json();
+    },
+
     async submit2fa(code: string): Promise<{ status: string; msg: string }> {
       const r = await request("/wrapper/2fa", {
         method: "POST",
@@ -1112,7 +1122,14 @@ export const api = {
       return r.json();
     },
 
-    async status(): Promise<{ running: boolean; logging_in?: boolean; needs_2fa: boolean; "2fa_type": string; logs: string[] }> {
+    async status(): Promise<{
+      running: boolean;
+      logging_in?: boolean;
+      needs_2fa: boolean;
+      "2fa_type": string;
+      has_saved_credentials?: boolean;
+      logs: string[];
+    }> {
       const r = await request("/wrapper/status");
       return r.json();
     },
