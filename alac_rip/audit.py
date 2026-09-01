@@ -306,3 +306,230 @@ def adopt_orphaned_files(
         "adopted_count": len(adopted),
         "adopted": adopted,
     }
+
+
+def normalize_match_key(title: str, artist: str) -> tuple[str, str]:
+    """Normalize title and artist to catch duplicate tracks across singles, albums, and naming differences."""
+    # Clean feat / featuring / with / remaster / deluxe tags
+    t = re.sub(
+        r"\s*[\(\[](?:feat\.|featuring|ft\.|with|remaster(?:ed)?|deluxe|explicit|clean|mono|stereo|bonus track)[\s\w\.\,\-]*[\)\]]",
+        "",
+        title or "",
+        flags=re.IGNORECASE,
+    )
+    # Strip numeric prefixes like "01 - ", "1550. "
+    t = re.sub(r"^\d+[\.\-\s]+", "", t)
+    t = re.sub(r"[^\w\s]", "", t).strip().lower()
+
+    a = re.sub(
+        r"\s*[\(\[](?:feat\.|featuring|ft\.|with)[\s\w\.\,\-]*[\)\]]",
+        "",
+        artist or "",
+        flags=re.IGNORECASE,
+    )
+    a = re.sub(r"[^\w\s]", "", a).strip().lower()
+    return (t, a)
+
+
+def find_library_duplicates(music_dir: Path, state: StateManager) -> dict:
+    """
+    Scan entire library for duplicate tracks, collision files (_coll_*), and duplicate playlist mappings.
+    Returns categorized duplicate groups with recommended primary track and reclaimable disk space.
+    """
+    music_dir_resolved = music_dir.expanduser().resolve()
+    all_tracks = state.get_all_tracks_with_provenance()
+
+    groups_map: dict[tuple[str, str], list[dict]] = {}
+
+    for t in all_tracks:
+        lp = t.get("local_path", "")
+        p = _normalize_track_file_path(lp, music_dir_resolved)
+        exists = p is not None and p.is_file()
+        file_size = p.stat().st_size if exists else 0
+
+        # Detect collision suffix
+        has_collision_suffix = "_coll_" in p.name if p else "_coll_" in lp
+        album_is_single = any(s in (t.get("album") or "").lower() for s in ("- single", " - ep", "(single)", "[single]"))
+
+        fmt = p.suffix.lstrip(".").upper() if p else "FLAC"
+
+        norm_title, norm_artist = normalize_match_key(t.get("title", ""), t.get("artist", ""))
+        # Fallback if both title and artist normalized to empty
+        if not norm_title:
+            norm_title = (t.get("title") or "unknown").strip().lower()
+        if not norm_artist:
+            norm_artist = (t.get("artist") or "unknown").strip().lower()
+
+        track_obj = {
+            "track_id": t["track_id"],
+            "title": t["title"],
+            "artist": t["artist"],
+            "album": t["album"],
+            "local_path": str(p) if p else lp,
+            "file_exists": exists,
+            "file_size": file_size,
+            "format": fmt,
+            "downloaded_at": t.get("downloaded_at", ""),
+            "am_track_id": t.get("am_track_id"),
+            "artwork_url": t.get("artwork_url"),
+            "playlists": t.get("playlists", []),
+            "has_collision_suffix": has_collision_suffix,
+            "album_is_single": album_is_single,
+        }
+
+        key = (norm_title, norm_artist)
+        groups_map.setdefault(key, []).append(track_obj)
+
+    duplicate_groups = []
+    total_duplicate_tracks = 0
+    total_reclaimable_bytes = 0
+
+    for idx, (key, tracks) in enumerate(groups_map.items(), 1):
+        if len(tracks) < 2:
+            continue
+
+        # Score tracks to determine recommended primary
+        def _score(track: dict) -> int:
+            score = 0
+            if track["file_exists"]:
+                score += 1000
+            if not track["has_collision_suffix"]:
+                score += 200
+            if not track["album_is_single"]:
+                score += 100
+            score += len(track["playlists"]) * 50
+            if track["am_track_id"]:
+                score += 25
+            score += min(track["file_size"] // (1024 * 1024), 50)  # Up to 50 pts for file size
+            return score
+
+        tracks_sorted = sorted(tracks, key=_score, reverse=True)
+        # Mark primary track
+        for i, t in enumerate(tracks_sorted):
+            t["is_recommended"] = (i == 0)
+
+        group_reclaimable = sum(t["file_size"] for t in tracks_sorted[1:] if t["file_exists"])
+        total_reclaimable_bytes += group_reclaimable
+        total_duplicate_tracks += len(tracks_sorted) - 1
+
+        group_id = f"dup_{abs(hash(key))}_{idx}"
+        duplicate_groups.append({
+            "group_id": group_id,
+            "title": tracks_sorted[0]["title"],
+            "artist": tracks_sorted[0]["artist"],
+            "track_count": len(tracks_sorted),
+            "reclaimable_bytes": group_reclaimable,
+            "tracks": tracks_sorted,
+        })
+
+    duplicate_groups.sort(key=lambda g: (g["reclaimable_bytes"], g["track_count"]), reverse=True)
+
+    return {
+        "total_groups": len(duplicate_groups),
+        "total_duplicate_tracks": total_duplicate_tracks,
+        "total_reclaimable_bytes": total_reclaimable_bytes,
+        "groups": duplicate_groups,
+    }
+
+
+def sweep_library_duplicates(
+    music_dir: Path,
+    state: StateManager,
+    keep_criteria: str = "recommended",
+    delete_files: bool = True,
+    remap_playlists: bool = True,
+    group_ids: Optional[list[str]] = None,
+) -> dict:
+    """
+    Execute a deduplication sweep across the entire library.
+    Removes duplicate tracks, unlinks duplicate files from disk, remaps playlists, and regenerates .m3u8 files.
+    """
+    music_dir_resolved = music_dir.expanduser().resolve()
+    report = find_library_duplicates(music_dir, state)
+
+    target_groups = report["groups"]
+    if group_ids:
+        group_id_set = set(group_ids)
+        target_groups = [g for g in target_groups if g["group_id"] in group_id_set]
+
+    freed_bytes = 0
+    deleted_files_count = 0
+    remap_pairs: list[tuple[str, str]] = []
+    tracks_to_delete: list[str] = []
+    processed_groups = 0
+
+    for group in target_groups:
+        tracks = group["tracks"]
+        if len(tracks) < 2:
+            continue
+
+        # Determine primary track based on criteria
+        if keep_criteria == "oldest":
+            primary = min(tracks, key=lambda t: t.get("downloaded_at") or "9999")
+        elif keep_criteria == "newest":
+            primary = max(tracks, key=lambda t: t.get("downloaded_at") or "")
+        elif keep_criteria == "highest_quality":
+            primary = max(tracks, key=lambda t: (t.get("file_size") or 0, t.get("file_exists") or False))
+        else:
+            # Default "recommended" or "album_over_single"
+            primary = next((t for t in tracks if t.get("is_recommended")), tracks[0])
+
+        duplicates = [t for t in tracks if t["track_id"] != primary["track_id"]]
+
+        for dup in duplicates:
+            remap_pairs.append((dup["track_id"], primary["track_id"]))
+            tracks_to_delete.append(dup["track_id"])
+
+            if delete_files and dup["file_exists"]:
+                dup_path_str = dup.get("local_path", "")
+                p = _normalize_track_file_path(dup_path_str, music_dir_resolved)
+                primary_p = _normalize_track_file_path(primary.get("local_path", ""), music_dir_resolved)
+
+                # Ensure we do not delete the primary track file
+                if p and p.is_file() and (primary_p is None or p.resolve() != primary_p.resolve()):
+                    if _is_safe_subpath(p, music_dir_resolved):
+                        try:
+                            file_sz = p.stat().st_size
+                            p.unlink(missing_ok=True)
+                            freed_bytes += file_sz
+                            deleted_files_count += 1
+                            # Clean up matching lyrics sidecar if present
+                            lrc_p = p.with_suffix(".lrc")
+                            if lrc_p.is_file():
+                                lrc_p.unlink(missing_ok=True)
+
+                            # Clean up empty parent directory if empty
+                            parent = p.parent
+                            if parent != music_dir_resolved and _is_safe_subpath(parent, music_dir_resolved):
+                                try:
+                                    remaining = list(parent.iterdir())
+                                    # If only cover.jpg / folder.jpg remains, delete them
+                                    if all(f.name.lower() in ("cover.jpg", "folder.jpg", "cover.png", ".ds_store") for f in remaining):
+                                        for f in remaining:
+                                            f.unlink(missing_ok=True)
+                                        parent.rmdir()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+        processed_groups += 1
+
+    # Execute database remapping and deletion
+    remapped_count, deleted_db_count = state.remap_and_remove_tracks(remap_pairs, tracks_to_delete)
+
+    # Regenerate .m3u8 playlist files if playlists were affected
+    repaired_playlists_count = 0
+    if remap_playlists and remapped_count > 0:
+        repair_res = repair_playlists(music_dir, state)
+        repaired_playlists_count = repair_res.get("repaired_count", 0)
+
+    return {
+        "status": "ok",
+        "processed_groups": processed_groups,
+        "removed_tracks_count": deleted_db_count,
+        "deleted_files_count": deleted_files_count,
+        "freed_bytes": freed_bytes,
+        "remapped_playlist_references": remapped_count,
+        "repaired_playlists_count": repaired_playlists_count,
+    }

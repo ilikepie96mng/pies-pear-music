@@ -6,6 +6,9 @@
     type LibraryStats,
     type LibraryAuditReport,
     type LibraryIntegrityReport,
+    type LibraryDuplicatesReport,
+    type DuplicateGroup,
+    type DuplicateTrackItem,
     type LibraryRepairResult,
     type SmartPlaylist,
   } from "../api";
@@ -69,6 +72,16 @@
   let integrityLoading = $state(false);
   let integrityReport = $state<LibraryIntegrityReport | null>(null);
   let integrityError = $state<string | null>(null);
+
+  // Duplicate Songs & Sweep State
+  let duplicatesLoading = $state(false);
+  let duplicatesReport = $state<LibraryDuplicatesReport | null>(null);
+  let duplicatesError = $state<string | null>(null);
+  let sweepLoading = $state(false);
+  let sweepCriteria = $state("recommended"); // "recommended" | "album_over_single" | "highest_quality" | "oldest" | "newest"
+  let sweepDeleteFiles = $state(true);
+  let sweepRemapPlaylists = $state(true);
+  let expandedDuplicateGroups = $state<Record<string, boolean>>({});
 
   let repairLoading = $state(false);
   let repairMessage = $state<{ type: "success" | "error"; text: string } | null>(null);
@@ -396,6 +409,51 @@
     } finally {
       repairLoading = false;
     }
+  }
+
+  async function runDuplicateScan() {
+    duplicatesLoading = true;
+    duplicatesError = null;
+    repairMessage = null;
+    try {
+      duplicatesReport = await api.getLibraryDuplicates();
+    } catch (e) {
+      duplicatesError = String(e);
+    } finally {
+      duplicatesLoading = false;
+    }
+  }
+
+  async function handleSweepDuplicates(groupIds?: string[]) {
+    const isAll = !groupIds || groupIds.length === 0;
+    const msg = isAll
+      ? `Are you sure you want to sweep all duplicate songs across your library? ${sweepDeleteFiles ? "Duplicate audio files & lyrics sidecars will be safely deleted from storage, and playlists will be remapped to the primary copy." : "Duplicates will be removed from database and remapped."}`
+      : `Sweep selected duplicate song group?`;
+    if (!confirm(msg)) return;
+
+    sweepLoading = true;
+    repairMessage = null;
+    try {
+      const res = await api.deduplicateLibrary({
+        keep_criteria: sweepCriteria,
+        delete_files: sweepDeleteFiles,
+        remap_playlists: sweepRemapPlaylists,
+        group_ids: groupIds,
+      });
+      repairMessage = {
+        type: "success",
+        text: `Duplicate sweep completed: Removed ${res.removed_tracks_count} duplicate track(s), deleted ${res.deleted_files_count} file(s), freed ${formatBytes(res.freed_bytes)}, and remapped ${res.remapped_playlist_references} playlist reference(s).`,
+      };
+      await Promise.all([loadLibraryData(), runDuplicateScan(), runAudit()]);
+    } catch (e) {
+      repairMessage = { type: "error", text: String(e) };
+    } finally {
+      sweepLoading = false;
+    }
+  }
+
+  function toggleDuplicateGroup(groupId: string) {
+    expandedDuplicateGroups[groupId] = !expandedDuplicateGroups[groupId];
   }
 
   function filterByPlaylist(pl: string) {
@@ -1018,28 +1076,197 @@
           </div>
 
           <!-- Card 3: Playlist Sync & M3U8 Regeneration -->
-          <div class="p-5 rounded-2xl flex flex-col justify-between gap-4 md:col-span-2" style="background:var(--surface);border:1px solid var(--border);">
-            <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div class="p-5 rounded-2xl flex flex-col justify-between gap-4" style="background:var(--surface);border:1px solid var(--border);">
+            <div class="flex flex-col justify-between gap-4 h-full">
               <div>
                 <h3 class="font-bold text-sm text-white flex items-center gap-2">
                   <span>☰</span> Playlist Sync & M3U8 Regeneration
                 </h3>
-                <p class="text-xs text-zinc-400 mt-1 max-w-2xl leading-relaxed">
+                <p class="text-xs text-zinc-400 mt-2 leading-relaxed">
                   Safely reconstruct all `.m3u8` playlist files in your library `playlists/` folder from verified SQLite database track associations.
                 </p>
               </div>
 
+              <div class="pt-2 border-t flex items-center gap-2" style="border-color:var(--border);">
+                <button
+                  onclick={handleRegenerateM3u8}
+                  disabled={repairLoading}
+                  class="px-3.5 py-2 text-xs font-bold rounded-lg transition-colors"
+                  style="background:var(--surface-hover);color:white;border:1px solid var(--border);"
+                >
+                  {repairLoading ? "Regenerating…" : "Regenerate All Playlists (.m3u8)"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Card 4: Duplicate Songs & Storage Sweep -->
+          <div class="p-5 rounded-2xl flex flex-col justify-between gap-4" style="background:var(--surface);border:1px solid var(--border);">
+            <div>
+              <div class="flex items-center justify-between">
+                <h3 class="font-bold text-sm text-white flex items-center gap-2">
+                  <span>🔍</span> Duplicate Songs & Storage Sweep
+                </h3>
+                {#if duplicatesReport}
+                  <span class="text-[10px] px-2 py-0.5 rounded font-mono {duplicatesReport.total_groups > 0 ? 'bg-amber-500/20 text-amber-300' : 'bg-emerald-500/20 text-emerald-300'}">
+                    {duplicatesReport.total_groups > 0 ? `${duplicatesReport.total_groups} duplicate groups` : "Zero duplicates"}
+                  </span>
+                {/if}
+              </div>
+              <p class="text-xs text-zinc-400 mt-2 leading-relaxed">
+                Identify duplicate songs across single releases vs full albums, collision files (`_coll_*.flac`), and multiple copies. Safely prune duplicate audio files from disk and auto-remap playlists.
+              </p>
+
+              {#if duplicatesReport}
+                <div class="grid grid-cols-3 gap-2 mt-4 text-xs font-mono">
+                  <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
+                    <span class="text-zinc-400 block text-[10px]">Duplicate Groups:</span>
+                    <span class={duplicatesReport.total_groups > 0 ? "text-amber-400 font-bold text-sm" : "text-emerald-400 font-bold text-sm"}>
+                      {duplicatesReport.total_groups}
+                    </span>
+                  </div>
+                  <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
+                    <span class="text-zinc-400 block text-[10px]">Extra Tracks:</span>
+                    <span class="text-white font-bold text-sm">{duplicatesReport.total_duplicate_tracks}</span>
+                  </div>
+                  <div class="p-2.5 rounded-lg bg-black/30 border border-white/5">
+                    <span class="text-zinc-400 block text-[10px]">Reclaimable:</span>
+                    <span class="text-emerald-400 font-bold text-sm">{formatBytes(duplicatesReport.total_reclaimable_bytes)}</span>
+                  </div>
+                </div>
+
+                <!-- Sweep Options -->
+                <div class="mt-4 p-3 rounded-lg bg-black/20 border border-white/5 flex flex-col gap-2.5 text-xs">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <span class="text-zinc-300 font-semibold text-[11px]">Keep Preference:</span>
+                    <select bind:value={sweepCriteria} class="bg-[#121212] border border-[#2a2a2a] rounded px-2 py-1 text-xs text-zinc-200 outline-none">
+                      <option value="recommended">Best Quality & Album Version (Recommended)</option>
+                      <option value="album_over_single">Full Album over Singles/EPs</option>
+                      <option value="highest_quality">Highest Bitrate / File Size</option>
+                      <option value="oldest">First Downloaded (Oldest)</option>
+                      <option value="newest">Most Recently Downloaded (Newest)</option>
+                    </select>
+                  </div>
+                  <div class="flex flex-wrap gap-4 text-[11px] text-zinc-400 pt-1">
+                    <label class="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" bind:checked={sweepDeleteFiles} class="rounded accent-amber-500" />
+                      <span>Delete duplicate audio files & .lrc from disk</span>
+                    </label>
+                    <label class="flex items-center gap-1.5 cursor-pointer">
+                      <input type="checkbox" bind:checked={sweepRemapPlaylists} class="rounded accent-amber-500" />
+                      <span>Remap playlists & rewrite .m3u8</span>
+                    </label>
+                  </div>
+                </div>
+              {/if}
+
+              {#if duplicatesError}
+                <div class="mt-3 text-xs text-red-400">{duplicatesError}</div>
+              {/if}
+            </div>
+
+            <div class="flex flex-wrap gap-2 pt-2 border-t" style="border-color:var(--border);">
               <button
-                onclick={handleRegenerateM3u8}
-                disabled={repairLoading}
-                class="px-4 py-2 text-xs font-semibold rounded-lg self-start md:self-auto transition-colors"
-                style="background:var(--surface);color:white;border:1px solid var(--border);"
+                onclick={runDuplicateScan}
+                disabled={duplicatesLoading || sweepLoading}
+                class="px-3.5 py-2 text-xs font-bold rounded-lg transition-all"
+                style="background:var(--surface-hover);color:white;border:1px solid var(--border);"
               >
-                {repairLoading ? "Regenerating…" : "Regenerate All Playlists (.m3u8)"}
+                {duplicatesLoading ? "Scanning Library…" : "Scan for Duplicates"}
               </button>
+
+              {#if duplicatesReport?.total_groups}
+                <button
+                  onclick={() => handleSweepDuplicates()}
+                  disabled={sweepLoading || duplicatesLoading}
+                  class="px-3.5 py-2 text-xs font-bold rounded-lg bg-amber-500 hover:bg-amber-400 text-black transition-all shadow-sm flex items-center gap-1.5"
+                >
+                  <span>⚡</span> {sweepLoading ? "Sweeping Duplicates…" : `Sweep All Duplicates (${duplicatesReport.total_duplicate_tracks})`}
+                </button>
+              {/if}
             </div>
           </div>
         </div>
+
+        <!-- Duplicates Breakdown Accordion Feed -->
+        {#if duplicatesReport?.groups?.length}
+          <div class="p-5 rounded-2xl border border-amber-900/50 bg-amber-950/15">
+            <div class="flex items-center justify-between mb-3">
+              <h4 class="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-2">
+                <span>🔍</span> Duplicate Track Groups ({duplicatesReport.groups.length}) — {formatBytes(duplicatesReport.total_reclaimable_bytes)} Reclaimable
+              </h4>
+              <button
+                onclick={() => handleSweepDuplicates()}
+                disabled={sweepLoading}
+                class="px-3 py-1 rounded-md text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white transition-colors"
+              >
+                Sweep All
+              </button>
+            </div>
+            <div class="flex flex-col gap-3 max-h-96 overflow-y-auto">
+              {#each duplicatesReport.groups as group}
+                <div class="p-3 rounded-xl bg-black/40 border border-white/5 flex flex-col gap-2">
+                  <div class="flex items-center justify-between">
+                    <button
+                      type="button"
+                      class="flex items-center gap-2.5 min-w-0 text-left cursor-pointer bg-transparent border-none p-0 outline-none flex-1"
+                      onclick={() => toggleDuplicateGroup(group.group_id)}
+                    >
+                      <span class="text-xs text-amber-400 flex-shrink-0">{expandedDuplicateGroups[group.group_id] ? "▼" : "▶"}</span>
+                      <div class="truncate">
+                        <span class="font-bold text-white text-sm">{group.title}</span>
+                        <span class="text-zinc-400 text-xs ml-1.5">by {group.artist}</span>
+                      </div>
+                    </button>
+                    <div class="flex items-center gap-2.5 flex-shrink-0 ml-3">
+                      <span class="text-[11px] font-mono text-zinc-400">{group.track_count} copies</span>
+                      <span class="text-[11px] font-mono text-emerald-400 font-semibold">{formatBytes(group.reclaimable_bytes)} saveable</span>
+                      <button
+                        onclick={() => handleSweepDuplicates([group.group_id])}
+                        disabled={sweepLoading}
+                        class="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-700/80 hover:bg-amber-600 text-white transition-colors"
+                      >
+                        Sweep
+                      </button>
+                    </div>
+                  </div>
+
+                  {#if expandedDuplicateGroups[group.group_id]}
+                    <div class="mt-2 pt-2 border-t border-white/5 flex flex-col gap-1.5 font-mono text-xs">
+                      {#each group.tracks as t}
+                        <div class="p-2 rounded flex items-center justify-between gap-3 {t.is_recommended ? 'bg-emerald-950/30 border border-emerald-800/40 text-emerald-200' : 'bg-black/20 text-zinc-400'}">
+                          <div class="flex flex-col min-w-0 truncate">
+                            <div class="flex items-center gap-2">
+                              {#if t.is_recommended}
+                                <span class="px-1.5 py-0.2 rounded text-[9px] bg-emerald-700 text-white font-bold uppercase">Primary (Keep)</span>
+                              {:else}
+                                <span class="px-1.5 py-0.2 rounded text-[9px] bg-zinc-800 text-zinc-400 font-bold uppercase">Duplicate</span>
+                              {/if}
+                              <span class="font-semibold text-white truncate">{t.album}</span>
+                              {#if t.has_collision_suffix}
+                                <span class="text-[10px] text-amber-400 font-bold">_coll_ collision file</span>
+                              {/if}
+                            </div>
+                            <span class="text-[10px] text-zinc-500 truncate mt-0.5">{t.local_path}</span>
+                          </div>
+                          <div class="flex items-center gap-3 flex-shrink-0 text-[11px]">
+                            <span class="text-zinc-400">{t.format}</span>
+                            <span class="font-bold text-zinc-300">{formatBytes(t.file_size)}</span>
+                            {#if t.playlists?.length}
+                              <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-300 border border-amber-800/40">
+                                {t.playlists.length} pl
+                              </span>
+                            {/if}
+                          </div>
+                        </div>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/if}
 
         <!-- Issue Detail Feed -->
         {#if auditReport?.missing_files?.length}

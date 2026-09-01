@@ -380,6 +380,50 @@ export interface LibraryIntegrityReport {
   status: "ok" | "errors_found";
 }
 
+export interface DuplicateTrackItem {
+  track_id: string;
+  title: string;
+  artist: string;
+  album: string;
+  local_path: string;
+  file_exists: boolean;
+  file_size: number;
+  format: string;
+  downloaded_at: string;
+  am_track_id?: string | null;
+  artwork_url?: string | null;
+  playlists: string[];
+  has_collision_suffix: boolean;
+  album_is_single: boolean;
+  is_recommended?: boolean;
+}
+
+export interface DuplicateGroup {
+  group_id: string;
+  title: string;
+  artist: string;
+  track_count: number;
+  reclaimable_bytes: number;
+  tracks: DuplicateTrackItem[];
+}
+
+export interface LibraryDuplicatesReport {
+  total_groups: number;
+  total_duplicate_tracks: number;
+  total_reclaimable_bytes: number;
+  groups: DuplicateGroup[];
+}
+
+export interface LibraryDeduplicateResult {
+  status: string;
+  processed_groups: number;
+  removed_tracks_count: number;
+  deleted_files_count: number;
+  freed_bytes: number;
+  remapped_playlist_references: number;
+  repaired_playlists_count: number;
+}
+
 export interface LibraryRepairResult {
   status?: string;
   action?: string;
@@ -567,6 +611,30 @@ export const api = {
   async auditLibrary(): Promise<LibraryAuditReport> {
     const r = await request("/library/audit");
     if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async getLibraryDuplicates(): Promise<LibraryDuplicatesReport> {
+    const r = await request("/library/duplicates");
+    if (!r.ok) throw new Error(await r.text());
+    return r.json();
+  },
+
+  async deduplicateLibrary(payload?: {
+    keep_criteria?: string;
+    delete_files?: boolean;
+    remap_playlists?: boolean;
+    group_ids?: string[];
+  }): Promise<LibraryDeduplicateResult> {
+    const r = await request("/library/deduplicate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Deduplication failed (${r.status})`);
+    }
     return r.json();
   },
 

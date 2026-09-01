@@ -209,3 +209,66 @@ def test_verify_library_flac_integrity(music_dir, state):
     assert res["status"] == "errors_found"
     assert len(res["corrupted"]) == 1
     assert res["corrupted"][0]["track_id"] == "t2"
+
+
+def test_find_and_sweep_library_duplicates(music_dir, state):
+    from alac_rip.audit import find_library_duplicates, sweep_library_duplicates
+
+    # 1. Primary album track
+    f1 = music_dir / "artists" / "Daft Punk" / "Discovery" / "01 - One More Time.flac"
+    make_flac(f1, title="One More Time", artist="Daft Punk", album="Discovery")
+    f1.with_suffix(".lrc").write_text("[00:01.00]One more time", encoding="utf-8")
+
+    # 2. Duplicate single track
+    f2 = music_dir / "artists" / "Daft Punk" / "One More Time - Single" / "01 - One More Time.flac"
+    make_flac(f2, title="One More Time (feat. Romanthony)", artist="Daft Punk", album="One More Time - Single")
+    f2.with_suffix(".lrc").write_text("[00:01.00]One more time", encoding="utf-8")
+
+    # 3. Duplicate collision file
+    f3 = music_dir / "artists" / "Daft Punk" / "Discovery" / "01 - One More Time_coll_1.flac"
+    make_flac(f3, title="One More Time", artist="Daft Punk", album="Discovery")
+
+    t1 = Track("t1", "One More Time", "Daft Punk", "Discovery", str(f1), datetime.now().isoformat())
+    t2 = Track("t2", "One More Time (feat. Romanthony)", "Daft Punk", "One More Time - Single", str(f2), datetime.now().isoformat())
+    t3 = Track("t3", "One More Time", "Daft Punk", "Discovery", str(f3), datetime.now().isoformat())
+
+    state.add_track(t1)
+    state.add_track(t2)
+    state.add_track(t3)
+
+    state.add_playlist("Favorites", "https://music.apple.com/pl1")
+    state.add_track_to_playlist("Favorites", "t2")  # Playlist had the single version
+
+    # Find duplicates
+    dup_res = find_library_duplicates(music_dir, state)
+    assert dup_res["total_groups"] == 1
+    assert dup_res["total_duplicate_tracks"] == 2
+    assert dup_res["total_reclaimable_bytes"] > 0
+    group = dup_res["groups"][0]
+    assert group["title"] == "One More Time"
+    assert group["tracks"][0]["track_id"] == "t1"
+    assert group["tracks"][0]["is_recommended"] is True
+
+    # Sweep duplicates
+    sweep_res = sweep_library_duplicates(music_dir, state, keep_criteria="recommended", delete_files=True, remap_playlists=True)
+    assert sweep_res["status"] == "ok"
+    assert sweep_res["processed_groups"] == 1
+    assert sweep_res["removed_tracks_count"] == 2
+    assert sweep_res["deleted_files_count"] == 2
+
+    # Verify primary file remains, duplicates deleted
+    assert f1.is_file()
+    assert not f2.is_file()
+    assert not f2.with_suffix(".lrc").is_file()
+    assert not f3.is_file()
+
+    # Verify database state
+    assert state.is_downloaded("t1")
+    assert not state.is_downloaded("t2")
+    assert not state.is_downloaded("t3")
+
+    # Verify playlist was remapped to primary t1
+    pl_tracks = state.get_playlist_tracks("Favorites")
+    assert len(pl_tracks) == 1
+    assert pl_tracks[0].track_id == "t1"
+

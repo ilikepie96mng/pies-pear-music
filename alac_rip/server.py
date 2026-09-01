@@ -2193,6 +2193,13 @@ def get_library_tracks():
     return result
 
 
+class LibraryDeduplicateRequest(BaseModel):
+    keep_criteria: str = "recommended"  # "recommended" | "album_over_single" | "highest_quality" | "oldest" | "newest"
+    delete_files: bool = True
+    remap_playlists: bool = True
+    group_ids: Optional[list[str]] = None
+
+
 @app.get("/library/stats")
 def get_library_stats():
     if state is None or cfg is None:
@@ -2205,6 +2212,28 @@ def get_library_audit():
     if state is None or cfg is None:
         raise HTTPException(503, "Library is not ready")
     return audit.audit_library(cfg.music_dir, state)
+
+
+@app.get("/library/duplicates")
+def get_library_duplicates():
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+    return audit.find_library_duplicates(cfg.music_dir, state)
+
+
+@app.post("/library/deduplicate")
+def post_library_deduplicate(req: Optional[LibraryDeduplicateRequest] = None):
+    if state is None or cfg is None:
+        raise HTTPException(503, "Library is not ready")
+    r = req or LibraryDeduplicateRequest()
+    return audit.sweep_library_duplicates(
+        cfg.music_dir,
+        state,
+        keep_criteria=r.keep_criteria,
+        delete_files=r.delete_files,
+        remap_playlists=r.remap_playlists,
+        group_ids=r.group_ids,
+    )
 
 
 @app.post("/library/verify-integrity")
@@ -2231,6 +2260,8 @@ def post_library_repair(req: LibraryRepairRequest):
         return {"status": "ok", "action": req.action, "pruned_count": pruned_count}
     elif req.action == "adopt_orphans":
         return audit.adopt_orphaned_files(cfg.music_dir, state, req.file_paths)
+    elif req.action == "sweep_duplicates":
+        return audit.sweep_library_duplicates(cfg.music_dir, state)
     else:
         raise HTTPException(400, f"Unsupported repair action: {req.action}")
 

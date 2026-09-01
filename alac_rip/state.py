@@ -986,6 +986,47 @@ class StateManager:
                 deleted_count += cur.rowcount
         return deleted_count
 
+    def remap_and_remove_tracks(self, remap_pairs: list[tuple[str, str]], remove_track_ids: list[str]) -> tuple[int, int]:
+        """
+        Remap duplicate track references in playlist_tracks to primary track IDs,
+        then delete the duplicate tracks from database.
+        Returns: (remapped_count, deleted_count)
+        """
+        remapped_count = 0
+        deleted_count = 0
+        with self._conn() as conn:
+            # 1. Remap playlists
+            for old_id, new_id in remap_pairs:
+                if old_id == new_id:
+                    continue
+                playlists = conn.execute(
+                    "SELECT playlist_name FROM playlist_tracks WHERE track_id = ?",
+                    (old_id,)
+                ).fetchall()
+                for (pl_name,) in playlists:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO playlist_tracks (playlist_name, track_id) VALUES (?, ?)",
+                        (pl_name, new_id)
+                    )
+                    conn.execute(
+                        "DELETE FROM playlist_tracks WHERE playlist_name = ? AND track_id = ?",
+                        (pl_name, old_id)
+                    )
+                    remapped_count += 1
+
+            # 2. Delete duplicate tracks
+            if remove_track_ids:
+                unique_ids = list(set(remove_track_ids))
+                for chunk_start in range(0, len(unique_ids), 500):
+                    chunk = unique_ids[chunk_start:chunk_start + 500]
+                    placeholders = ",".join("?" for _ in chunk)
+                    conn.execute(f"DELETE FROM playlist_tracks WHERE track_id IN ({placeholders})", chunk)
+                    conn.execute(f"DELETE FROM delisted_tracks WHERE track_id IN ({placeholders})", chunk)
+                    conn.execute(f"DELETE FROM audio_waveforms WHERE track_id IN ({placeholders})", chunk)
+                    cur = conn.execute(f"DELETE FROM tracks WHERE track_id IN ({placeholders})", chunk)
+                    deleted_count += cur.rowcount
+        return remapped_count, deleted_count
+
     def get_waveform(self, track_id: str, points: int = 100) -> Optional[dict]:
         with self._conn() as conn:
             row = conn.execute(
