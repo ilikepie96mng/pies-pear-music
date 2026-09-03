@@ -572,20 +572,37 @@ async def lifespan(app: FastAPI):
         sync_scheduler.stop()
 
 
-_AUTH_SECRET = secrets.token_hex(32)
-_valid_sessions: set[str] = set()
+_SESSION_TTL_SECONDS = 7 * 86400  # 7 days
+_MAX_SESSIONS = 500
+_sessions: dict[str, float] = {}  # token -> expires_at timestamp
+
+
+def _prune_expired_sessions() -> None:
+    now = time.time()
+    expired = [t for t, exp in _sessions.items() if now > exp]
+    for t in expired:
+        _sessions.pop(t, None)
+    if len(_sessions) > _MAX_SESSIONS:
+        # Evict oldest sessions
+        sorted_sessions = sorted(_sessions.items(), key=lambda item: item[1])
+        for t, _ in sorted_sessions[: len(_sessions) - _MAX_SESSIONS]:
+            _sessions.pop(t, None)
 
 
 def _create_session_token() -> str:
+    _prune_expired_sessions()
     token = secrets.token_urlsafe(32)
-    _valid_sessions.add(token)
+    _sessions[token] = time.time() + _SESSION_TTL_SECONDS
     return token
 
 
 def _verify_session_token(token: Optional[str]) -> bool:
-    if not token:
+    if not token or token not in _sessions:
         return False
-    return token in _valid_sessions
+    if time.time() > _sessions[token]:
+        _sessions.pop(token, None)
+        return False
+    return True
 
 
 def _extract_session_token(request: Request) -> Optional[str]:
@@ -599,47 +616,52 @@ def _extract_session_token(request: Request) -> Optional[str]:
 
 app = FastAPI(title="pies-alac-rip", lifespan=lifespan)
 
+PUBLIC_ROUTES = {
+    ("GET", "/health"),
+    ("GET", "/auth/status"),
+    ("POST", "/auth/login"),
+    ("POST", "/auth/logout"),
+    ("GET", "/"),
+    ("GET", "/favicon.ico"),
+    ("GET", "/favicon.png"),
+}
+
 
 @app.middleware("http")
 async def require_api_capability(request: Request, call_next):
-    """Require the Tauri capability, API token, or web session password."""
+    """Require Tauri capability, configured API token, or web session password."""
     if request.method != "OPTIONS":
         path = request.url.path
+        method = request.method
 
-        # Public routes that bypass web password auth
-        is_public_path = (
-            path in ("/health", "/auth/status", "/auth/login", "/auth/logout")
-            or path == "/"
-            or path.startswith(("/_app/", "/favicon", "/track-art"))
+        is_public = (
+            (method, path) in PUBLIC_ROUTES
+            or path.startswith(("/_app/", "/favicon"))
         )
 
         if _api_capability:
-            supplied = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
+            supplied = request.headers.get(_API_CAPABILITY_HEADER)
             if not supplied or not secrets.compare_digest(supplied, _api_capability):
                 return Response(status_code=401)
-        elif cfg and cfg.auth_password and not is_public_path:
-            token = _extract_session_token(request)
-            api_tok = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
+        elif not is_public:
+            auth_configured = bool(cfg and (cfg.auth_password or cfg.api_token))
+            if auth_configured:
+                supplied_header = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
+                auth_header = request.headers.get("authorization", "")
+                bearer_token = auth_header.split(" ", 1)[1].strip() if auth_header.startswith("Bearer ") else ""
+                supplied_token = supplied_header or bearer_token
 
-            has_valid_session = _verify_session_token(token)
-            has_valid_api_token = bool(api_tok and cfg.api_token and secrets.compare_digest(api_tok, cfg.api_token))
-
-            if not has_valid_session and not has_valid_api_token:
-                return Response(
-                    status_code=401,
-                    content='{"detail":"Authentication required"}',
-                    media_type="application/json",
+                valid_api_token = bool(
+                    cfg and cfg.api_token and supplied_token and secrets.compare_digest(supplied_token, cfg.api_token)
                 )
-        elif cfg and cfg.api_token and path.startswith("/api/"):
-            auth_header = request.headers.get("authorization", "")
-            bearer_token = auth_header.split(" ", 1)[1] if auth_header.startswith("Bearer ") else ""
-            supplied = (
-                request.headers.get(_API_CAPABILITY_HEADER)
-                or bearer_token
-                or request.query_params.get("token")
-            )
-            if not supplied or not secrets.compare_digest(supplied, cfg.api_token):
-                return Response(status_code=401, content="Unauthorized: Invalid API Token")
+                valid_session = _verify_session_token(_extract_session_token(request))
+
+                if not (valid_api_token or valid_session):
+                    return Response(
+                        status_code=401,
+                        content='{"detail":"Authentication required"}',
+                        media_type="application/json",
+                    )
 
     return await call_next(request)
 
@@ -2483,11 +2505,17 @@ def get_track_art(path: str):
 
     # 2. Try directory cover files in track parent directory
     parent_dir = track_path.parent
+    music_dir_resolved = cfg.music_dir.expanduser().resolve()
     for cover_name in ("cover.jpg", "cover.png", "folder.jpg", "folder.png", "front.jpg", "front.png", "artwork.jpg", "cover.webp"):
         cand = parent_dir / cover_name
-        if cand.is_file():
-            mime = "image/png" if cand.suffix.lower() == ".png" else "image/webp" if cand.suffix.lower() == ".webp" else "image/jpeg"
-            return Response(content=cand.read_bytes(), media_type=mime)
+        if cand.is_file() and not cand.is_symlink():
+            try:
+                resolved = cand.resolve(strict=True)
+                resolved.relative_to(music_dir_resolved)
+                mime = "image/png" if cand.suffix.lower() == ".png" else "image/webp" if cand.suffix.lower() == ".webp" else "image/jpeg"
+                return Response(content=resolved.read_bytes(), media_type=mime)
+            except (OSError, RuntimeError, ValueError):
+                continue
 
     # 3. Check if DB has an Apple Music artwork_url for this track
     if state:
@@ -2509,6 +2537,7 @@ class ConfigUpdate(BaseModel):
     lastfm_username: Optional[str] = None
     gemini_api_key: Optional[str] = None
     api_token: Optional[str] = None
+    auth_password: Optional[str] = None
     scheduler: Optional[dict] = None
     integrations: Optional[dict] = None
 
@@ -2532,7 +2561,16 @@ class ConfigUpdate(BaseModel):
         return value
 
 
-_CONFIG_OMIT = {"apple_id_password", "media_user_token", "lastfm_api_key", "lastfm_shared_secret", "gemini_api_key", "github_remote"}
+_CONFIG_OMIT = {
+    "apple_id_password",
+    "media_user_token",
+    "lastfm_api_key",
+    "lastfm_shared_secret",
+    "gemini_api_key",
+    "github_remote",
+    "auth_password",
+    "api_token",
+}
 
 
 def _sanitize_config_dict(data: dict) -> dict:
@@ -2570,6 +2608,8 @@ def get_config():
     sanitized["gemini_api_key_configured"] = bool(data.get("gemini_api_key"))
     sanitized["lastfm_api_key_configured"] = bool(data.get("lastfm_api_key"))
     sanitized["lastfm_shared_secret_configured"] = bool(data.get("lastfm_shared_secret"))
+    sanitized["auth_password_configured"] = bool(data.get("auth_password"))
+    sanitized["api_token_configured"] = bool(data.get("api_token"))
     return sanitized
 
 
@@ -2582,7 +2622,17 @@ def update_config(body: ConfigUpdate):
     current.pop("github_remote", None)
 
     updates = body.model_dump(exclude_none=True)
-    # Preserve existing secrets if masked values were sent back
+
+    # Preserve top-level secrets if masked
+    if updates.get("auth_password") == "********":
+        updates["auth_password"] = current.get("auth_password", "")
+    updates.pop("auth_password_configured", None)
+
+    if updates.get("api_token") == "********":
+        updates["api_token"] = current.get("api_token", "")
+    updates.pop("api_token_configured", None)
+
+    # Preserve integration secrets if masked
     if "integrations" in updates and isinstance(updates["integrations"], dict):
         cur_integ = current.get("integrations", {})
         for s_name, s_cfg in updates["integrations"].items():

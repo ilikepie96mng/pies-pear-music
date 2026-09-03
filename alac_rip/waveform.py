@@ -42,6 +42,7 @@ def extract_waveform(file_path: Path | str, points: int = 100) -> tuple[list[flo
         ffmpeg_bin,
         "-nostdin",
         "-threads", "1",
+        "-t", "7200",
         "-i", str(path),
         "-ac", "1",
         "-ar", "8000",

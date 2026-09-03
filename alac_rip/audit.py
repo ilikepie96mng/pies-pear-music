@@ -153,13 +153,14 @@ def verify_library_flac_integrity(
     limit: Optional[int] = None,
 ) -> dict:
     """Verify audio frame integrity of library FLAC files via flac -t."""
+    music_dir_resolved = music_dir.expanduser().resolve()
     tracks = state.get_all_tracks_with_provenance()
     flac_tracks = []
     for t in tracks:
         lp = t.get("local_path", "")
         if lp and lp.lower().endswith(".flac"):
-            p = Path(lp).expanduser().resolve()
-            if p.is_file():
+            p = _normalize_track_file_path(lp, music_dir_resolved)
+            if p and p.is_file() and not p.is_symlink() and _is_safe_subpath(p, music_dir_resolved):
                 flac_tracks.append((t, p))
 
     if limit is not None and limit > 0:

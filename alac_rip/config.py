@@ -123,11 +123,12 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
 
 def save_config_file(path: Path, data: dict) -> None:
     """Atomically write configuration YAML with private 0600 permissions."""
+    import tempfile
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f"{path.name}.tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(str(tmp_path), flags, 0o600)
+    fd, tmp_path_str = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.tmp.")
+    tmp_path = Path(tmp_path_str)
     try:
+        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
             f.flush()

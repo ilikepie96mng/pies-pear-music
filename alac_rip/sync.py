@@ -1,5 +1,6 @@
 import os
 import re
+import secrets
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -238,23 +239,32 @@ class SyncEngine:
 
         Returns the lyrics text if present, or None.
         """
+        def _safe_write_lrc(target: Path, text: str) -> bool:
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.is_symlink():
+                    target.unlink()
+                tmp = target.with_name(f"{target.name}.tmp.{secrets.token_hex(4)}")
+                tmp.write_text(text, encoding="utf-8")
+                os.replace(str(tmp), str(target))
+                return True
+            except Exception:
+                return False
+
         lrc_src = src_audio.with_suffix(".lrc")
         lrc_dest = dest_flac.with_suffix(".lrc")
         if lrc_src.exists() and lrc_src.is_file() and not lrc_src.is_symlink():
             try:
                 content = lrc_src.read_text(encoding="utf-8", errors="replace")
-                lrc_dest.write_text(content, encoding="utf-8")
-                lrc_src.unlink(missing_ok=True)
-                return content
+                if _safe_write_lrc(lrc_dest, content):
+                    lrc_src.unlink(missing_ok=True)
+                    return content
             except Exception:
                 pass
         elif lyrics_text:
-            try:
-                lrc_dest.write_text(lyrics_text, encoding="utf-8")
+            if _safe_write_lrc(lrc_dest, lyrics_text):
                 return lyrics_text
-            except Exception:
-                pass
-        elif lrc_dest.exists() and lrc_dest.is_file():
+        elif lrc_dest.exists() and lrc_dest.is_file() and not lrc_dest.is_symlink():
             try:
                 return lrc_dest.read_text(encoding="utf-8", errors="replace")
             except Exception:

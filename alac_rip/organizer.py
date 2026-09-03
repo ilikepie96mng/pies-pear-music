@@ -55,13 +55,18 @@ def sanitize(name: str) -> str:
     return cleaned or "_"
 
 
+ALLOWED_EXTENSIONS = frozenset({".m4a", ".flac", ".mp3", ".lrc", ".m3u8", ".jpg", ".png", ".webp"})
+
+
 def track_path(music_dir: Path, artist: str, album: str, track_num: int, title: str, ext: str = ".m4a") -> Path:
     """Return the canonical absolute path for a downloaded track file and assert containment."""
     s_artist = sanitize(artist)
     s_album = sanitize(album)
     s_title = sanitize(title)
     s_ext = ext if ext.startswith(".") else f".{ext}"
-    
+    if s_ext.lower() not in ALLOWED_EXTENSIONS:
+        s_ext = ".flac" if "flac" in s_ext.lower() else ".m4a"
+
     target = (
         music_dir
         / "artists"
