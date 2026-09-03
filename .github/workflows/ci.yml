@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install media test dependency
+        run: sudo apt-get update && sudo apt-get install --yes ffmpeg
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[test]"
+      - run: ruff check alac_rip tests
+      - run: pytest tests -q --timeout=120
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      - run: npm run check
+        working-directory: app
+      - run: npm run build
+        working-directory: app
+
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
+      - name: Create compile-only sidecar placeholder
+        run: |
+          mkdir -p app/src-tauri/binaries
+          touch app/src-tauri/binaries/pies-backend-x86_64-unknown-linux-gnu
+      - run: cargo fmt --check
+        working-directory: app/src-tauri
+      - run: cargo clippy --locked -- -D warnings
+        working-directory: app/src-tauri
+      - run: cargo test --locked
+        working-directory: app/src-tauri
+
+  package-linux:
+    name: Ubuntu 22.04 Linux packages
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[package]"
+      - run: scripts/build-backend-sidecar.sh
+      - run: npm ci
+        working-directory: app
+      - run: npm run tauri build -- --bundles deb,appimage
+        working-directory: app
+      - run: scripts/verify-package-contents.sh app/src-tauri/target/release/bundle/deb/*.deb
+      - run: scripts/write-sbom-manifests.sh app/src-tauri/target/release/bundle
+      - run: scripts/verify-sbom-manifests.sh app/src-tauri/target/release/bundle
+      - run: scripts/write-release-metadata.sh app/src-tauri/target/release/bundle
+      - run: scripts/verify-release-artifacts.sh app/src-tauri/target/release/bundle
+      - uses: actions/upload-artifact@v6
+        with:
+          name: pies-pear-music-linux-ubuntu-22.04
+          path: |
+            app/src-tauri/target/release/bundle/deb/*.deb
+            app/src-tauri/target/release/bundle/appimage/*.AppImage
+            app/src-tauri/target/release/bundle/SHA256SUMS
+            app/src-tauri/target/release/bundle/BUILD-INFO.txt
+            app/src-tauri/target/release/bundle/SBOM-*.json
+            app/src-tauri/target/release/bundle/SBOM-*.lock
+          if-no-files-found: error
+
+  docker:
+    name: Docker Container Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: pies-pear-music:ci-test
+          load: true
+      - name: Verify Container Runtime
+        run: |
+          docker run -d --name pies-test -p 10025:10025 pies-pear-music:ci-test
+          sleep 5
+          curl -I http://127.0.0.1:10025/
+          curl -s http://127.0.0.1:10025/health
+          docker stop pies-test

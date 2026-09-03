@@ -1,0 +1,30 @@
+services:
+  pies-pear-music:
+    image: ghcr.io/ilikepie96mng/pies-pear-music:latest
+    container_name: pies-pear-music
+    restart: unless-stopped
+    ports:
+      - "${PORT:-10025}:10025"
+    volumes:
+      # Persistent application state (SQLite database, sync logs, config.yaml)
+      - "${CONFIG_PATH:-./config}:/config"
+      # Your music storage library folder (where ALAC/FLAC files & playlists will be saved)
+      - "${MUSIC_PATH:-./music}:/music"
+      # Fast temporary staging directory for stream buffering and tagging
+      - "${STAGING_PATH:-/tmp/pies-staging}:/staging"
+    privileged: true
+    cap_add:
+      - SYS_ADMIN
+      - SYS_CHROOT
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - PIES_CONFIG_PATH=/config/config.yaml
+      - PIES_STATE_DIR=/config
+      - PIES_MUSIC_DIR=/music
+      - PIES_STAGING_DIR=/staging
+      - PIES_WEB_DIR=/app/web
+      - PORT=10025
+      - HOST=0.0.0.0
+      # Optional: set a password to protect the web dashboard
+      # - PIES_AUTH_PASSWORD=your_secure_password_here

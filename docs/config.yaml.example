@@ -1,0 +1,21 @@
+# Copy this to ~/.config/pies-alac-rip/config.yaml and fill in values.
+# This file is safe to commit. config.yaml (without .example) is gitignored.
+
+# Where to store downloaded music (must exist or be creatable)
+music_dir: "~/Music/pies-alac-rip"
+
+# Path to local state. This database and its logs are never committed or synced
+# by the application.
+state_dir: "~/.local/share/pies-alac-rip"
+
+# Parent directory containing apple-music-downloader/ and wrapper/.
+# This is a user-installed external dependency; see docs/dependencies.md.
+alac_rip_dir: ""
+
+# Number of days to keep sync logs. Logs older than this are deleted at the
+# start of each sync. Set to 0 to disable cleanup.
+log_retention_days: 2
+
+# Optional. Enables Last.fm-based recommendations; never put Apple/wrapper
+# credentials in this file. They are handled through the desktop Secret Service.
+lastfm_api_key: ""

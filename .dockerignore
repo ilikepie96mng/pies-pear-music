@@ -1,0 +1,11 @@
+.git
+.venv
+.state
+.worktrees
+app/node_modules
+app/src-tauri/target
+tests/__pycache__
+alac_rip/__pycache__
+*.pyc
+*.pyo
+*.log

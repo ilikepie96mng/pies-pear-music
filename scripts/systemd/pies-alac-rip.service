@@ -1,0 +1,14 @@
+[Unit]
+Description=pies-alac-rip-tool — daily Apple Music sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# SCRIPT_DIR is replaced by install.sh with the actual repo path
+ExecStart=SCRIPT_DIR/.venv/bin/music-sync sync
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

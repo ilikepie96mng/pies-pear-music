@@ -1,0 +1,27 @@
+services:
+  pies-pear-music:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pies-pear-music:latest
+    container_name: pies-pear-music
+    restart: unless-stopped
+    ports:
+      - "10025:10025"
+    volumes:
+      - "/tank/media/music/Apple Music/.state:/config"
+      - "/tank/media/music/Apple Music:/music"
+      - /tmp/pies-staging:/staging
+    privileged: true
+    cap_add:
+      - SYS_ADMIN
+      - SYS_CHROOT
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      - PIES_CONFIG_PATH=/config/config.yaml
+      - PIES_STATE_DIR=/config
+      - PIES_MUSIC_DIR=/music
+      - PIES_WEB_DIR=/app/web
+      - PORT=10025
+      - HOST=0.0.0.0

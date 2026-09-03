@@ -1,0 +1,45 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# App secrets — NEVER commit
+config.yaml
+
+# Music files — too large for git
+*.m4a
+*.flac
+*.mp3
+*.mp4
+*.aac
+
+# Binaries installed by install.sh
+.local/
+
+# Runtime state is user data. It must never enter source control.
+.state/
+
+.worktrees/
+.superpowers/
+
+app/node_modules/
+app/dist/
+app/src-tauri/target/
+app/src-tauri/binaries/
+app/.codex/
+.env
+.env.local
+*.env
+.credentials
+*.db
+*.db-shm
+*.db-wal
+config/
+staging/
+logs/
+.DS_Store
+*.log
+.claude/
