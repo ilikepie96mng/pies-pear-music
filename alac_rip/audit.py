@@ -331,6 +331,47 @@ def normalize_match_key(title: str, artist: str) -> tuple[str, str]:
     return (t, a)
 
 
+def _extract_track_identity(t: dict, p: Optional[Path]) -> tuple[str, str, str]:
+    """Extract true artist, title, album from file tags or file path if DB has placeholders."""
+    artist = (t.get("artist") or "").strip()
+    title = (t.get("title") or "").strip()
+    album = (t.get("album") or "").strip()
+
+    if p and p.is_file():
+        try:
+            tags = read_tags(p)
+            tag_artist = (tags.get("artist") or "").strip()
+            tag_title = (tags.get("title") or "").strip()
+            tag_album = (tags.get("album") or "").strip()
+
+            if tag_artist and tag_artist.lower() not in ("unknown artist", "unknown", ""):
+                artist = tag_artist
+            if tag_title and tag_title.lower() not in ("unknown title", "unknown", ""):
+                title = tag_title
+            if tag_album and tag_album.lower() not in ("unknown album", "unknown", ""):
+                album = tag_album
+        except Exception:
+            pass
+
+        # If still unknown or looks like placeholder, derive from folder path
+        # Format: /music/artists/<Artist>/<Album>/<TrackNum> - <Title>.flac
+        parts = p.parts
+        if "artists" in parts:
+            idx = parts.index("artists")
+            if len(parts) > idx + 1 and (not artist or artist.lower() in ("unknown artist", "unknown")):
+                artist = parts[idx + 1]
+            if len(parts) > idx + 2 and (not album or album.lower() in ("unknown album", "unknown")):
+                album = parts[idx + 2]
+            if len(parts) > idx + 3 and (not title or title.isdigit() or title.lower() in ("unknown", "unknown title")):
+                filename = p.stem
+                clean_name = re.sub(r"^\d+[\.\-\s]+", "", filename)
+                clean_name = re.sub(r"_coll_\d+", "", clean_name)
+                if clean_name.strip():
+                    title = clean_name.strip()
+
+    return artist, title, album
+
+
 def find_library_duplicates(music_dir: Path, state: StateManager) -> dict:
     """
     Scan entire library for duplicate tracks, collision files (_coll_*), and duplicate playlist mappings.
@@ -347,24 +388,25 @@ def find_library_duplicates(music_dir: Path, state: StateManager) -> dict:
         exists = p is not None and p.is_file()
         file_size = p.stat().st_size if exists else 0
 
+        # Extract true grounded artist, title, album from audio file tags / folder structure
+        artist, title, album = _extract_track_identity(t, p)
+
         # Detect collision suffix
         has_collision_suffix = "_coll_" in p.name if p else "_coll_" in lp
-        album_is_single = any(s in (t.get("album") or "").lower() for s in ("- single", " - ep", "(single)", "[single]"))
+        album_is_single = any(s in album.lower() for s in ("- single", " - ep", "(single)", "[single]"))
 
         fmt = p.suffix.lstrip(".").upper() if p else "FLAC"
 
-        norm_title, norm_artist = normalize_match_key(t.get("title", ""), t.get("artist", ""))
-        # Fallback if both title and artist normalized to empty
-        if not norm_title:
-            norm_title = (t.get("title") or "unknown").strip().lower()
-        if not norm_artist:
-            norm_artist = (t.get("artist") or "unknown").strip().lower()
+        norm_title, norm_artist = normalize_match_key(title, artist)
+        # Require non-empty title and artist
+        if not norm_title or not norm_artist:
+            continue
 
         track_obj = {
             "track_id": t["track_id"],
-            "title": t["title"],
-            "artist": t["artist"],
-            "album": t["album"],
+            "title": title,
+            "artist": artist,
+            "album": album,
             "local_path": str(p) if p else lp,
             "file_exists": exists,
             "file_size": file_size,

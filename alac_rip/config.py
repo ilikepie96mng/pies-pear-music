@@ -31,6 +31,7 @@ class Config:
     scheduler: dict[str, Any] = field(default_factory=dict)
     integrations: dict[str, Any] = field(default_factory=dict)
     media_user_token: str = ""
+    auth_password: str = ""
 
 
 def resolve_kio_fuse_path(p: Path) -> Path:
@@ -98,6 +99,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         return resolve_kio_fuse_path(resolved)
 
     api_token = os.environ.get("PIES_API_TOKEN") or str(data.get("api_token", "")).strip()
+    auth_password = os.environ.get("PIES_AUTH_PASSWORD") or str(data.get("auth_password", "")).strip()
     web_dir_val = os.environ.get("PIES_WEB_DIR") or data.get("web_dir", "")
     web_dir_resolved = Path(web_dir_val).expanduser().resolve() if web_dir_val else Path("")
 
@@ -115,6 +117,7 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
         scheduler=data.get("scheduler", {}),
         integrations=data.get("integrations", {}),
         media_user_token=str(data.get("media_user_token", "")).strip(),
+        auth_password=auth_password,
     )
 
 

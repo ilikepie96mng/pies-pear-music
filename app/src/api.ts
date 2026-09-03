@@ -36,13 +36,16 @@ async function base(): Promise<string> {
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const connection = await getConnection();
+  const sessionToken = typeof localStorage !== "undefined" ? localStorage.getItem("pies_session_token") || "" : "";
   const headers: Record<string, string> = {
     ...(connection.capability ? { "X-Pies-Api-Token": connection.capability } : {}),
+    ...(sessionToken ? { "X-Pies-Auth-Token": sessionToken } : {}),
     ...(init.headers as Record<string, string>),
   };
   return fetch(`${await base()}${path}`, {
     ...init,
     headers,
+    credentials: "include",
   });
 }
 
@@ -606,6 +609,36 @@ export const api = {
     const r = await request("/library/stats");
     if (!r.ok) throw new Error(await r.text());
     return r.json();
+  },
+
+  async authStatus(): Promise<{ auth_required: boolean; authenticated: boolean }> {
+    const r = await request("/auth/status");
+    if (!r.ok) return { auth_required: false, authenticated: true };
+    return r.json();
+  },
+
+  async login(password: string): Promise<{ status: string; token?: string; auth_required: boolean; authenticated: boolean }> {
+    const r = await request("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || "Invalid password");
+    }
+    const data = await r.json();
+    if (data.token && typeof localStorage !== "undefined") {
+      localStorage.setItem("pies_session_token", data.token);
+    }
+    return data;
+  },
+
+  async logout(): Promise<void> {
+    if (typeof localStorage !== "undefined") {
+      localStorage.removeItem("pies_session_token");
+    }
+    await request("/auth/logout", { method: "POST" }).catch(() => {});
   },
 
   async auditLibrary(): Promise<LibraryAuditReport> {

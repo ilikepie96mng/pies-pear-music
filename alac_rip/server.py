@@ -572,18 +572,65 @@ async def lifespan(app: FastAPI):
         sync_scheduler.stop()
 
 
+_AUTH_SECRET = secrets.token_hex(32)
+_valid_sessions: set[str] = set()
+
+
+def _create_session_token() -> str:
+    token = secrets.token_urlsafe(32)
+    _valid_sessions.add(token)
+    return token
+
+
+def _verify_session_token(token: Optional[str]) -> bool:
+    if not token:
+        return False
+    return token in _valid_sessions
+
+
+def _extract_session_token(request: Request) -> Optional[str]:
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        return auth_header.split(" ", 1)[1].strip()
+    if request.headers.get("x-pies-auth-token"):
+        return request.headers.get("x-pies-auth-token", "").strip()
+    return request.cookies.get("pies_session")
+
+
 app = FastAPI(title="pies-alac-rip", lifespan=lifespan)
 
 
 @app.middleware("http")
 async def require_api_capability(request: Request, call_next):
-    """Require the Tauri-generated capability or configured API token."""
+    """Require the Tauri capability, API token, or web session password."""
     if request.method != "OPTIONS":
+        path = request.url.path
+
+        # Public routes that bypass web password auth
+        is_public_path = (
+            path in ("/health", "/auth/status", "/auth/login", "/auth/logout")
+            or path == "/"
+            or path.startswith(("/_app/", "/favicon", "/track-art"))
+        )
+
         if _api_capability:
             supplied = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
             if not supplied or not secrets.compare_digest(supplied, _api_capability):
                 return Response(status_code=401)
-        elif cfg and cfg.api_token and request.url.path.startswith("/api/"):
+        elif cfg and cfg.auth_password and not is_public_path:
+            token = _extract_session_token(request)
+            api_tok = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
+
+            has_valid_session = _verify_session_token(token)
+            has_valid_api_token = bool(api_tok and cfg.api_token and secrets.compare_digest(api_tok, cfg.api_token))
+
+            if not has_valid_session and not has_valid_api_token:
+                return Response(
+                    status_code=401,
+                    content='{"detail":"Authentication required"}',
+                    media_type="application/json",
+                )
+        elif cfg and cfg.api_token and path.startswith("/api/"):
             auth_header = request.headers.get("authorization", "")
             bearer_token = auth_header.split(" ", 1)[1] if auth_header.startswith("Bearer ") else ""
             supplied = (
@@ -593,6 +640,7 @@ async def require_api_capability(request: Request, call_next):
             )
             if not supplied or not secrets.compare_digest(supplied, cfg.api_token):
                 return Response(status_code=401, content="Unauthorized: Invalid API Token")
+
     return await call_next(request)
 
 
@@ -605,6 +653,46 @@ app.add_middleware(
     allow_methods=["*"] if _is_headless else ["GET", "POST", "PATCH", "PUT", "DELETE"],
     allow_headers=["*"] if _is_headless else ["content-type", _API_CAPABILITY_HEADER],
 )
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+
+@app.get("/auth/status")
+def get_auth_status(request: Request):
+    auth_required = bool(cfg and cfg.auth_password)
+    if not auth_required:
+        return {"auth_required": False, "authenticated": True}
+    token = _extract_session_token(request)
+    is_authed = _verify_session_token(token)
+    return {"auth_required": True, "authenticated": is_authed}
+
+
+@app.post("/auth/login")
+def post_auth_login(req: LoginRequest, response: Response):
+    if not cfg or not cfg.auth_password:
+        return {"status": "ok", "auth_required": False, "authenticated": True}
+    if not secrets.compare_digest(req.password, cfg.auth_password):
+        raise HTTPException(401, "Invalid password")
+    token = _create_session_token()
+    response.set_cookie(
+        key="pies_session",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=30 * 86400,
+    )
+    return {"status": "ok", "token": token, "auth_required": True, "authenticated": True}
+
+
+@app.post("/auth/logout")
+def post_auth_logout(request: Request, response: Response):
+    token = _extract_session_token(request)
+    if token and token in _valid_sessions:
+        _valid_sessions.discard(token)
+    response.delete_cookie("pies_session")
+    return {"status": "ok"}
 
 
 @app.get("/health")

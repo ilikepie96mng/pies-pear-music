@@ -16,6 +16,7 @@
   import PlaylistCreator from "$lib/PlaylistCreator.svelte";
   import PlaylistImportModal from "$lib/PlaylistImportModal.svelte";
   import QuickStartModal from "$lib/QuickStartModal.svelte";
+  import LoginModal from "$lib/LoginModal.svelte";
   import PlayerBar from "$lib/PlayerBar.svelte";
   import { player } from "$lib/player.svelte";
   import { api, type Playlist } from "../api";
@@ -30,10 +31,32 @@
   let showImportModal = $state(false);
   let showTourModal = $state(false);
 
+  // Authentication State
+  let authRequired = $state(false);
+  let authenticated = $state(true);
+  let authChecked = $state(false);
+
   let selectedPlaylist = $derived(playlists.find(p => p.name === selectedName) ?? null);
 
+  async function checkAuthAndLoad() {
+    try {
+      const status = await api.authStatus();
+      authRequired = status.auth_required;
+      authenticated = status.authenticated;
+    } catch {
+      authRequired = false;
+      authenticated = true;
+    } finally {
+      authChecked = true;
+    }
+
+    if (authenticated) {
+      api.playlists().then(pl => { playlists = pl; }).catch(() => {});
+    }
+  }
+
   onMount(() => {
-    api.playlists().then(pl => { playlists = pl; });
+    checkAuthAndLoad();
 
     const handleCreated = (e: Event) => {
       api.playlists().then(pl => { playlists = pl; });
@@ -195,6 +218,10 @@
       onopenImport={() => { showTourModal = false; showImportModal = true; }}
       onopenLibrary={() => { showTourModal = false; view = "library"; }}
     />
+  {/if}
+
+  {#if authRequired && !authenticated}
+    <LoginModal onsuccess={checkAuthAndLoad} />
   {/if}
 
   <PlayerBar />
