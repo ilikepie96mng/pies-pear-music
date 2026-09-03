@@ -241,13 +241,40 @@ class SyncEngine:
         """
         def _safe_write_lrc(target: Path, text: str) -> bool:
             try:
+                resolved_root = self.music_dir.resolve()
                 target.parent.mkdir(parents=True, exist_ok=True)
+                resolved_parent = target.parent.resolve()
+                resolved_parent.relative_to(resolved_root)
+
                 if target.is_symlink():
                     target.unlink()
-                tmp = target.with_name(f"{target.name}.tmp.{secrets.token_hex(4)}")
-                tmp.write_text(text, encoding="utf-8")
-                os.replace(str(tmp), str(target))
-                return True
+
+                tmp_name = f".tmp_{secrets.token_hex(8)}_{target.name}"
+                tmp_path = target.parent / tmp_name
+
+                flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                fd = os.open(str(tmp_path), flags, 0o644)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(text)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(str(tmp_path), str(target))
+                    try:
+                        dir_fd = os.open(str(target.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                        try:
+                            os.fsync(dir_fd)
+                        finally:
+                            os.close(dir_fd)
+                    except OSError:
+                        pass
+                    return True
+                except Exception:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    return False
             except Exception:
                 return False
 

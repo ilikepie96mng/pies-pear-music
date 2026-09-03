@@ -125,6 +125,11 @@ def save_config_file(path: Path, data: dict) -> None:
     """Atomically write configuration YAML with private 0600 permissions."""
     import tempfile
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(str(path.parent), 0o700)
+    except OSError:
+        pass
+
     fd, tmp_path_str = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.tmp.")
     tmp_path = Path(tmp_path_str)
     try:
@@ -134,8 +139,13 @@ def save_config_file(path: Path, data: dict) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(str(tmp_path), str(path))
+        os.chmod(str(path), 0o600)
         try:
-            os.chmod(str(path), 0o600)
+            dir_fd = os.open(str(path.parent), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         except OSError:
             pass
     except Exception:

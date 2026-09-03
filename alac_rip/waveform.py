@@ -17,6 +17,12 @@ class WaveformExtractionError(Exception):
     pass
 
 
+import threading
+
+_MAX_CONCURRENT_WAVEFORMS = 4
+_waveform_semaphore = threading.Semaphore(_MAX_CONCURRENT_WAVEFORMS)
+
+
 def extract_waveform(file_path: Path | str, points: int = 100) -> tuple[list[float], float]:
     """
     Extract downsampled audio waveform amplitude peaks normalized between 0.0 and 1.0.
@@ -42,7 +48,7 @@ def extract_waveform(file_path: Path | str, points: int = 100) -> tuple[list[flo
         ffmpeg_bin,
         "-nostdin",
         "-threads", "1",
-        "-t", "7200",
+        "-t", "1800",
         "-i", str(path),
         "-ac", "1",
         "-ar", "8000",
@@ -52,18 +58,19 @@ def extract_waveform(file_path: Path | str, points: int = 100) -> tuple[list[flo
         "-",
     ]
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=45,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise WaveformExtractionError("Waveform extraction timed out") from e
-    except Exception as e:
-        raise WaveformExtractionError(f"FFmpeg execution error: {e}") from e
+    with _waveform_semaphore:
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=45,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise WaveformExtractionError("Waveform extraction timed out") from e
+        except Exception as e:
+            raise WaveformExtractionError(f"FFmpeg execution error: {e}") from e
 
     if proc.returncode != 0 and not proc.stdout:
         err_msg = proc.stderr.decode("utf-8", errors="replace").strip()

@@ -65,7 +65,7 @@ def track_path(music_dir: Path, artist: str, album: str, track_num: int, title: 
     s_title = sanitize(title)
     s_ext = ext if ext.startswith(".") else f".{ext}"
     if s_ext.lower() not in ALLOWED_EXTENSIONS:
-        s_ext = ".flac" if "flac" in s_ext.lower() else ".m4a"
+        raise ValueError(f"Invalid or disallowed file extension: {ext!r}")
 
     target = (
         music_dir
@@ -74,6 +74,12 @@ def track_path(music_dir: Path, artist: str, album: str, track_num: int, title: 
         / s_album
         / f"{track_num:02d} - {s_title}{s_ext}"
     )
+
+    resolved_music_dir = music_dir.resolve()
+    resolved_target = target.resolve(strict=False)
+    if not resolved_target.is_relative_to(resolved_music_dir):
+        raise ValueError(f"Path traversal detected: {target} is outside {music_dir}")
+
     return target
 
 

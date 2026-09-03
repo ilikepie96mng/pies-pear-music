@@ -36,10 +36,8 @@ async function base(): Promise<string> {
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
   const connection = await getConnection();
-  const sessionToken = typeof localStorage !== "undefined" ? localStorage.getItem("pies_session_token") || "" : "";
   const headers: Record<string, string> = {
     ...(connection.capability ? { "X-Pies-Api-Token": connection.capability } : {}),
-    ...(sessionToken ? { "X-Pies-Auth-Token": sessionToken } : {}),
     ...(init.headers as Record<string, string>),
   };
   return fetch(`${await base()}${path}`, {
@@ -617,7 +615,7 @@ export const api = {
     return r.json();
   },
 
-  async login(password: string): Promise<{ status: string; token?: string; auth_required: boolean; authenticated: boolean }> {
+  async login(password: string): Promise<{ status: string; auth_required: boolean; authenticated: boolean }> {
     const r = await request("/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -627,17 +625,10 @@ export const api = {
       const err = await r.json().catch(() => ({}));
       throw new Error(err.detail || "Invalid password");
     }
-    const data = await r.json();
-    if (data.token && typeof localStorage !== "undefined") {
-      localStorage.setItem("pies_session_token", data.token);
-    }
-    return data;
+    return r.json();
   },
 
   async logout(): Promise<void> {
-    if (typeof localStorage !== "undefined") {
-      localStorage.removeItem("pies_session_token");
-    }
     await request("/auth/logout", { method: "POST" }).catch(() => {});
   },
 
@@ -1190,7 +1181,7 @@ export const api = {
   },
 
   wrapper: {
-    async login(email: string, password: string): Promise<{ status: string; msg: string }> {
+    async login(email: string, password: string): Promise<{ status: string; msg: string; needs_2fa?: boolean }> {
       const r = await request("/wrapper/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

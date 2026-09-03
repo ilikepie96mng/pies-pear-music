@@ -273,12 +273,23 @@ def save_credentials(email: str, password: str) -> bool:
     if os.environ.get("PIES_HEADLESS") or os.environ.get("PIES_CONFIG_PATH"):
         try:
             p = _credentials_path()
-            p.write_text(json.dumps({"email": email, "password": password}), encoding="utf-8")
+            p.parent.mkdir(parents=True, exist_ok=True)
+            import tempfile
+            fd, tmp_str = tempfile.mkstemp(dir=str(p.parent), prefix=".cred.tmp.")
             try:
-                p.chmod(0o600)
-            except OSError:
-                pass
-            return True
+                os.fchmod(fd, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump({"email": email, "password": password}, f)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_str, str(p))
+                return True
+            except Exception:
+                try:
+                    os.unlink(tmp_str)
+                except OSError:
+                    pass
+                return False
         except Exception:
             return False
 
@@ -454,19 +465,33 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
             wrapper_logs.append(f"{prefix}Failed to build wrapper image: {err}")
             return False
 
+        import tempfile
+        env_fd, env_path_str = tempfile.mkstemp(prefix=".wrap_env.")
+        try:
+            os.fchmod(env_fd, 0o600)
+            with os.fdopen(env_fd, "w", encoding="utf-8") as f:
+                if email and password:
+                    f.write(f"args=-L {email}:{password}\n")
+                else:
+                    f.write("args=\n")
+        except Exception:
+            try:
+                os.unlink(env_path_str)
+            except OSError:
+                pass
+            raise
+
         cmd = [
             "podman", "run", "--rm",
             "--name", CONTAINER_NAME,
             "-i",
             "--network", "host",
             "--volume", "/dev/urandom:/app/rootfs/dev/urandom:ro",
-            "--env", "args",
+            "--env-file", env_path_str,
             IMAGE_NAME,
         ]
         wrapper_logs.append(f"{prefix}Launching container: {CONTAINER_NAME}")
-
         child_env = os.environ.copy()
-        child_env["args"] = f"-L {email}:{password}"
         cwd_dir = None
 
     try:
@@ -493,6 +518,12 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
         wrapper_logging_in = False
         wrapper_logs.append(f"{prefix}Error starting container: {e}")
         return False
+    finally:
+        if 'env_path_str' in locals():
+            try:
+                os.unlink(env_path_str)
+            except OSError:
+                pass
 
 
 def attempt_auto_login() -> bool:
@@ -575,6 +606,22 @@ async def lifespan(app: FastAPI):
 _SESSION_TTL_SECONDS = 7 * 86400  # 7 days
 _MAX_SESSIONS = 500
 _sessions: dict[str, float] = {}  # token -> expires_at timestamp
+_login_failed_attempts: dict[str, list[float]] = {}  # ip -> timestamps of failed attempts
+
+
+def _check_login_rate_limit(client_ip: str) -> None:
+    now = time.time()
+    attempts = [t for t in _login_failed_attempts.get(client_ip, []) if now - t < 60.0]
+    _login_failed_attempts[client_ip] = attempts
+    if len(attempts) >= 5:
+        raise HTTPException(status_code=429, detail="Too many failed login attempts. Please wait 60 seconds.")
+
+
+def _record_failed_login(client_ip: str) -> None:
+    now = time.time()
+    attempts = [t for t in _login_failed_attempts.get(client_ip, []) if now - t < 60.0]
+    attempts.append(now)
+    _login_failed_attempts[client_ip] = attempts
 
 
 def _prune_expired_sessions() -> None:
@@ -582,11 +629,10 @@ def _prune_expired_sessions() -> None:
     expired = [t for t, exp in _sessions.items() if now > exp]
     for t in expired:
         _sessions.pop(t, None)
-    if len(_sessions) > _MAX_SESSIONS:
+    while len(_sessions) >= _MAX_SESSIONS:
         # Evict oldest sessions
-        sorted_sessions = sorted(_sessions.items(), key=lambda item: item[1])
-        for t, _ in sorted_sessions[: len(_sessions) - _MAX_SESSIONS]:
-            _sessions.pop(t, None)
+        oldest_token = min(_sessions.items(), key=lambda item: item[1])[0]
+        _sessions.pop(oldest_token, None)
 
 
 def _create_session_token() -> str:
@@ -597,6 +643,7 @@ def _create_session_token() -> str:
 
 
 def _verify_session_token(token: Optional[str]) -> bool:
+    _prune_expired_sessions()
     if not token or token not in _sessions:
         return False
     if time.time() > _sessions[token]:
@@ -642,20 +689,24 @@ async def require_api_capability(request: Request, call_next):
         if _api_capability:
             supplied = request.headers.get(_API_CAPABILITY_HEADER)
             if not supplied or not secrets.compare_digest(supplied, _api_capability):
-                return Response(status_code=401)
+                return Response(
+                    status_code=401,
+                    content='{"detail":"Invalid capability"}',
+                    media_type="application/json",
+                )
         elif not is_public:
             auth_configured = bool(cfg and (cfg.auth_password or cfg.api_token))
-            if auth_configured:
-                supplied_header = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
-                auth_header = request.headers.get("authorization", "")
-                bearer_token = auth_header.split(" ", 1)[1].strip() if auth_header.startswith("Bearer ") else ""
-                supplied_token = supplied_header or bearer_token
+            supplied_header = request.headers.get(_API_CAPABILITY_HEADER) or request.query_params.get("token")
+            auth_header = request.headers.get("authorization", "")
+            bearer_token = auth_header.split(" ", 1)[1].strip() if auth_header.startswith("Bearer ") else ""
+            supplied_token = supplied_header or bearer_token
 
-                valid_api_token = bool(
-                    cfg and cfg.api_token and supplied_token and secrets.compare_digest(supplied_token, cfg.api_token)
-                )
-                valid_session = _verify_session_token(_extract_session_token(request))
+            valid_api_token = bool(
+                cfg and cfg.api_token and supplied_token and secrets.compare_digest(supplied_token, cfg.api_token)
+            )
+            valid_session = _verify_session_token(_extract_session_token(request))
 
+            if auth_configured or _is_headless:
                 if not (valid_api_token or valid_session):
                     return Response(
                         status_code=401,
@@ -692,27 +743,35 @@ def get_auth_status(request: Request):
 
 
 @app.post("/auth/login")
-def post_auth_login(req: LoginRequest, response: Response):
+def post_auth_login(req: LoginRequest, request: Request, response: Response):
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    _check_login_rate_limit(client_ip)
+
     if not cfg or not cfg.auth_password:
         return {"status": "ok", "auth_required": False, "authenticated": True}
+
     if not secrets.compare_digest(req.password, cfg.auth_password):
+        _record_failed_login(client_ip)
         raise HTTPException(401, "Invalid password")
+
     token = _create_session_token()
+    is_secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
     response.set_cookie(
         key="pies_session",
         value=token,
         httponly=True,
         samesite="lax",
-        max_age=30 * 86400,
+        secure=is_secure,
+        max_age=_SESSION_TTL_SECONDS,
     )
-    return {"status": "ok", "token": token, "auth_required": True, "authenticated": True}
+    return {"status": "ok", "auth_required": True, "authenticated": True}
 
 
 @app.post("/auth/logout")
 def post_auth_logout(request: Request, response: Response):
     token = _extract_session_token(request)
-    if token and token in _valid_sessions:
-        _valid_sessions.discard(token)
+    if token:
+        _sessions.pop(token, None)
     response.delete_cookie("pies_session")
     return {"status": "ok"}
 
