@@ -24,20 +24,29 @@ Pies Pear Music can run in two modes:
 
 ## 🐳 Quick Start with Dockge / Docker Compose
 
-### 1. `compose.yaml`:
+### 1. `docker-compose.yml`:
 ```yaml
 services:
   pies-pear-music:
-    build: /home/msadmin/pies-alac-rip-tool
+    image: ghcr.io/ilikepie96mng/pies-pear-music:latest
     container_name: pies-pear-music
     restart: unless-stopped
     ports:
       - "10025:10025"
     volumes:
-      - "/tank/media/music/Apple Music/.state:/config"
-      - "/tank/media/music/Apple Music:/music"
+      - ./config:/config
+      - /path/to/your/music:/music
       - /tmp/pies-staging:/staging
+    cap_add:
+      - SYS_ADMIN
+      - SYS_CHROOT
+    security_opt:
+      - seccomp:unconfined
     environment:
+      - PIES_CONFIG_PATH=/config/config.yaml
+      - PIES_STATE_DIR=/config
+      - PIES_MUSIC_DIR=/music
+      - PIES_STAGING_DIR=/staging
       - PORT=10025
       - HOST=0.0.0.0
 ```
