@@ -87,32 +87,43 @@ Open **`http://localhost:10025`** (or your server's IP) in your browser.
 
 ---
 
-## 💻 Running from Source (Development)
+## 🖥️ Optional: Linux Desktop App (Tauri)
+
+If you prefer running a native desktop window on your Linux workstation instead of Docker:
 
 ```bash
 # Clone the repository
-git clone https://github.com/ilikepie96mng/pies-alac-rip-tool.git
-cd pies-alac-rip-tool
+git clone https://github.com/ilikepie96mng/pies-pear-music.git
+cd pies-pear-music
 
-# Set up Python virtual environment
+# Install dependencies
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[test]"
+pip install -e ".[test,package]"
 
-# Run backend server
-python3 -m alac_rip.server --headless
-
-# Run frontend in development mode
 cd app
 npm install
+npm run tauri dev
+```
+
+---
+
+## 💻 Running from Source (Development)
+
+```bash
+# 1. Run the backend server in headless mode
+python3 -m alac_rip.server --headless
+
+# 2. Run the frontend Vite dev server (in app/)
+cd app
 npm run dev
 ```
 
 ---
 
-## 🧪 Testing
+## 🧪 Automated Testing
 
-Run the full automated test suite:
+Run the comprehensive 334-test validation suite:
 ```bash
 pytest -q
 ```
