@@ -127,101 +127,105 @@
     onopenSync={syncingPlaylist ? () => (view = "sync") : undefined}
     onplaylistAdded={onPlaylistAdded}
   />
-  <main class="flex-1 overflow-hidden">
-    <!-- SyncProgress stays mounted while a sync is in-flight so it doesn't remount and re-queue -->
-    {#if syncingPlaylist}
-      <div class="h-full" class:hidden={view !== "sync"}>
-        {#key syncingPlaylist}
-          <SyncProgress playlistName={syncingPlaylist} ondone={onSyncDone} />
-        {/key}
-      </div>
-    {/if}
-
-    <!-- Download workstation stays mounted so active streaming downloads continue when browsing away and view state is preserved -->
-    <div class="h-full" class:hidden={view !== "download"}>
-      <Download />
-    </div>
-
-    <!-- Other page views -->
-    <div class="h-full" class:hidden={view === "sync" || view === "download"}>
-      {#if view === "setup"}
-        <SetupWizard ondone={() => (view = "dashboard")} />
-      {:else if view === "diagnostics"}
-        <Diagnostics onopenSettings={() => (view = "settings")} />
-      {:else if view === "home"}
-        <Home onopenSettings={() => (view = "settings")} />
-      {:else if view === "library"}
-        <Library
-          onselectPlaylist={selectPlaylist}
-          onstartSync={startSync}
-        />
-      {:else if view === "creator"}
-        <PlaylistCreator
-          onplaylistSaved={(pl: Playlist) => {
-            onPlaylistAdded(pl);
-            selectedName = pl.name;
-            view = "playlist";
-          }}
-          onopenDownload={() => (view = "download")}
-        />
-      {:else if view === "dashboard"}
-        {#key dashboardKey}
-          <Dashboard
-            onstartSync={startSync}
-            onselectPlaylist={selectPlaylist}
-            onopenDiagnostics={() => (view = "diagnostics")}
-            onopenSettings={() => (view = "settings")}
-          />
-        {/key}
-      {:else if view === "playlist" && selectedPlaylist}
-        {#key selectedName}
-          <PlaylistDetail
-            playlist={selectedPlaylist}
-            onstartSync={startSync}
-            onrenamed={onPlaylistRenamed}
-            ondeleted={onPlaylistDeleted}
-            onupdated={onPlaylistUpdated}
-          />
-        {/key}
-      {:else if view === "settings"}
-        <Settings />
-      {:else if view === "graveyard"}
-        <StreamingGraveyard onopenSettings={() => (view = "settings")} />
-      {:else if view === "about"}
-        <About />
-      {:else if view === "data"}
-        <DataControls />
-      {:else}
-        <div class="flex items-center justify-center h-full text-zinc-600 text-sm">
-          Select a playlist from the sidebar
-        </div>
-      {/if}
-    </div>
-  </main>
-
-  {#if showImportModal}
-    <PlaylistImportModal
-      onclose={() => (showImportModal = false)}
-      onstartRip={(matches) => {
-        showImportModal = false;
-        view = "download";
-      }}
-    />
-  {/if}
-
-  {#if showTourModal}
-    <QuickStartModal
-      onclose={() => (showTourModal = false)}
-      onopenSetup={() => { showTourModal = false; view = "setup"; }}
-      onopenSettings={() => { showTourModal = false; view = "settings"; }}
-      onopenCreator={() => { showTourModal = false; view = "creator"; }}
-      onopenImport={() => { showTourModal = false; showImportModal = true; }}
-      onopenLibrary={() => { showTourModal = false; view = "library"; }}
-    />
-  {/if}
-
   {#if authRequired && !authenticated}
     <LoginModal onsuccess={checkAuthAndLoad} />
+  {:else if !authChecked}
+    <div class="flex-1 flex items-center justify-center">
+      <div class="text-zinc-500 text-sm animate-pulse">Loading workstation...</div>
+    </div>
+  {:else}
+    <main class="flex-1 overflow-hidden">
+      <!-- SyncProgress stays mounted while a sync is in-flight so it doesn't remount and re-queue -->
+      {#if syncingPlaylist}
+        <div class="h-full" class:hidden={view !== "sync"}>
+          {#key syncingPlaylist}
+            <SyncProgress playlistName={syncingPlaylist} ondone={onSyncDone} />
+          {/key}
+        </div>
+      {/if}
+
+      <!-- Download workstation stays mounted so active streaming downloads continue when browsing away and view state is preserved -->
+      <div class="h-full" class:hidden={view !== "download"}>
+        <Download />
+      </div>
+
+      <!-- Other page views -->
+      <div class="h-full" class:hidden={view === "sync" || view === "download"}>
+        {#if view === "setup"}
+          <SetupWizard ondone={() => (view = "dashboard")} />
+        {:else if view === "diagnostics"}
+          <Diagnostics onopenSettings={() => (view = "settings")} />
+        {:else if view === "home"}
+          <Home onopenSettings={() => (view = "settings")} />
+        {:else if view === "library"}
+          <Library
+            onselectPlaylist={selectPlaylist}
+            onstartSync={startSync}
+          />
+        {:else if view === "creator"}
+          <PlaylistCreator
+            onplaylistSaved={(pl: Playlist) => {
+              onPlaylistAdded(pl);
+              selectedName = pl.name;
+              view = "playlist";
+            }}
+            onopenDownload={() => (view = "download")}
+          />
+        {:else if view === "dashboard"}
+          {#key dashboardKey}
+            <Dashboard
+              onstartSync={startSync}
+              onselectPlaylist={selectPlaylist}
+              onopenDiagnostics={() => (view = "diagnostics")}
+              onopenSettings={() => (view = "settings")}
+            />
+          {/key}
+        {:else if view === "playlist" && selectedPlaylist}
+          {#key selectedName}
+            <PlaylistDetail
+              playlist={selectedPlaylist}
+              onstartSync={startSync}
+              onrenamed={onPlaylistRenamed}
+              ondeleted={onPlaylistDeleted}
+              onupdated={onPlaylistUpdated}
+            />
+          {/key}
+        {:else if view === "settings"}
+          <Settings />
+        {:else if view === "graveyard"}
+          <StreamingGraveyard onopenSettings={() => (view = "settings")} />
+        {:else if view === "about"}
+          <About />
+        {:else if view === "data"}
+          <DataControls />
+        {:else}
+          <div class="flex items-center justify-center h-full text-zinc-600 text-sm">
+            Select a playlist from the sidebar
+          </div>
+        {/if}
+      </div>
+    </main>
+
+    {#if showImportModal}
+      <PlaylistImportModal
+        onclose={() => (showImportModal = false)}
+        onstartRip={(matches) => {
+          showImportModal = false;
+          view = "download";
+        }}
+      />
+    {/if}
+
+    {#if showTourModal}
+      <QuickStartModal
+        onclose={() => (showTourModal = false)}
+        onopenSetup={() => { showTourModal = false; view = "setup"; }}
+        onopenSettings={() => { showTourModal = false; view = "settings"; }}
+        onopenCreator={() => { showTourModal = false; view = "creator"; }}
+        onopenImport={() => { showTourModal = false; showImportModal = true; }}
+        onopenLibrary={() => { showTourModal = false; view = "library"; }}
+      />
+    {/if}
   {/if}
 
   <PlayerBar />

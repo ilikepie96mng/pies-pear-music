@@ -706,7 +706,7 @@ async def require_api_capability(request: Request, call_next):
             )
             valid_session = _verify_session_token(_extract_session_token(request))
 
-            if auth_configured or _is_headless:
+            if auth_configured:
                 if not (valid_api_token or valid_session):
                     return Response(
                         status_code=401,
