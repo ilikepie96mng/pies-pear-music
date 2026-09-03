@@ -30,3 +30,15 @@ app/dist/
 app/src-tauri/target/
 app/src-tauri/binaries/
 app/.codex/
+.env
+.env.local
+*.env
+.credentials
+*.db
+*.db-shm
+*.db-wal
+config/
+staging/
+logs/
+.DS_Store
+*.log
