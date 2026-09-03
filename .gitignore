@@ -42,3 +42,4 @@ staging/
 logs/
 .DS_Store
 *.log
+.claude/
