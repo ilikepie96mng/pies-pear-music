@@ -121,12 +121,18 @@ npm run dev
 
 ---
 
-## 🧪 Automated Testing
+---
 
-Run the comprehensive 334-test validation suite:
-```bash
-pytest -q
-```
+## 💖 Credits & Upstream Projects
+
+Pies Pear Music stands on the shoulders of incredible open-source tools and community research:
+
+* **[`lalit22km/alac-rip`](https://github.com/lalit22km/alac-rip)** — Initial ALAC streaming protocol research, daemon concepts, and containerization architecture.
+* **[`zhaarey/apple-music-downloader`](https://github.com/zhaarey/apple-music-downloader)** — Downloader utilities, API structures, and Android translation runtime research.
+* **[Strawberry Music Player](https://www.strawberrymusicplayer.org/)** — High-fidelity audio player inspiration.
+* **[Mutagen](https://github.com/quodlibet/mutagen)** — Audio tag manipulation and FLAC/ID3/MP4 metadata embedding.
+* **[FFmpeg](https://ffmpeg.org/)** — Universal audio transcoding and waveform downsampling engine.
+* **[FastAPI](https://fastapi.tiangolo.com/)** & **[SvelteKit](https://kit.svelte.dev/)** — Modern asynchronous API backend and reactive web interface.
 
 ---
 

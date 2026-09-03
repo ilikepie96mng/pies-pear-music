@@ -406,6 +406,52 @@
       </div>
     {/if}
 
+    <!-- Community & Upstream Credits Footer -->
+    <div class="mt-8 pt-6 border-t border-[rgba(255,255,255,0.06)] flex flex-col gap-3">
+      <div class="flex items-center justify-between">
+        <span class="text-zinc-500 text-[11px] font-medium uppercase tracking-wider">Upstream Research & Credits</span>
+        <span class="text-zinc-600 text-xs">Pies Pear Music v1.0.0</span>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <a
+          href="https://github.com/lalit22km/alac-rip"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="rounded-lg border border-[rgba(255,255,255,0.06)] bg-[#12100e] hover:border-amber-500/30 hover:bg-[#1a1714] p-2.5 flex flex-col gap-1 transition-all group"
+        >
+          <span class="font-semibold text-zinc-300 group-hover:text-amber-400">alac-rip</span>
+          <span class="text-[10px] text-zinc-500">lalit22km · ALAC Protocol</span>
+        </a>
+        <a
+          href="https://github.com/zhaarey/apple-music-downloader"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="rounded-lg border border-[rgba(255,255,255,0.06)] bg-[#12100e] hover:border-amber-500/30 hover:bg-[#1a1714] p-2.5 flex flex-col gap-1 transition-all group"
+        >
+          <span class="font-semibold text-zinc-300 group-hover:text-amber-400">apple-music-dl</span>
+          <span class="text-[10px] text-zinc-500">zhaarey · Runtime Research</span>
+        </a>
+        <a
+          href="https://www.strawberrymusicplayer.org/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="rounded-lg border border-[rgba(255,255,255,0.06)] bg-[#12100e] hover:border-amber-500/30 hover:bg-[#1a1714] p-2.5 flex flex-col gap-1 transition-all group"
+        >
+          <span class="font-semibold text-zinc-300 group-hover:text-amber-400">Strawberry Player</span>
+          <span class="text-[10px] text-zinc-500">Jonas Kvinge · UI Inspiration</span>
+        </a>
+        <a
+          href="https://github.com/quodlibet/mutagen"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="rounded-lg border border-[rgba(255,255,255,0.06)] bg-[#12100e] hover:border-amber-500/30 hover:bg-[#1a1714] p-2.5 flex flex-col gap-1 transition-all group"
+        >
+          <span class="font-semibold text-zinc-300 group-hover:text-amber-400">Mutagen & FFmpeg</span>
+          <span class="text-[10px] text-zinc-500">Audio Tagging & Codecs</span>
+        </a>
+      </div>
+    </div>
+
   {/if}
   </div>
 </div>
