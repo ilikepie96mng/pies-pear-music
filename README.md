@@ -58,6 +58,7 @@ services:
       - /path/to/your/music:/music
       # 3. Fast Staging Buffer: temporary directory for downloading and tag processing
       - /tmp/pies-staging:/staging
+    privileged: true
     cap_add:
       - SYS_ADMIN
       - SYS_CHROOT

@@ -12,6 +12,7 @@ services:
       - "/tank/media/music/Apple Music/.state:/config"
       - "/tank/media/music/Apple Music:/music"
       - /tmp/pies-staging:/staging
+    privileged: true
     cap_add:
       - SYS_ADMIN
       - SYS_CHROOT

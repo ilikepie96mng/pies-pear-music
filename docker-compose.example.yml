@@ -12,6 +12,7 @@ services:
       - "${MUSIC_PATH:-./music}:/music"
       # Fast temporary staging directory for stream buffering and tagging
       - "${STAGING_PATH:-/tmp/pies-staging}:/staging"
+    privileged: true
     cap_add:
       - SYS_ADMIN
       - SYS_CHROOT
