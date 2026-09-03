@@ -7,12 +7,40 @@
 
   <div class="space-y-4 text-sm">
     <section class="rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#12100e] p-5">
-      <h2 class="font-semibold text-white text-base">💖 Upstream & Community Research</h2>
+      <h2 class="font-semibold text-white text-base">💡 Why Pies Pear Music?</h2>
+      <p class="mt-2 text-zinc-300 text-xs leading-relaxed">
+        Pies Pear Music was created to solve three fundamental challenges for music enthusiasts on Linux and self-hosted systems:
+      </p>
+      <ul class="mt-2 space-y-1.5 text-xs text-zinc-400 list-disc list-inside">
+        <li><strong class="text-zinc-200">No Bit-Perfect Apple Music on Linux:</strong> Linux users had no native client, and web streaming was limited to compressed 256kbps AAC.</li>
+        <li><strong class="text-zinc-200">Fragile & Fragmented CLI Downloaders:</strong> Existing tools were cumbersome, required constant browser token scraping, and broke easily.</li>
+        <li><strong class="text-zinc-200">Lack of Cohesive Automation:</strong> There was no automated way to manage a library, embed synchronized LRC lyrics, sweep duplicate singles, and trigger streaming servers.</li>
+      </ul>
+      <p class="mt-3 text-zinc-400 text-xs leading-relaxed">
+        The mission is to build the ultimate Apple Music companion — giving you high-resolution archival and smart playlist syncs that integrate seamlessly with modern players like <strong class="text-amber-400">Feishin</strong>, <strong class="text-amber-400">Navidrome</strong>, and <strong class="text-amber-400">Jellyfin</strong>.
+      </p>
+    </section>
+
+    <section class="rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#12100e] p-5">
+      <h2 class="font-semibold text-white text-base">💖 Upstream & Ecosystem Projects</h2>
       <p class="mt-2 text-zinc-400 text-xs leading-relaxed">
         Pies Pear Music was built upon pioneering reverse-engineering and music player tooling created by the open-source community. Please check out and support these upstream projects:
       </p>
 
       <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <a
+          href="https://github.com/jeffvli/feishin"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="rounded-xl border border-[rgba(255,255,255,0.06)] bg-[#181512] hover:border-amber-500/40 hover:bg-[#201c18] p-3 flex flex-col gap-1 transition-all group"
+        >
+          <div class="flex items-center justify-between">
+            <span class="font-semibold text-zinc-200 group-hover:text-amber-400">Feishin Music Player</span>
+            <span class="text-zinc-500 text-xs">↗</span>
+          </div>
+          <span class="text-xs text-zinc-400">Modern Navidrome, Subsonic & Jellyfin desktop audio player for Linux, macOS & Windows.</span>
+        </a>
+
         <a
           href="https://github.com/lalit22km/alac-rip"
           target="_blank"
@@ -70,7 +98,7 @@
     <section class="rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#12100e] p-4">
       <h2 class="font-semibold text-white">⚖️ Responsible Use & Legal</h2>
       <p class="mt-2 text-zinc-400 leading-relaxed text-xs">
-        Pies Pear Music is an independent open-source project intended solely for personal archival and backup of audio you are legally authorized to access. It is not affiliated with, endorsed by, or associated with Apple Inc., Apple Music, Strawberry, or upstream authors.
+        Pies Pear Music is an independent open-source project intended solely for personal archival and backup of audio you are legally authorized to access. It is not affiliated with, endorsed by, or associated with Apple Inc., Apple Music, Feishin, Strawberry, or upstream authors.
       </p>
     </section>
   </div>

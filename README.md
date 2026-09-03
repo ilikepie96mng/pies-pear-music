@@ -7,8 +7,20 @@
 [![Frontend](https://img.shields.io/badge/Frontend-Svelte%205%20%2B%20TailwindCSS-orange.svg)](app/)
 [![Backend](https://img.shields.io/badge/Backend-FastAPI%20%7C%20Python%203.12-green.svg)](alac_rip/)
 [![Audio](https://img.shields.io/badge/Audio-ALAC%20%7C%20FLAC%20Lossless-purple.svg)](#key-features)
-[![Tests](https://img.shields.io/badge/Tests-334%20Passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-340%20Passing-brightgreen.svg)](tests/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-lightgrey.svg)](LICENSE)
+
+---
+
+## 💡 Why Pies Pear Music? (The Origin Story)
+
+Pies Pear Music was born out of frustration with the state of high-fidelity music on Linux and personal archival setups:
+
+1. **No Reliable, Bit-Perfect Apple Music on Linux**: Apple Music's native client doesn't exist on Linux, and web streaming is locked to lossy AAC (256 kbps). There was no consistent way to stream or archive true lossless (ALAC / 24-bit FLAC) audio from Apple Music.
+2. **Existing Downloaders Were Brittle & Lackluster**: Most available command-line scripts required endless terminal tinkering, manual browser token scraping, and frequently broke without warning.
+3. **No Cohesive Library Experience**: Downloading tracks was only half the battle. You had to manually rename files, fix corrupted metadata, hunt down synchronized lyrics (`.lrc`), and re-scan external music servers by hand.
+
+**Our Goal**: To build the ultimate self-hosted Apple Music companion workstation. Rather than reinventing yet another music player from scratch, we built a comprehensive library management and lossless syncing hub that pairs seamlessly with modern self-hosted music servers (**Navidrome**, **Jellyfin**, **Subsonic**) and sleek desktop players like **[Feishin](https://github.com/jeffvli/feishin)** and **Strawberry**.
 
 ---
 
@@ -22,8 +34,8 @@
 * 🔄 **Universal Playlist Importer (Match-and-Rip)**: Ingest playlist URLs from **Spotify, Tidal, Qobuz, Apple Music, CSV, and M3U8** — resolves tracks via ISRC and fetches lossless audio.
 * 🤖 **Gemini AI Music Intelligence**: Plug in a Gemini API key for library taste profiling, natural-language smart playlist generation (*e.g. "Create a 25-track late-night synthwave mix"*), and 1-click lossless ripping.
 * 📡 **Media Server Webhooks**: Automatic background notifications to **Jellyfin** (`/Library/Refresh`) and **Navidrome / Subsonic** (`/rest/startScan.view`) whenever new music arrives.
+* 🎵 **Player Ecosystem & Playlist Exports**: Instant `.m3u8` playlist exports tailored for **Feishin**, Navidrome, and Jellyfin, plus optional USB DAP transcoding (Opus/MP3 for Walkman/FiiO/iPod) and Strawberry SQLite DB injection.
 * 🔐 **Web Password Authentication**: Optional password protection for public LANs or reverse-proxy deployments.
-* 📱 **DAP & Strawberry Export**: Direct database sync to Strawberry Music Player or transcode to Opus/MP3 for portable microSD DAPs.
 
 ---
 

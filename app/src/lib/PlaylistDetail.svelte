@@ -177,8 +177,9 @@
     if (e.key === "Escape") { editing = false; draftName = playlist.name; }
   }
 
-  // Strawberry export
+  // Export & Player integration
   let hasStrawberry = $state(false);
+  let exportMenuOpen = $state(false);
   let exporting = $state(false);
   let exportingM3u = $state(false);
   let exportMsg = $state<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -398,24 +399,67 @@
             style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(252,211,77,0.08);color:var(--accent);border:1px solid rgba(252,211,77,0.2);cursor:pointer;opacity:{checkingDuplicates?'.5':'1'};">
             {checkingDuplicates ? "…" : "🔍 Check Duplicates"}
           </button>
-          <button onclick={() => (showDapModal = true)} title="Export and transcode playlist to DAP or portable player"
-            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(252,211,77,0.12);color:var(--accent);border:1px solid rgba(252,211,77,0.25);cursor:pointer;">
-            📱 Export to DAP
-          </button>
-          <button onclick={() => exportM3u()} disabled={exportingM3u} title="Export a portable playlist file"
-            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:#1a1a1a;color:var(--text-secondary);border:1px solid #2a2a2a;cursor:pointer;opacity:{exportingM3u?'.5':'1'};">
-            {exportingM3u ? "…" : "⇩ M3U"}
-          </button>
-          <button onclick={() => exportM3u(true)} disabled={exportingM3u} title="Save then open in your default player"
-            style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(163,230,53,.12);color:#bef264;border:1px solid rgba(163,230,53,.25);cursor:pointer;opacity:{exportingM3u?'.5':'1'};">
-            {exportingM3u ? "…" : "▶ Player"}
-          </button>
-          {#if hasStrawberry}
-            <button onclick={exportToStrawberry} disabled={exporting} title="Replace this playlist in Strawberry"
-              style="padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;background:rgba(196,181,253,0.12);color:var(--accent-2);border:1px solid rgba(196,181,253,0.25);cursor:pointer;opacity:{exporting?'.5':'1'};">
-              {exporting ? "…" : "🍓 Strawberry"}
+          <!-- Export & Player Dropdown -->
+          <div class="relative inline-block text-left">
+            <button
+              onclick={() => (exportMenuOpen = !exportMenuOpen)}
+              class="px-3 py-1.5 rounded-md text-xs font-semibold bg-[#1a1a1a] hover:bg-[#252525] text-zinc-300 border border-[#2a2a2a] flex items-center gap-1.5 transition-colors"
+              title="Export playlist to external players or devices"
+            >
+              <span>Export & Play</span>
+              <span class="text-[10px] text-zinc-500">▾</span>
             </button>
-          {/if}
+
+            {#if exportMenuOpen}
+              <button
+                type="button"
+                class="fixed inset-0 z-40 bg-transparent cursor-default border-none w-full h-full"
+                tabindex="-1"
+                aria-label="Close export menu"
+                onclick={() => (exportMenuOpen = false)}
+              ></button>
+              <div
+                class="absolute right-0 mt-1.5 w-64 rounded-xl border border-[rgba(255,255,255,0.08)] bg-[#141210] shadow-2xl p-1.5 z-50 flex flex-col gap-1 text-xs"
+              >
+                <button
+                  onclick={() => { exportMenuOpen = false; exportM3u(); }}
+                  disabled={exportingM3u}
+                  class="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-zinc-200 flex flex-col gap-0.5 transition-colors cursor-pointer"
+                >
+                  <span class="font-semibold text-amber-400">⇩ Save .M3U8 Playlist</span>
+                  <span class="text-[10px] text-zinc-500">Universal · Feishin, Navidrome & Jellyfin</span>
+                </button>
+
+                <button
+                  onclick={() => { exportMenuOpen = false; exportM3u(true); }}
+                  disabled={exportingM3u}
+                  class="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-zinc-200 flex flex-col gap-0.5 transition-colors cursor-pointer"
+                >
+                  <span class="font-semibold text-lime-400">▶ Open in Default Player</span>
+                  <span class="text-[10px] text-zinc-500">Launches system media player</span>
+                </button>
+
+                <button
+                  onclick={() => { exportMenuOpen = false; showDapModal = true; }}
+                  class="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-zinc-200 flex flex-col gap-0.5 transition-colors cursor-pointer"
+                >
+                  <span class="font-semibold text-cyan-400">📱 Export to DAP / USB</span>
+                  <span class="text-[10px] text-zinc-500">Transcode & copy to Walkman, FiiO, iPod</span>
+                </button>
+
+                {#if hasStrawberry}
+                  <button
+                    onclick={() => { exportMenuOpen = false; exportToStrawberry(); }}
+                    disabled={exporting}
+                    class="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-zinc-200 flex flex-col gap-0.5 transition-colors cursor-pointer border-t border-white/5 pt-1.5"
+                  >
+                    <span class="font-semibold text-purple-400">🍓 Direct Sync to Strawberry</span>
+                    <span class="text-[10px] text-zinc-500">Injects directly into Strawberry SQLite DB</span>
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          </div>
           {#if unownedTracks.length > 0}
             <button onclick={handleDownloadMissingTracks} disabled={downloadingMissing} title="Download unowned / AI curated tracks in this playlist"
               style="padding:6px 14px;border-radius:6px;font-size:11px;font-weight:700;background:rgba(252,211,77,0.15);color:var(--accent);border:1px solid rgba(252,211,77,0.35);cursor:pointer;opacity:{downloadingMissing?'.5':'1'};">
