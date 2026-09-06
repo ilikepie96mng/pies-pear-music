@@ -1,6 +1,10 @@
 import asyncio
 import json
 import os
+try:
+    import pty
+except ImportError:
+    pty = None
 import queue
 import re
 import secrets
@@ -155,6 +159,7 @@ wrapper_2fa_type: str = ""  # "device" | "sms" | ""
 wrapper_logs: deque[str] = deque(maxlen=200)
 _session_credentials: Optional[tuple[str, str]] = None
 _stopping_wrapper: bool = False
+wrapper_pty_master: Optional[int] = None
 
 
 _SECRET_SERVICE_ATTRIBUTES = ("application", "pies-pear-music", "purpose", "apple-wrapper")
@@ -365,7 +370,7 @@ def _redact_wrapper_log(value: str, email: Optional[str] = None, password: Optio
 
 
 def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login=False):
-    global wrapper_running, wrapper_logging_in, wrapper_process, wrapper_needs_2fa, wrapper_2fa_type
+    global wrapper_running, wrapper_logging_in, wrapper_process, wrapper_needs_2fa, wrapper_2fa_type, wrapper_pty_master
     login_successful = False
     try:
         for line in iter(pipe.readline, ""):
@@ -389,6 +394,7 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
                 wrapper_needs_2fa = False
                 wrapper_2fa_type = ""
                 login_successful = True
+                _queue_wake_event.set()
                 if auto_login:
                     target_list.append("Auto-login successful. Ready for downloads.")
                 else:
@@ -398,6 +404,9 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
                             target_list.append("Credentials saved for auto-login")
                         else:
                             target_list.append("Credentials kept for this session only")
+    except (OSError, EOFError):
+        # Master PTY or closed pipe raises OSError (Errno 5 EIO) when child exits
+        pass
     except Exception as e:
         target_list.append(f"Error reading wrapper logs: {e}")
     finally:
@@ -419,12 +428,21 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
             else:
                 target_list.append("Wrapper ended normally")
                 wrapper_running = False
-        pipe.close()
+        try:
+            pipe.close()
+        except Exception:
+            pass
+        if wrapper_pty_master is not None:
+            try:
+                os.close(wrapper_pty_master)
+            except OSError:
+                pass
+            wrapper_pty_master = None
 
 
 
 def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> bool:
-    global wrapper_process, wrapper_running, wrapper_logs
+    global wrapper_process, wrapper_running, wrapper_logs, wrapper_pty_master
 
     if wrapper_process and wrapper_process.poll() is None:
         if not auto_login:
@@ -509,20 +527,53 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
 
     try:
         wrapper_logging_in = True
-        wrapper_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.PIPE,
-            bufsize=1,
-            universal_newlines=True,
-            env=child_env,
-            cwd=cwd_dir,
-        )
+        master_fd = None
+        slave_fd = None
+        if pty is not None and hasattr(pty, "openpty"):
+            try:
+                master_fd, slave_fd = pty.openpty()
+            except Exception:
+                master_fd = None
+                slave_fd = None
+
+        if master_fd is not None and slave_fd is not None:
+            wrapper_pty_master = master_fd
+            wrapper_process = subprocess.Popen(
+                cmd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                stdin=slave_fd,
+                close_fds=True,
+                env=child_env,
+                cwd=cwd_dir,
+            )
+            os.close(slave_fd)
+            if getattr(wrapper_process, "stdout", None) is not None:
+                pipe = wrapper_process.stdout
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+                wrapper_pty_master = None
+            else:
+                pipe = os.fdopen(master_fd, "r", encoding="utf-8", errors="replace", buffering=1)
+        else:
+            wrapper_pty_master = None
+            wrapper_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE,
+                bufsize=1,
+                universal_newlines=True,
+                env=child_env,
+                cwd=cwd_dir,
+            )
+            pipe = wrapper_process.stdout
 
         threading.Thread(
             target=stream_wrapper_logs,
-            args=(wrapper_process.stdout, wrapper_logs, email, password, auto_login),
+            args=(pipe, wrapper_logs, email, password, auto_login),
             daemon=True,
         ).start()
         wrapper_logs.append(f"{prefix}Container started, waiting for login confirmation...")
@@ -1402,6 +1453,9 @@ def _run_job(job: dict) -> None:
     elif result.error_count > 0 and result.new_count == 0 and result.skipped_count == 0:
         is_failed_job = True
         failure_reason = "Sync failed to organize tracks due to errors"
+    elif result.new_count == 0 and result.skipped_count == 0:
+        is_failed_job = True
+        failure_reason = "No tracks were downloaded or found (wrapper decryption or session may have expired)"
 
     if playlist_name:
         try:
@@ -1481,6 +1535,15 @@ def _queue_worker() -> None:
             pass
 
     while True:
+        # 0. Check wrapper status before consuming jobs when running in production
+        if not wrapper_running and not os.environ.get("PYTEST_CURRENT_TEST"):
+            if not wrapper_logging_in and not wrapper_needs_2fa:
+                attempt_auto_login()
+            if not wrapper_running or wrapper_needs_2fa:
+                _queue_wake_event.wait(timeout=2.5)
+                _queue_wake_event.clear()
+                continue
+
         # 1. Process SQLite persistent queue first
         pending_db_job = None
         if state:
@@ -2892,10 +2955,17 @@ def login_wrapper(body: WrapperLoginRequest):
 
 
 def force_stop_wrapper() -> bool:
-    global wrapper_process, wrapper_running, wrapper_logging_in, wrapper_needs_2fa, wrapper_2fa_type, _stopping_wrapper
+    global wrapper_process, wrapper_running, wrapper_logging_in, wrapper_needs_2fa, wrapper_2fa_type, _stopping_wrapper, wrapper_pty_master
     _stopping_wrapper = True
     stopped_any = False
     try:
+        if wrapper_pty_master is not None:
+            try:
+                os.close(wrapper_pty_master)
+            except OSError:
+                pass
+            wrapper_pty_master = None
+
         if wrapper_process is not None:
             try:
                 if wrapper_process.poll() is None:
@@ -2979,14 +3049,19 @@ class TwoFARequest(BaseModel):
 
 @app.post("/wrapper/2fa")
 def submit_2fa(body: TwoFARequest):
-    global wrapper_needs_2fa, wrapper_2fa_type
+    global wrapper_needs_2fa, wrapper_2fa_type, wrapper_pty_master
     if not wrapper_needs_2fa:
         return {"status": "error", "msg": "2FA not required"}
     if not wrapper_process or wrapper_process.poll() is not None:
         return {"status": "error", "msg": "Wrapper not running"}
     try:
-        wrapper_process.stdin.write(f"{body.code}\n")
-        wrapper_process.stdin.flush()
+        if wrapper_pty_master is not None:
+            os.write(wrapper_pty_master, f"{body.code}\n".encode("utf-8"))
+        elif wrapper_process.stdin:
+            wrapper_process.stdin.write(f"{body.code}\n")
+            wrapper_process.stdin.flush()
+        else:
+            return {"status": "error", "msg": "No stdin channel available to wrapper"}
         wrapper_logs.append("2FA code submitted")
         wrapper_needs_2fa = False
         wrapper_2fa_type = ""
