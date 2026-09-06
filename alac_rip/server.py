@@ -154,6 +154,7 @@ wrapper_needs_2fa: bool = False
 wrapper_2fa_type: str = ""  # "device" | "sms" | ""
 wrapper_logs: deque[str] = deque(maxlen=200)
 _session_credentials: Optional[tuple[str, str]] = None
+_stopping_wrapper: bool = False
 
 
 _SECRET_SERVICE_ATTRIBUTES = ("application", "pies-pear-music", "purpose", "apple-wrapper")
@@ -164,6 +165,7 @@ _api_capability: Optional[str] = None
 
 job_queue: queue.Queue = queue.Queue()
 active_job: Optional[dict] = None
+active_downloader_proc: Optional[subprocess.Popen] = None
 pending_jobs: list[dict] = []
 pending_jobs_lock: threading.Lock = threading.Lock()
 _queue_wake_event: threading.Event = threading.Event()
@@ -191,7 +193,9 @@ def _is_wrapper_port_alive(port: int = 10020) -> bool:
 
 def _credentials_path() -> Path:
     """Encrypted/private credentials fallback path."""
-    if DEFAULT_CONFIG_PATH.parent.exists():
+    if cfg and cfg.state_dir and cfg.state_dir.is_dir():
+        p = cfg.state_dir
+    elif DEFAULT_CONFIG_PATH.parent.exists():
         p = DEFAULT_CONFIG_PATH.parent
     else:
         p = Path.home() / ".config" / "pies-alac-rip"
@@ -270,7 +274,7 @@ def save_credentials(email: str, password: str) -> bool:
         return True
 
     # In headless / Docker container mode, persist securely to mounted /config/.credentials (0600)
-    if os.environ.get("PIES_HEADLESS") or os.environ.get("PIES_CONFIG_PATH"):
+    if os.environ.get("PIES_HEADLESS") or os.environ.get("PIES_CONFIG_PATH") or Path("/config").exists():
         try:
             p = _credentials_path()
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -304,14 +308,23 @@ def load_credentials() -> tuple[Optional[str], Optional[str]]:
         return email, password
 
     # Fallback to local credentials file if secret-tool is locked or unavailable
-    try:
-        p = _credentials_path()
-        if p.exists():
-            data = json.loads(p.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data.get("email") and data.get("password"):
-                return data["email"], data["password"]
-    except Exception:
-        pass
+    candidate_paths = [
+        _credentials_path(),
+        DEFAULT_CONFIG_PATH.parent / ".credentials",
+        Path("/config/.credentials"),
+        Path.home() / ".config" / "pies-alac-rip" / ".credentials",
+    ]
+    if cfg and cfg.state_dir:
+        candidate_paths.insert(0, cfg.state_dir / ".credentials")
+
+    for p in candidate_paths:
+        try:
+            if p.exists() and p.is_file():
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(data, dict) and data.get("email") and data.get("password"):
+                    return data["email"], data["password"]
+        except Exception:
+            pass
 
     return None, None
 
@@ -397,7 +410,7 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
                 was_2fa = wrapper_needs_2fa
                 wrapper_needs_2fa = False
                 wrapper_2fa_type = ""
-                if auto_login and not was_2fa:
+                if auto_login and not was_2fa and not _stopping_wrapper:
                     target_list.append("Authentication failed, removing saved credentials")
                     delete_credentials()
             elif exit_code != 0:
@@ -1263,13 +1276,20 @@ def _run_job(job: dict) -> None:
     if not _is_wrapper_port_alive():
         emit_log("downloading", "Decryption wrapper is not responding; attempting auto-recovery...")
         attempt_auto_login()
-        for _ in range(15):
+        for _ in range(20):
             if _is_wrapper_port_alive():
                 emit_log("downloading", "Decryption wrapper auto-recovery successful.")
                 break
             time.sleep(0.5)
 
+    if not _is_wrapper_port_alive():
+        msg = "Decryption wrapper is offline (port 10020 unreachable). Please verify Apple Music login in Settings/Status."
+        write_log(f"[error] {msg}")
+        handle_early_error(msg)
+        return
+
     # ── Phase 1: download ──────────────────────────────────────────────────────
+    global active_downloader_proc
     try:
         proc = subprocess.Popen(
             cmd,
@@ -1278,31 +1298,36 @@ def _run_job(job: dict) -> None:
             bufsize=1, universal_newlines=True,
             cwd=str(amd_dir), env=env,
         )
+        active_downloader_proc = proc
     except Exception as exc:
         msg = _redact_runtime_paths(str(exc))
         write_log(f"[error] {msg}")
         handle_early_error(msg)
         return
 
-    last_progress_emit = 0.0
-    for line in iter(proc.stdout.readline, ""):
-        line = line.strip()
-        if line:
-            m = _TRACK_PROGRESS_RE.match(line)
-            if m:
-                current, total, rest = m.groups()
-                emit_log("downloading", f"[{current}/{total}] {rest}".rstrip())
-            elif line.startswith("Downloading...") or line.startswith("Decrypting..."):
-                now = time.time()
-                if now - last_progress_emit >= 0.25:
-                    last_progress_emit = now
-                    emit_log("downloading", line)
+    try:
+        last_progress_emit = 0.0
+        for line in iter(proc.stdout.readline, ""):
+            line = line.strip()
+            if line:
+                m = _TRACK_PROGRESS_RE.match(line)
+                if m:
+                    current, total, rest = m.groups()
+                    emit_log("downloading", f"[{current}/{total}] {rest}".rstrip())
+                elif line.startswith("Downloading...") or line.startswith("Decrypting..."):
+                    now = time.time()
+                    if now - last_progress_emit >= 0.25:
+                        last_progress_emit = now
+                        emit_log("downloading", line)
+                    else:
+                        write_log(f"[downloading] {line}")
                 else:
-                    write_log(f"[downloading] {line}")
-            else:
-                emit_log("downloading", line)
+                    emit_log("downloading", line)
 
-    exit_code = proc.wait()
+        exit_code = proc.wait()
+    finally:
+        active_downloader_proc = None
+
     downloader_had_errors = exit_code != 0
     if downloader_had_errors:
         msg = f"Downloader reported errors (exit code {exit_code}); organizing tracks that downloaded successfully anyway"
@@ -1344,6 +1369,11 @@ def _run_job(job: dict) -> None:
         if playlist_name:
             state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
                                   "error", 0, 0, 0, str(log_path), msg)
+        if db_id and state:
+            try:
+                state.update_job_status(db_id, "error", completed_at=datetime.now().isoformat(), error_message=msg)
+            except Exception:
+                pass
         shutil.rmtree(_tmp, ignore_errors=True)
         return
 
@@ -1358,12 +1388,20 @@ def _run_job(job: dict) -> None:
         except Exception as exc:
             write_log(f"[manifest] warning: could not process manifest: {exc}")
 
-
     # Backfill artwork for tracks that just got their am_track_id set by manifest
     if _artwork_map:
         state.bulk_store_artwork(_artwork_map)
 
     shutil.rmtree(_tmp, ignore_errors=True)
+
+    is_failed_job = False
+    failure_reason = ""
+    if downloader_had_errors and result.new_count == 0 and result.skipped_count == 0:
+        is_failed_job = True
+        failure_reason = f"Downloader failed with exit code {exit_code}"
+    elif result.error_count > 0 and result.new_count == 0 and result.skipped_count == 0:
+        is_failed_job = True
+        failure_reason = "Sync failed to organize tracks due to errors"
 
     if playlist_name:
         try:
@@ -1372,8 +1410,12 @@ def _run_job(job: dict) -> None:
             write_log(f"[playlist] warning: could not write m3u8 playlist: {exc}")
         state.update_playlist_synced(playlist_name)
         state.record_sync_run(
-            playlist_name, started_at.isoformat(), datetime.now().isoformat(), "success",
-            result.new_count, result.skipped_count, result.error_count, str(log_path),
+            playlist_name, started_at.isoformat(), datetime.now().isoformat(),
+            "error" if is_failed_job else "success",
+            result.new_count, result.skipped_count,
+            max(1, result.error_count) if is_failed_job else result.error_count,
+            str(log_path),
+            failure_reason if is_failed_job else None,
         )
 
     # Trigger media server webhooks (Jellyfin / Navidrome) asynchronously
@@ -1389,25 +1431,44 @@ def _run_job(job: dict) -> None:
     except Exception as e:
         write_log(f"[integrations] Webhook dispatch warning: {e}")
 
-    write_log(f"[done] {result.new_count} new, {result.skipped_count} skipped, {result.error_count} errors"
-              f"{' (downloader reported errors on some tracks; see log)' if downloader_had_errors else ''}")
-    emit({"status": "done",
-          "new": result.new_count, "skipped": result.skipped_count,
-          "errors": result.error_count, "log_path": str(log_path)})
+    if is_failed_job:
+        write_log(f"[error] Job failed: {failure_reason}")
+        emit({"status": "error", "message": failure_reason,
+              "new": 0, "skipped": 0, "errors": 1, "log_path": str(log_path)})
+        if db_id and state:
+            try:
+                state.update_job_status(
+                    db_id,
+                    "error",
+                    completed_at=datetime.now().isoformat(),
+                    new_tracks=result.new_count,
+                    skipped_tracks=result.skipped_count,
+                    error_count=max(1, result.error_count),
+                    error_message=failure_reason,
+                    log_path=str(log_path),
+                )
+            except Exception:
+                pass
+    else:
+        write_log(f"[done] {result.new_count} new, {result.skipped_count} skipped, {result.error_count} errors"
+                  f"{' (downloader reported errors on some tracks; see log)' if downloader_had_errors else ''}")
+        emit({"status": "done",
+              "new": result.new_count, "skipped": result.skipped_count,
+              "errors": result.error_count, "log_path": str(log_path)})
 
-    if db_id and state:
-        try:
-            state.update_job_status(
-                db_id,
-                "done",
-                completed_at=datetime.now().isoformat(),
-                new_tracks=result.new_count,
-                skipped_tracks=result.skipped_count,
-                error_count=result.error_count,
-                log_path=str(log_path),
-            )
-        except Exception:
-            pass
+        if db_id and state:
+            try:
+                state.update_job_status(
+                    db_id,
+                    "done",
+                    completed_at=datetime.now().isoformat(),
+                    new_tracks=result.new_count,
+                    skipped_tracks=result.skipped_count,
+                    error_count=result.error_count,
+                    log_path=str(log_path),
+                )
+            except Exception:
+                pass
 
 
 def _queue_worker() -> None:
@@ -1628,9 +1689,15 @@ def get_download_queue():
 
 @app.post("/api/v1/queue/cancel")
 def post_queue_cancel(req: QueueCancelRequest):
+    global active_downloader_proc
     if not state:
         raise HTTPException(500, "Database state not initialized")
     if req.cancel_all:
+        if active_downloader_proc and active_downloader_proc.poll() is None:
+            try:
+                active_downloader_proc.terminate()
+            except Exception:
+                pass
         count = state.cancel_all_pending_jobs()
         _broadcast_queue_event({"event": "queue_updated"})
         return {"cancelled": count}
@@ -1639,6 +1706,12 @@ def post_queue_cancel(req: QueueCancelRequest):
         _broadcast_queue_event({"event": "queue_updated"})
         return {"cancelled": count}
     if req.job_id:
+        if active_job and (active_job.get("db_id") == req.job_id or active_job.get("id") == req.job_id):
+            if active_downloader_proc and active_downloader_proc.poll() is None:
+                try:
+                    active_downloader_proc.terminate()
+                except Exception:
+                    pass
         ok = state.cancel_queue_job(req.job_id)
         _broadcast_queue_event({"event": "queue_updated"})
         return {"cancelled": 1 if ok else 0}
@@ -2008,14 +2081,34 @@ class M3uSaveRequest(BaseModel):
     path: str
 
 
-def _playlist_m3u(tracks) -> str:
+def _playlist_m3u(tracks, music_dir: Optional[Path] = None) -> str:
     """Return a portable extended-M3U playlist for the local track paths."""
     lines = ["#EXTM3U"]
+    playlists_dir = (music_dir / "playlists") if music_dir else None
     for track in tracks:
-        artist = track.artist.replace("\n", " ").replace("\r", " ")
-        title = track.title.replace("\n", " ").replace("\r", " ")
-        lines.append(f"#EXTINF:-1,{artist} - {title}")
-        lines.append(track.local_path)
+        clean_artist = re.sub(r"[\r\n\t\x00-\x1f\x7f-\x9f\s]+", " ", track.artist).strip()
+        clean_title = re.sub(r"[\r\n\t\x00-\x1f\x7f-\x9f\s]+", " ", track.title).strip()
+        raw_path = track.local_path.replace("\r", "").replace("\n", "").strip()
+
+        rel_path = raw_path
+        if playlists_dir and music_dir:
+            try:
+                track_abs = Path(raw_path).resolve()
+                if track_abs.is_relative_to(music_dir):
+                    rel_path = os.path.relpath(track_abs, playlists_dir).replace("\\", "/")
+                elif "/artists/" in raw_path:
+                    sub_rel = "artists/" + raw_path.split("/artists/", 1)[1]
+                    rel_path = f"../{sub_rel}".replace("\\", "/")
+                elif "\\artists\\" in raw_path:
+                    sub_rel = "artists/" + raw_path.split("\\artists\\", 1)[1].replace("\\", "/")
+                    rel_path = f"../{sub_rel}"
+            except Exception:
+                if "/artists/" in raw_path:
+                    sub_rel = "artists/" + raw_path.split("/artists/", 1)[1]
+                    rel_path = f"../{sub_rel}".replace("\\", "/")
+
+        lines.append(f"#EXTINF:-1,{clean_artist} - {clean_title}")
+        lines.append(rel_path)
     return "\n".join(lines) + "\n"
 
 
@@ -2085,8 +2178,9 @@ def export_playlist_m3u(name: str):
     tracks = state.get_playlist_tracks(name)
     if not tracks:
         raise HTTPException(status_code=404, detail="Playlist has no downloaded tracks")
+    music_dir = cfg.music_dir if cfg else None
     return PlainTextResponse(
-        _playlist_m3u(tracks),
+        _playlist_m3u(tracks, music_dir=music_dir),
         media_type="audio/x-mpegurl",
         headers={"Content-Disposition": 'attachment; filename="playlist.m3u8"'},
     )
@@ -2106,9 +2200,10 @@ def save_playlist_m3u(name: str, body: M3uSaveRequest):
     if not tracks:
         raise HTTPException(status_code=404, detail="Playlist has no downloaded tracks")
     temporary_path: Optional[Path] = None
+    music_dir = cfg.music_dir if cfg else None
     try:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=target.parent, delete=False) as file:
-            file.write(_playlist_m3u(tracks))
+            file.write(_playlist_m3u(tracks, music_dir=music_dir))
             temporary_path = Path(file.name)
         temporary_path.replace(target)
     except OSError:
@@ -2790,55 +2885,58 @@ class WrapperLoginRequest(BaseModel):
 
 @app.post("/wrapper/login")
 def login_wrapper(body: WrapperLoginRequest):
-    if wrapper_process and wrapper_process.poll() is None:
-        return {"status": "error", "msg": "Wrapper already running"}
+    force_stop_wrapper()
     if start_wrapper_login(body.email, body.password, auto_login=False):
         return {"status": "ok", "msg": "Wrapper process started, waiting for login..."}
     return {"status": "error", "msg": wrapper_logs[-1] if wrapper_logs else "Failed to start wrapper"}
 
 
 def force_stop_wrapper() -> bool:
-    global wrapper_process, wrapper_running, wrapper_logging_in, wrapper_needs_2fa, wrapper_2fa_type
+    global wrapper_process, wrapper_running, wrapper_logging_in, wrapper_needs_2fa, wrapper_2fa_type, _stopping_wrapper
+    _stopping_wrapper = True
     stopped_any = False
-    if wrapper_process is not None:
+    try:
+        if wrapper_process is not None:
+            try:
+                if wrapper_process.poll() is None:
+                    if hasattr(wrapper_process, "terminate"):
+                        wrapper_process.terminate()
+                    if hasattr(wrapper_process, "wait"):
+                        try:
+                            wrapper_process.wait(timeout=1.5)
+                        except Exception:
+                            if hasattr(wrapper_process, "kill"):
+                                wrapper_process.kill()
+                                try:
+                                    wrapper_process.wait(timeout=1.0)
+                                except Exception:
+                                    pass
+                    stopped_any = True
+            except Exception:
+                pass
+            wrapper_process = None
+
         try:
-            if wrapper_process.poll() is None:
-                if hasattr(wrapper_process, "terminate"):
-                    wrapper_process.terminate()
-                if hasattr(wrapper_process, "wait"):
-                    try:
-                        wrapper_process.wait(timeout=1.5)
-                    except Exception:
-                        if hasattr(wrapper_process, "kill"):
-                            wrapper_process.kill()
-                            try:
-                                wrapper_process.wait(timeout=1.0)
-                            except Exception:
-                                pass
+            res = subprocess.run(["podman", "stop", "-t", "1", CONTAINER_NAME], capture_output=True, timeout=3)
+            if res.returncode == 0:
                 stopped_any = True
+            subprocess.run(["podman", "rm", "-f", CONTAINER_NAME], capture_output=True, timeout=3)
         except Exception:
             pass
-        wrapper_process = None
 
-    try:
-        res = subprocess.run(["podman", "stop", "-t", "1", CONTAINER_NAME], capture_output=True, timeout=3)
-        if res.returncode == 0:
-            stopped_any = True
-        subprocess.run(["podman", "rm", "-f", CONTAINER_NAME], capture_output=True, timeout=3)
-    except Exception:
-        pass
+        try:
+            subprocess.run(["pkill", "-9", "-f", "wrapper"], capture_output=True, timeout=2)
+        except Exception:
+            pass
 
-    try:
-        subprocess.run(["pkill", "-9", "-f", "wrapper"], capture_output=True, timeout=2)
-    except Exception:
-        pass
-
-    was_running = wrapper_running
-    wrapper_running = False
-    wrapper_logging_in = False
-    wrapper_needs_2fa = False
-    wrapper_2fa_type = ""
-    return stopped_any or was_running
+        was_running = wrapper_running
+        wrapper_running = False
+        wrapper_logging_in = False
+        wrapper_needs_2fa = False
+        wrapper_2fa_type = ""
+        return stopped_any or was_running
+    finally:
+        _stopping_wrapper = False
 
 
 @app.post("/wrapper/stop")

@@ -142,7 +142,7 @@ def test_repair_playlists(music_dir, state):
     content = m3u_file.read_text(encoding="utf-8")
     assert "#EXTM3U" in content
     assert "#EXTINF:-1,Pop Star - Hit" in content
-    assert str(track_file) in content
+    assert (str(track_file) in content) or ("../artists/Pop Star/Pop Hits/01 - Hit.flac" in content)
 
 
 def test_adopt_orphaned_files(music_dir, state):

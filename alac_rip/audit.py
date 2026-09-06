@@ -232,9 +232,27 @@ def repair_playlists(music_dir: Path, state: StateManager) -> dict:
         for track in tracks:
             clean_artist = re.sub(r"[\r\n\t\x00-\x1f\x7f-\x9f\s]+", " ", track.artist).strip()
             clean_title = re.sub(r"[\r\n\t\x00-\x1f\x7f-\x9f\s]+", " ", track.title).strip()
-            clean_path = track.local_path.replace("\r", "").replace("\n", "").strip()
+            raw_path = track.local_path.replace("\r", "").replace("\n", "").strip()
+
+            # Format relative path for universal Navidrome / Subsonic / SMB portability
+            rel_path = raw_path
+            try:
+                track_abs = Path(raw_path).resolve()
+                if track_abs.is_relative_to(music_dir_resolved):
+                    rel_path = os.path.relpath(track_abs, playlists_dir).replace("\\", "/")
+                elif "/artists/" in raw_path:
+                    sub_rel = "artists/" + raw_path.split("/artists/", 1)[1]
+                    rel_path = f"../{sub_rel}".replace("\\", "/")
+                elif "\\artists\\" in raw_path:
+                    sub_rel = "artists/" + raw_path.split("\\artists\\", 1)[1].replace("\\", "/")
+                    rel_path = f"../{sub_rel}"
+            except Exception:
+                if "/artists/" in raw_path:
+                    sub_rel = "artists/" + raw_path.split("/artists/", 1)[1]
+                    rel_path = f"../{sub_rel}".replace("\\", "/")
+
             lines.append(f"#EXTINF:-1,{clean_artist} - {clean_title}")
-            lines.append(clean_path)
+            lines.append(rel_path)
         m3u8_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         repaired.append(pl.name)
 

@@ -462,25 +462,28 @@ class StateManager:
                     if res.rowcount > 0:
                         count += 1
 
-            # 3. Match and repair any "Unknown Artist" / unparsed tracks by matching title
+            # 3. Match and repair unparsed tracks only by EXACT normalized title match
             import re
             unknown_rows = conn.execute(
                 "SELECT track_id, title, local_path FROM tracks WHERE artist = 'Unknown Artist' OR album = 'Unknown Album' OR title LIKE '%. %'"
             ).fetchall()
             for tid, t_title, lpath in unknown_rows:
                 clean_t = re.sub(r"^\d+\.\s*", "", t_title).strip().lower()
+                if not clean_t:
+                    continue
                 for t in am_tracks:
                     am_t = str(t.get("title", "")).strip().lower()
-                    if clean_t == am_t or (clean_t and clean_t in am_t) or (am_t and am_t in clean_t):
+                    if clean_t == am_t:
                         conn.execute(
                             "UPDATE tracks SET title = ?, artist = ?, album = ?, am_track_id = ? WHERE track_id = ?",
                             (t.get("title", clean_t), t.get("artist", "Unknown Artist"), t.get("album", "Unknown Album"), str(t.get("id", "")), tid)
                         )
-                        conn.execute(
+                        res = conn.execute(
                             "INSERT OR IGNORE INTO playlist_tracks VALUES (?, ?)",
                             (playlist_name, tid)
                         )
-                        count += 1
+                        if res.rowcount > 0:
+                            count += 1
                         break
         return count
 
@@ -1293,7 +1296,7 @@ class StateManager:
             cur = conn.execute(query, params)
             return cur.rowcount
 
-    def retry_failed_jobs(self, job_ids: Optional[list[int]] = None) -> int:
+    def retry_failed_jobs(self, job_ids: Optional[list[int]] = None, retry_empty_done: bool = True) -> int:
         with self._conn() as conn:
             if job_ids:
                 placeholders = ",".join("?" for _ in job_ids)
@@ -1302,17 +1305,21 @@ class StateManager:
                     UPDATE download_queue
                     SET status = 'pending', error_count = 0, error_message = NULL,
                         started_at = NULL, completed_at = NULL
-                    WHERE id IN ({placeholders}) AND status IN ('error', 'cancelled')
+                    WHERE id IN ({placeholders}) AND (
+                        status IN ('error', 'cancelled')
+                        OR (status = 'done' AND new_tracks = 0 AND skipped_tracks = 0)
+                    )
                     """,
                     job_ids,
                 )
             else:
+                extra_cond = "OR (status = 'done' AND new_tracks = 0 AND skipped_tracks = 0)" if retry_empty_done else ""
                 cur = conn.execute(
-                    """
+                    f"""
                     UPDATE download_queue
                     SET status = 'pending', error_count = 0, error_message = NULL,
                         started_at = NULL, completed_at = NULL
-                    WHERE status IN ('error', 'cancelled')
+                    WHERE status IN ('error', 'cancelled') {extra_cond}
                     """
                 )
             return cur.rowcount

@@ -24,8 +24,6 @@ def _fake_run_job_success(new=2, skipped=1, errors=0):
         import alac_rip.server as _srv
         job["log_q"].put({"status": "running", "phase": "downloading",
                            "message": "fake dl", "log_path": ""})
-        job["log_q"].put({"status": "done", "new": new, "skipped": skipped,
-                           "errors": errors, "log_path": ""})
         if job.get("playlist_name") and _srv.state:
             now = datetime.now().isoformat()
             _srv.state.record_sync_run(
@@ -33,6 +31,8 @@ def _fake_run_job_success(new=2, skipped=1, errors=0):
                 new, skipped, errors, "",
             )
             _srv.state.update_playlist_synced(job["playlist_name"])
+        job["log_q"].put({"status": "done", "new": new, "skipped": skipped,
+                           "errors": errors, "log_path": ""})
     return _run
 
 
