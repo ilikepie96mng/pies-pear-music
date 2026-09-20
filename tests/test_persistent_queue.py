@@ -169,3 +169,132 @@ def test_api_queue_lifecycle(tmp_path: Path, monkeypatch):
     retry_resp = client.post("/api/v1/queue/retry", json={"job_ids": [data["job_ids"][1]]})
     assert retry_resp.status_code == 200
     assert retry_resp.json()["retried"] in (0, 1)
+
+
+def test_universal_preflight_album_short_circuit(tmp_path: Path, monkeypatch):
+    from alac_rip.state import Track
+    from alac_rip.config import Config
+    import queue
+
+    test_state = StateManager(tmp_path / "preflight_test.db")
+    music_dir = tmp_path / "music"
+    state_dir = tmp_path / "state"
+    alac_rip_dir = tmp_path / "tools"
+    music_dir.mkdir(parents=True)
+    state_dir.mkdir(parents=True)
+    alac_rip_dir.mkdir(parents=True)
+
+    test_state.add_track(Track(
+        track_id="album_track_1.flac",
+        title="Song One",
+        artist="Artist A",
+        album="Album Alpha",
+        local_path=str(music_dir / "Song1.flac"),
+        downloaded_at="2026-08-23T12:00:00",
+        am_track_id="101",
+    ))
+    test_state.add_track(Track(
+        track_id="album_track_2.flac",
+        title="Song Two",
+        artist="Artist A",
+        album="Album Alpha",
+        local_path=str(music_dir / "Song2.flac"),
+        downloaded_at="2026-08-23T12:00:00",
+        am_track_id="102",
+    ))
+
+    db_job_id = test_state.enqueue_download_job(
+        url="https://music.apple.com/us/album/album-alpha/999",
+        title="Album Alpha",
+        artist="Artist A",
+        album="Album Alpha",
+    )
+
+    monkeypatch.setattr(srv, "state", test_state)
+    monkeypatch.setattr(srv, "cfg", Config(music_dir=music_dir, state_dir=state_dir, alac_rip_dir=alac_rip_dir))
+    monkeypatch.setattr(srv.am_api, "fetch_bearer_token", lambda: "fake-bearer")
+    monkeypatch.setattr(srv.am_api, "fetch_album_details", lambda url, bearer, storefront="us": {
+        "id": "999",
+        "title": "Album Alpha",
+        "artist": "Artist A",
+        "tracks": [
+            {"id": "101", "title": "Song One", "artist": "Artist A", "album": "Album Alpha"},
+            {"id": "102", "title": "Song Two", "artist": "Artist A", "album": "Album Alpha"},
+        ]
+    })
+
+    # If downloader is launched, raise exception
+    def forbidden_popen(*args, **kwargs):
+        raise AssertionError("Downloader Popen should never be launched when all tracks already exist locally!")
+
+    monkeypatch.setattr(srv.subprocess, "Popen", forbidden_popen)
+
+    job = {
+        "id": "job-short-circuit-1",
+        "db_id": db_job_id,
+        "type": "one-off",
+        "url": "https://music.apple.com/us/album/album-alpha/999",
+        "format": "ALAC",
+        "playlist_name": None,
+        "log_q": queue.Queue(),
+    }
+
+    srv._run_job(job)
+
+    db_job = test_state.get_queue_job(db_job_id)
+    assert db_job["status"] == "done"
+    assert db_job["new_tracks"] == 0
+    assert db_job["skipped_tracks"] == 2
+    assert db_job["error_count"] == 0
+
+
+def test_queue_autopause_and_job_preservation_on_auth_failure(tmp_path: Path, monkeypatch):
+    from alac_rip.config import Config
+    import queue
+
+    test_state = StateManager(tmp_path / "autopause_test.db")
+    music_dir = tmp_path / "music"
+    state_dir = tmp_path / "state"
+    alac_rip_dir = tmp_path / "tools"
+    music_dir.mkdir(parents=True)
+    state_dir.mkdir(parents=True)
+    alac_rip_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(srv, "wrapper_running", False)
+    monkeypatch.setattr(srv, "state", test_state)
+    monkeypatch.setattr(srv, "cfg", Config(music_dir=music_dir, state_dir=state_dir, alac_rip_dir=alac_rip_dir))
+    monkeypatch.setattr(srv, "_is_wrapper_port_alive", lambda: False)
+
+    j1 = test_state.enqueue_download_job(
+        url="https://music.apple.com/us/album/album-one/111",
+        title="Album One",
+    )
+    j2 = test_state.enqueue_download_job(
+        url="https://music.apple.com/us/album/album-two/222",
+        title="Album Two",
+    )
+
+    job = {
+        "id": "job-fail-1",
+        "db_id": j1,
+        "type": "one-off",
+        "url": "https://music.apple.com/us/album/album-one/111",
+        "format": "ALAC",
+        "playlist_name": None,
+        "log_q": queue.Queue(),
+    }
+
+    srv._run_job(job)
+
+    # Wrapper running should be False
+    assert srv.wrapper_running is False
+
+    # Failed job should be reset to 'pending' to be picked up after re-auth
+    job1_row = test_state.get_queue_job(j1)
+    assert job1_row["status"] == "pending"
+    assert "offline" in (job1_row["error_message"] or "").lower() or "wrapper" in (job1_row["error_message"] or "").lower()
+
+    # Second job should still be 'pending'
+    job2_row = test_state.get_queue_job(j2)
+    assert job2_row["status"] == "pending"
+

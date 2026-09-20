@@ -496,29 +496,12 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
             wrapper_logs.append(f"{prefix}Failed to build wrapper image: {err}")
             return False
 
-        import tempfile
-        env_fd, env_path_str = tempfile.mkstemp(prefix=".wrap_env.")
-        try:
-            os.fchmod(env_fd, 0o600)
-            with os.fdopen(env_fd, "w", encoding="utf-8") as f:
-                if email and password:
-                    f.write(f"args=-L {email}:{password}\n")
-                else:
-                    f.write("args=\n")
-        except Exception:
-            try:
-                os.unlink(env_path_str)
-            except OSError:
-                pass
-            raise
-
         cmd = [
             "podman", "run", "--rm",
             "--name", CONTAINER_NAME,
             "-i",
             "--network", "host",
             "--volume", "/dev/urandom:/app/rootfs/dev/urandom:ro",
-            "--env-file", env_path_str,
             IMAGE_NAME,
         ]
         wrapper_logs.append(f"{prefix}Launching container: {CONTAINER_NAME}")
@@ -571,6 +554,20 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
             )
             pipe = wrapper_process.stdout
 
+        if email and password:
+            creds_line = f"-L {email}:{password}\n"
+            if wrapper_pty_master is not None:
+                try:
+                    os.write(wrapper_pty_master, creds_line.encode("utf-8"))
+                except OSError:
+                    pass
+            elif wrapper_process.stdin:
+                try:
+                    wrapper_process.stdin.write(creds_line)
+                    wrapper_process.stdin.flush()
+                except Exception:
+                    pass
+
         threading.Thread(
             target=stream_wrapper_logs,
             args=(pipe, wrapper_logs, email, password, auto_login),
@@ -582,12 +579,6 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
         wrapper_logging_in = False
         wrapper_logs.append(f"{prefix}Error starting container: {e}")
         return False
-    finally:
-        if 'env_path_str' in locals():
-            try:
-                os.unlink(env_path_str)
-            except OSError:
-                pass
 
 
 def attempt_auto_login() -> bool:
@@ -770,7 +761,7 @@ async def require_api_capability(request: Request, call_next):
             )
             valid_session = _verify_session_token(_extract_session_token(request))
 
-            if auth_configured:
+            if auth_configured or _is_headless:
                 if not (valid_api_token or valid_session):
                     return Response(
                         status_code=401,
@@ -1086,11 +1077,23 @@ def _run_job(job: dict) -> None:
         emit({"status": "running", "phase": phase, "message": message, "log_path": str(log_path)})
 
     def handle_early_error(msg: str) -> None:
+        global wrapper_running
         emit({"status": "error", "message": msg, "log_path": str(log_path)})
         if playlist_name:
             state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(),
                                   "error", 0, 0, 0, str(log_path), msg)
-        if db_id and state:
+        is_auth_error = any(w in msg.lower() for w in ("wrapper", "offline", "decrypt", "401", "403", "session", "unauthorized"))
+        if is_auth_error:
+            wrapper_running = False
+            _broadcast_queue_event({"event": "queue_paused", "reason": msg, "auth_required": True})
+            if not os.environ.get("PYTEST_CURRENT_TEST"):
+                threading.Thread(target=attempt_auto_login, daemon=True).start()
+            if db_id and state:
+                try:
+                    state.reset_job_to_pending(db_id, error_message=msg)
+                except Exception:
+                    pass
+        elif db_id and state:
             try:
                 state.update_job_status(db_id, "error", completed_at=datetime.now().isoformat(), error_message=msg)
             except Exception:
@@ -1204,101 +1207,128 @@ def _run_job(job: dict) -> None:
     _tmp = tempfile.mkdtemp()
     manifest_path = Path(_tmp) / "manifest.json"
 
-    # ── Pre-flight: diff AM playlist against local DB ─────────────────────────
+    # ── Pre-flight: diff AM playlist/album/track against local DB ─────────────
     skip_file_path: Optional[Path] = None
     _artwork_map: dict[str, str] = {}  # saved for post-manifest artwork backfill
 
-    if playlist_name and "music.apple.com" in url and "/playlist/gemini-" not in url:
+    if "music.apple.com" in url and "/playlist/gemini-" not in url:
         try:
-            emit_log("preflight", "Checking playlist for new tracks…")
+            emit_log("preflight", "Checking Apple Music for tracks & library diff…")
             bearer = am_api.fetch_bearer_token()
             storefront = amd_cfg.get("storefront", "us")
-            am_tracks = am_api.fetch_public_playlist_tracks(url, bearer, storefront)
-            am_ids_set = {t["id"] for t in am_tracks}
 
-            # Retroactive: populate am_track_id for pre-1.5 tracks by title/artist match
-            unmatched = state.get_playlist_tracks_without_am_id(playlist_name)
-            if unmatched:
-                am_by_key: dict[tuple[str, str], str] = {}
-                for t in am_tracks:
-                    k = (_normalize(t["title"]), _normalize(t["artist"]))
-                    if k not in am_by_key:
-                        am_by_key[k] = t["id"]
-                updates = []
-                for db_track in unmatched:
-                    key = (_normalize(db_track.title), _normalize(db_track.artist))
-                    if key in am_by_key:
-                        updates.append((am_by_key[key], db_track.track_id))
-                if updates:
-                    state.bulk_update_track_am_ids(updates)
-                    emit_log("preflight", f"Matched {len(updates)} existing tracks to AM IDs")
+            am_tracks: list[dict] = []
+            if "/playlist/" in url or playlist_name:
+                am_tracks = am_api.fetch_public_playlist_tracks(url, bearer, storefront)
+            elif "/album/" in url:
+                alb_data = am_api.fetch_album_details(url, bearer, storefront)
+                am_tracks = alb_data.get("tracks", [])
+            elif "/song/" in url:
+                song_id_match = re.search(r"[?&]i=(\d+)", url) or re.search(r"/song/(?:[^/]+/)?(\d+)", url)
+                if song_id_match:
+                    song_id = song_id_match.group(1)
+                    am_tracks = [{
+                        "id": song_id,
+                        "title": job.get("title", ""),
+                        "artist": job.get("artist", ""),
+                        "album": job.get("album", ""),
+                        "artwork_url": job.get("artwork_url"),
+                    }]
 
-            artwork_map = {
-                t["id"]: t["artwork_url"]
-                for t in am_tracks
-                if t.get("artwork_url") and t.get("id")
-            }
-            if artwork_map:
-                state.bulk_store_artwork(artwork_map)
-                _artwork_map = artwork_map
+            if am_tracks:
+                am_ids_set = {str(t["id"]) for t in am_tracks if t.get("id")}
 
-            # Auto-link any tracks that already exist in local library into this playlist
-            linked_count = state.find_and_associate_existing_tracks_to_playlist(playlist_name, am_tracks)
-            if linked_count > 0:
-                emit_log("preflight", f"Linked {linked_count} already downloaded track(s) to playlist")
+                # Cache artwork for all tracks
+                artwork_map = {
+                    str(t["id"]): t["artwork_url"]
+                    for t in am_tracks
+                    if t.get("artwork_url") and t.get("id")
+                }
+                if artwork_map:
+                    state.bulk_store_artwork(artwork_map)
+                    _artwork_map = artwork_map
 
-            owned = state.get_playlist_am_ids(playlist_name)
-            new_ids = am_ids_set - owned
-            skip_ids = owned & am_ids_set
-            delisted_ids = owned - am_ids_set
+                # If playlist: associate existing tracks to playlist & handle delisted
+                if playlist_name:
+                    unmatched = state.get_playlist_tracks_without_am_id(playlist_name)
+                    if unmatched:
+                        am_by_key: dict[tuple[str, str], str] = {}
+                        for t in am_tracks:
+                            k = (_normalize(t.get("title", "")), _normalize(t.get("artist", "")))
+                            if k not in am_by_key:
+                                am_by_key[k] = str(t["id"])
+                        updates = []
+                        for db_track in unmatched:
+                            key = (_normalize(db_track.title), _normalize(db_track.artist))
+                            if key in am_by_key:
+                                updates.append((am_by_key[key], db_track.track_id))
+                        if updates:
+                            state.bulk_update_track_am_ids(updates)
+                            emit_log("preflight", f"Matched {len(updates)} existing tracks to AM IDs")
 
-            if delisted_ids or skip_ids:
-                mapping = state.get_playlist_am_track_mapping(playlist_name)
-                # Map am_track_id -> list of track_ids
-                am_to_tracks: dict[str, list[str]] = {}
-                for tid, am_id in mapping:
-                    am_to_tracks.setdefault(am_id, []).append(tid)
+                    linked_count = state.find_and_associate_existing_tracks_to_playlist(playlist_name, am_tracks)
+                    if linked_count > 0:
+                        emit_log("preflight", f"Linked {linked_count} already downloaded track(s) to playlist")
 
-                if delisted_ids:
-                    now_str = datetime.now().isoformat()
-                    delisted_records = []
-                    for did in delisted_ids:
-                        for tid in am_to_tracks.get(did, []):
-                            delisted_records.append((playlist_name, tid, now_str))
-                    if delisted_records:
-                        state.bulk_record_delisted_tracks(delisted_records)
-                        emit_log("preflight", f"Preserved {len(delisted_records)} delisted track(s) in streaming graveyard")
+                    owned = state.get_playlist_am_ids(playlist_name)
+                    delisted_ids = owned - am_ids_set
+                    if delisted_ids:
+                        mapping = state.get_playlist_am_track_mapping(playlist_name)
+                        am_to_tracks: dict[str, list[str]] = {}
+                        for tid, am_id in mapping:
+                            am_to_tracks.setdefault(am_id, []).append(tid)
+                        now_str = datetime.now().isoformat()
+                        delisted_records = []
+                        for did in delisted_ids:
+                            for tid in am_to_tracks.get(did, []):
+                                delisted_records.append((playlist_name, tid, now_str))
+                        if delisted_records:
+                            state.bulk_record_delisted_tracks(delisted_records)
+                            emit_log("preflight", f"Preserved {len(delisted_records)} delisted track(s) in streaming graveyard")
 
-                # If tracks were restored/re-added upstream, clear their delisted mark
-                if skip_ids:
-                    restored_tids = []
-                    for sid in skip_ids:
-                        restored_tids.extend(am_to_tracks.get(sid, []))
-                    if restored_tids:
-                        state.bulk_clear_delisted_tracks(playlist_name, restored_tids)
+                    skip_ids = owned & am_ids_set
+                    if skip_ids:
+                        restored_tids = []
+                        for sid in skip_ids:
+                            restored_tids.extend(am_to_tracks.get(sid, []))
+                        if restored_tids:
+                            state.bulk_clear_delisted_tracks(playlist_name, restored_tids)
 
-            skip_file_path = Path(_tmp) / "skip.json"
-            skip_file_path.write_text(json.dumps({"skip_ids": list(skip_ids)}))
+                # Universal library check for all track IDs
+                existing_am_ids = state.find_existing_am_track_ids(am_tracks)
+                new_ids = am_ids_set - existing_am_ids
 
-            delisted_msg = f", {len(delisted_ids)} unlisted upstream (preserved locally)" if delisted_ids else ""
-            emit_log("preflight",
-                f"Pre-flight: {len(am_tracks)} tracks in playlist, "
-                f"{len(new_ids)} new, {len(skip_ids)} already owned{delisted_msg}"
-            )
+                # CASE 1: All tracks already exist in local library -> FAST SHORT-CIRCUIT!
+                if len(existing_am_ids) >= len(am_tracks) and len(am_tracks) > 0:
+                    emit_log("preflight", f"All {len(am_tracks)} track(s) already exist in library. Skipping network download.")
+                    if playlist_name:
+                        try:
+                            engine = SyncEngine(state=state, music_dir=cfg.music_dir, playlist_name=playlist_name, on_log=lambda m, p: None, state_dir=cfg.state_dir)
+                            engine._write_m3u8()
+                        except Exception as exc:
+                            write_log(f"[playlist] warning: could not write m3u8 playlist: {exc}")
+                        state.update_playlist_synced(playlist_name)
+                        state.record_sync_run(playlist_name, started_at.isoformat(), datetime.now().isoformat(), "success", 0, len(am_tracks), 0, str(log_path), None)
+
+                    if db_id and state:
+                        try:
+                            state.update_job_status(db_id, "done", completed_at=datetime.now().isoformat(), new_tracks=0, skipped_tracks=len(am_tracks), error_count=0, log_path=str(log_path))
+                        except Exception:
+                            pass
+                    emit({"status": "done", "new": 0, "skipped": len(am_tracks), "errors": 0, "log_path": str(log_path)})
+                    shutil.rmtree(_tmp, ignore_errors=True)
+                    return
+
+                # CASE 2: Some tracks already exist -> Pass skip.json to amd-main
+                if existing_am_ids:
+                    skip_file_path = Path(_tmp) / "skip.json"
+                    skip_file_path.write_text(json.dumps({"skip_ids": list(existing_am_ids)}))
+                    emit_log("preflight", f"Pre-flight: {len(am_tracks)} tracks total: {len(new_ids)} new to download, {len(existing_am_ids)} already owned (skipping network fetch)")
+                else:
+                    emit_log("preflight", f"Pre-flight: {len(am_tracks)} new track(s) to download")
 
         except Exception as e:
-            owned = state.get_playlist_am_ids(playlist_name)
-            if owned:
-                skip_file_path = Path(_tmp) / "skip.json"
-                skip_file_path.write_text(json.dumps({"skip_ids": list(owned)}))
-                emit_log("preflight",
-                    f"Pre-flight check failed ({e}), using {len(owned)} locally known IDs as skip list"
-                )
-            else:
-                skip_file_path = None
-                emit_log("preflight",
-                    f"Pre-flight check failed ({e}), falling back to full download"
-                )
+            emit_log("preflight", f"Pre-flight check note ({e}), proceeding with standard download")
 
     system_amd = shutil.which("amd-main")
     patched_bin = Path.home() / ".local" / "share" / "pies-alac-rip" / "amd-main"
@@ -1489,7 +1519,18 @@ def _run_job(job: dict) -> None:
         write_log(f"[error] Job failed: {failure_reason}")
         emit({"status": "error", "message": failure_reason,
               "new": 0, "skipped": 0, "errors": 1, "log_path": str(log_path)})
-        if db_id and state:
+        is_auth_error = any(w in failure_reason.lower() for w in ("wrapper", "offline", "decrypt", "401", "403", "session", "unauthorized"))
+        if is_auth_error:
+            wrapper_running = False
+            _broadcast_queue_event({"event": "queue_paused", "reason": failure_reason, "auth_required": True})
+            if not os.environ.get("PYTEST_CURRENT_TEST"):
+                threading.Thread(target=attempt_auto_login, daemon=True).start()
+            if db_id and state:
+                try:
+                    state.reset_job_to_pending(db_id, error_message=failure_reason)
+                except Exception:
+                    pass
+        elif db_id and state:
             try:
                 state.update_job_status(
                     db_id,
@@ -1535,9 +1576,9 @@ def _queue_worker() -> None:
             pass
 
     while True:
-        # 0. Check wrapper status before consuming jobs when running in production
-        if not wrapper_running and not os.environ.get("PYTEST_CURRENT_TEST"):
-            if not wrapper_logging_in and not wrapper_needs_2fa:
+        # 0. Check wrapper status before consuming jobs
+        if not wrapper_running:
+            if not wrapper_logging_in and not wrapper_needs_2fa and not os.environ.get("PYTEST_CURRENT_TEST"):
                 attempt_auto_login()
             if not wrapper_running or wrapper_needs_2fa:
                 _queue_wake_event.wait(timeout=2.5)

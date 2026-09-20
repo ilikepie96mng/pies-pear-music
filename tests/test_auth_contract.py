@@ -151,12 +151,12 @@ def test_login_command_shape_is_frozen_by_contract(monkeypatch, tmp_path):
     assert server.start_wrapper_login("contract@example.invalid", "synthetic-password") is True
     assert len(captured_cmd) == 1
     cmd = captured_cmd[0]
-    assert cmd[:8] == [
+    assert cmd == [
         "podman", "run", "--rm", "--name", server.CONTAINER_NAME, "-i",
-        "--network", "host",
+        "--network", "host", "--volume", "/dev/urandom:/app/rootfs/dev/urandom:ro",
+        server.IMAGE_NAME,
     ]
-    assert "--env-file" in cmd
-    assert cmd[-1] == server.IMAGE_NAME
+    assert "--env-file" not in cmd
     assert "args" not in captured_env[0]
     assert server.wrapper_running is True
 

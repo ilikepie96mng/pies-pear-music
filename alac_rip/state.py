@@ -487,6 +487,51 @@ class StateManager:
                         break
         return count
 
+    def find_existing_am_track_ids(self, am_tracks: list[dict]) -> set[str]:
+        """Return set of Apple Music track IDs from am_tracks that already exist in the local library."""
+        if not am_tracks:
+            return set()
+        existing_ids: set[str] = set()
+        with self._conn() as conn:
+            # 1. Direct match by am_track_id
+            am_ids = [str(t["id"]) for t in am_tracks if t.get("id")]
+            if am_ids:
+                placeholders = ",".join("?" * len(am_ids))
+                rows = conn.execute(
+                    f"SELECT am_track_id FROM tracks WHERE am_track_id IN ({placeholders})",
+                    am_ids,
+                ).fetchall()
+                for (am_id,) in rows:
+                    if am_id:
+                        existing_ids.add(str(am_id))
+
+            # 2. Match by normalized title + artist
+            all_rows = conn.execute("SELECT track_id, title, artist, album, am_track_id FROM tracks").fetchall()
+            lib_by_key: dict[tuple[str, str], tuple[str, Optional[str]]] = {}
+            for tid, t_title, t_artist, t_album, db_am_id in all_rows:
+                k = (t_title.strip().lower(), t_artist.strip().lower())
+                lib_by_key[k] = (tid, db_am_id)
+
+            updates: list[tuple[str, str]] = []
+            for t in am_tracks:
+                t_id = str(t.get("id", ""))
+                if not t_id or t_id in existing_ids:
+                    continue
+                k = (str(t.get("title", "")).strip().lower(), str(t.get("artist", "")).strip().lower())
+                if k in lib_by_key:
+                    tid, db_am_id = lib_by_key[k]
+                    existing_ids.add(t_id)
+                    if not db_am_id:
+                        updates.append((t_id, tid))
+
+            if updates:
+                conn.executemany(
+                    "UPDATE tracks SET am_track_id = ? WHERE track_id = ? AND (am_track_id IS NULL OR am_track_id = '')",
+                    updates,
+                )
+
+        return existing_ids
+
     def get_playlist_tracks(self, playlist_name: str) -> list[Track]:
         with self._conn() as conn:
             rows = conn.execute(
@@ -1352,5 +1397,19 @@ class StateManager:
                 """
             )
             return cur.rowcount
+
+    def reset_job_to_pending(self, job_id: int, error_message: Optional[str] = None) -> bool:
+        """Reset a job back to pending so it will be retried when conditions recover."""
+        with self._conn() as conn:
+            cur = conn.execute(
+                """
+                UPDATE download_queue
+                SET status = 'pending', started_at = NULL, error_message = ?
+                WHERE id = ?
+                """,
+                (error_message, job_id),
+            )
+            return cur.rowcount > 0
+
 
 

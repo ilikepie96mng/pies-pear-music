@@ -69,6 +69,42 @@ def test_fail_closed_unauthenticated_requests(auth_client):
         assert res.status_code == 401, f"Expected 401 for {method} {path}, got {res.status_code}"
 
 
+def test_headless_fail_closed_with_empty_secrets(tmp_path: Path, monkeypatch):
+    """Verify headless mode fails closed (401) on protected routes even when both auth_password and api_token are empty."""
+    music_dir = tmp_path / "music"
+    state_dir = tmp_path / "state"
+    alac_rip_dir = tmp_path / "alac_rip"
+    config_file = tmp_path / "config.yaml"
+    music_dir.mkdir(parents=True)
+    state_dir.mkdir(parents=True)
+    alac_rip_dir.mkdir(parents=True)
+
+    config_data = {
+        "music_dir": str(music_dir),
+        "state_dir": str(state_dir),
+        "alac_rip_dir": str(alac_rip_dir),
+        "auth_password": "",
+        "api_token": "",
+    }
+    save_config_file(config_file, config_data)
+    monkeypatch.setattr(server_mod, "DEFAULT_CONFIG_PATH", config_file)
+    monkeypatch.setattr(server_mod, "_is_headless", True)
+    monkeypatch.setattr(server_mod, "_api_capability", "")
+    _sessions.clear()
+    _login_failed_attempts.clear()
+
+    with TestClient(app) as client:
+        # Public health endpoint is 200
+        assert client.get("/health").status_code == 200
+
+        # Protected endpoints must fail with 401 in headless mode
+        res = client.get("/config")
+        assert res.status_code == 401
+
+        res = client.get("/library/summary")
+        assert res.status_code == 401
+
+
 def test_auth_login_sets_cookie_and_protects_routes(auth_client):
     client, cfg_data = auth_client
 

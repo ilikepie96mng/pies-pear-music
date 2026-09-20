@@ -6,6 +6,6 @@ COPY ./rootfs /app/rootfs
 COPY ./wrapper /app
 WORKDIR /app
 
-CMD ["bash", "-c", "exec /app/wrapper $args"]
+CMD ["bash", "-c", "read -r -t 3 LOGIN_ARGS || LOGIN_ARGS=\"\"; exec /app/wrapper $LOGIN_ARGS"]
 
 EXPOSE 10020 20020 30020
