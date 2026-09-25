@@ -474,10 +474,7 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
             except Exception:
                 pass
 
-        if email and password:
-            cmd = [str(native_bin), "-L", f"{email}:{password}"]
-        else:
-            cmd = [str(native_bin)]
+        cmd = [str(native_bin)]
         wrapper_logs.append(f"{prefix}Launching native decryption daemon: {native_bin}")
         child_env = os.environ.copy()
         cwd_dir = str(native_bin.parent)
@@ -581,7 +578,16 @@ def start_wrapper_login(email: str, password: str, auto_login: bool = False) -> 
         return False
 
 
+_last_auto_login_attempt: float = 0.0
+_AUTO_LOGIN_COOLDOWN_SECONDS: float = 300.0  # 5 minutes minimum between automated login attempts
+
+
 def attempt_auto_login() -> bool:
+    global _last_auto_login_attempt
+    now = time.time()
+    if now - _last_auto_login_attempt < _AUTO_LOGIN_COOLDOWN_SECONDS:
+        return False
+    _last_auto_login_attempt = now
     email, password = load_credentials()
     if email and password:
         wrapper_logs.append("Found saved credentials, attempting auto-login...")
@@ -1086,8 +1092,6 @@ def _run_job(job: dict) -> None:
         if is_auth_error:
             wrapper_running = False
             _broadcast_queue_event({"event": "queue_paused", "reason": msg, "auth_required": True})
-            if not os.environ.get("PYTEST_CURRENT_TEST"):
-                threading.Thread(target=attempt_auto_login, daemon=True).start()
             if db_id and state:
                 try:
                     state.reset_job_to_pending(db_id, error_message=msg)
@@ -1355,15 +1359,6 @@ def _run_job(job: dict) -> None:
 
     # Ensure decryption wrapper is alive before launching downloader
     if not _is_wrapper_port_alive():
-        emit_log("downloading", "Decryption wrapper is not responding; attempting auto-recovery...")
-        attempt_auto_login()
-        for _ in range(20):
-            if _is_wrapper_port_alive():
-                emit_log("downloading", "Decryption wrapper auto-recovery successful.")
-                break
-            time.sleep(0.5)
-
-    if not _is_wrapper_port_alive():
         msg = "Decryption wrapper is offline (port 10020 unreachable). Please verify Apple Music login in Settings/Status."
         write_log(f"[error] {msg}")
         handle_early_error(msg)
@@ -1523,8 +1518,6 @@ def _run_job(job: dict) -> None:
         if is_auth_error:
             wrapper_running = False
             _broadcast_queue_event({"event": "queue_paused", "reason": failure_reason, "auth_required": True})
-            if not os.environ.get("PYTEST_CURRENT_TEST"):
-                threading.Thread(target=attempt_auto_login, daemon=True).start()
             if db_id and state:
                 try:
                     state.reset_job_to_pending(db_id, error_message=failure_reason)
@@ -1577,13 +1570,10 @@ def _queue_worker() -> None:
 
     while True:
         # 0. Check wrapper status before consuming jobs
-        if not wrapper_running:
-            if not wrapper_logging_in and not wrapper_needs_2fa and not os.environ.get("PYTEST_CURRENT_TEST"):
-                attempt_auto_login()
-            if not wrapper_running or wrapper_needs_2fa:
-                _queue_wake_event.wait(timeout=2.5)
-                _queue_wake_event.clear()
-                continue
+        if not wrapper_running or wrapper_needs_2fa:
+            _queue_wake_event.wait(timeout=5.0)
+            _queue_wake_event.clear()
+            continue
 
         # 1. Process SQLite persistent queue first
         pending_db_job = None
