@@ -1,9 +1,59 @@
 import sqlite3
 import json
+import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+
+def clean_artist(artist: Optional[str]) -> str:
+    """Normalize artist name by removing featured artists, collaborators, and punctuation."""
+    if not artist:
+        return ""
+    s = unicodedata.normalize("NFKC", str(artist))
+    s = s.lower()
+    # Strip feat./ft./featuring/with/prod. by...
+    s = re.sub(r"\s+(?:feat\.?|ft\.?|featuring|with|prod\.?|prod\s+by)\s+.*$", "", s, flags=re.IGNORECASE)
+    # Strip secondary artist after comma or semicolon
+    s = re.sub(r"\s*[,;]\s*.*$", "", s)
+    # Replace symbols with padded words/spaces
+    s = s.replace("×", " x ").replace("&", " and ").replace("+", " and ").replace("_", " ")
+    # Strip punctuation and symbols, collapse whitespace
+    s = re.sub(r"[^\w\s]", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def clean_title(title: Optional[str]) -> str:
+    """Normalize song title by removing version/remaster tags, track numbers, and punctuation."""
+    if not title:
+        return ""
+    s = unicodedata.normalize("NFKC", str(title))
+    s = s.lower()
+    # Strip leading track number if title starts with e.g. "01. ", "01 - ", "1 "
+    s = re.sub(r"^\d+[\.\-\s]+\s*", "", s)
+    # Iteratively strip parenthetical/bracketed version/remaster/feature suffixes
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(
+            r"\s*[\(\[\{]\s*(?:feat\.?|ft\.?|featuring|with|remaster(?:ed)?(?:\s+\d{4})?|\d{4}\s+remaster(?:ed)?|single\s+version|album\s+version|extended\s+version|original\s+mix|radio\s+edit|bonus\s+track|deluxe(?:\s+edition)?|live(?:\s+at.*)?|acoustic(?:\s+version)?|instrumental|explicit|clean\s+version|edit|mono|stereo|anniversary\s+edition|japanese\s+version|english\s+version|version)[\)\]\}]\s*$",
+            "",
+            s,
+            flags=re.IGNORECASE,
+        ).strip()
+        s = re.sub(
+            r"\s+-\s+(?:feat\.?|ft\.?|featuring|with|remaster(?:ed)?(?:\s+\d{4})?|\d{4}\s+remaster(?:ed)?|single\s+version|album\s+version|extended\s+version|original\s+mix|radio\s+edit|bonus\s+track|deluxe(?:\s+edition)?|live(?:\s+at.*)?|acoustic(?:\s+version)?|instrumental|explicit|clean\s+version|edit|japanese\s+version|english\s+version|version).*$",
+            "",
+            s,
+            flags=re.IGNORECASE,
+        ).strip()
+    # Replace cross-language and punctuation symbols with spaces
+    s = s.replace("×", " x ").replace("–", " ").replace("—", " ").replace("&", " and ").replace("+", " and ").replace("_", " ")
+    s = re.sub(r"[^\w\s]", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
 
 
 @dataclass
@@ -425,6 +475,60 @@ class StateManager:
                 (playlist_name, track_id),
             )
 
+    def has_track_by_title_artist(self, title: str, artist: str) -> bool:
+        """Check if a track with matching title and artist exists in the library."""
+        return self.get_track_by_title_artist(title, artist) is not None
+
+    def get_track_by_title_artist(self, title: str, artist: str) -> Optional[Track]:
+        """Find a library track by title and artist, supporting robust normalization."""
+        if not title:
+            return None
+        c_title = clean_title(title)
+        c_artist = clean_artist(artist)
+        with self._conn() as conn:
+            # 1. Direct case-insensitive match on title and artist
+            row = conn.execute(
+                """
+                SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url, am_track_id
+                FROM tracks
+                WHERE LOWER(TRIM(title)) = LOWER(TRIM(?)) AND LOWER(TRIM(artist)) = LOWER(TRIM(?))
+                LIMIT 1
+                """,
+                (title, artist),
+            ).fetchone()
+            if row:
+                return Track(
+                    track_id=row[0],
+                    title=row[1],
+                    artist=row[2],
+                    album=row[3],
+                    local_path=row[4],
+                    downloaded_at=row[5],
+                    artwork_url=row[6],
+                    am_track_id=row[7] if len(row) > 7 else None,
+                )
+
+            # 2. Match with normalized / cleaned title and artist
+            all_rows = conn.execute(
+                "SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url, am_track_id FROM tracks"
+            ).fetchall()
+            for r in all_rows:
+                db_ct = clean_title(r[1])
+                db_ca = clean_artist(r[2])
+                if c_title and db_ct == c_title:
+                    if not c_artist or not db_ca or db_ca == c_artist or (len(c_artist) > 3 and c_artist in db_ca) or (len(db_ca) > 3 and db_ca in c_artist):
+                        return Track(
+                            track_id=r[0],
+                            title=r[1],
+                            artist=r[2],
+                            album=r[3],
+                            local_path=r[4],
+                            downloaded_at=r[5],
+                            artwork_url=r[6],
+                            am_track_id=r[7] if len(r) > 7 else None,
+                        )
+        return None
+
     def find_and_associate_existing_tracks_to_playlist(self, playlist_name: str, am_tracks: list[dict]) -> int:
         """Ensure all tracks present in am_tracks that already exist in library are linked to playlist."""
         if not am_tracks:
@@ -446,37 +550,56 @@ class StateManager:
                     )
                     if res.rowcount > 0:
                         count += 1
-            # 2. Match by normalized title + artist
+
+            # 2. Match by exact & normalized title + artist
             all_rows = conn.execute("SELECT track_id, title, artist FROM tracks").fetchall()
-            lib_by_key: dict[tuple[str, str], str] = {}
+            lib_exact: dict[tuple[str, str], str] = {}
+            lib_clean: list[tuple[str, str, str]] = []
             for tid, t_title, t_artist in all_rows:
-                k = (t_title.strip().lower(), t_artist.strip().lower())
-                lib_by_key[k] = tid
+                lib_exact[(t_title.strip().lower(), t_artist.strip().lower())] = tid
+                ct = clean_title(t_title)
+                ca = clean_artist(t_artist)
+                if ct:
+                    lib_clean.append((ct, ca, tid))
+
             for t in am_tracks:
-                k = (str(t.get("title", "")).strip().lower(), str(t.get("artist", "")).strip().lower())
-                if k in lib_by_key:
+                t_title = str(t.get("title", "") or t.get("name", ""))
+                t_artist = str(t.get("artist", ""))
+                k_exact = (t_title.strip().lower(), t_artist.strip().lower())
+                matched_tid = None
+                if k_exact in lib_exact:
+                    matched_tid = lib_exact[k_exact]
+                else:
+                    ct = clean_title(t_title)
+                    ca = clean_artist(t_artist)
+                    if ct:
+                        for db_ct, db_ca, db_tid in lib_clean:
+                            if db_ct == ct and (not ca or not db_ca or db_ca == ca or (len(ca) > 3 and ca in db_ca) or (len(db_ca) > 3 and db_ca in ca)):
+                                matched_tid = db_tid
+                                break
+
+                if matched_tid:
                     res = conn.execute(
                         "INSERT OR IGNORE INTO playlist_tracks VALUES (?, ?)",
-                        (playlist_name, lib_by_key[k])
+                        (playlist_name, matched_tid)
                     )
                     if res.rowcount > 0:
                         count += 1
 
             # 3. Match and repair unparsed tracks only by EXACT normalized title match
-            import re
             unknown_rows = conn.execute(
                 "SELECT track_id, title, local_path FROM tracks WHERE artist = 'Unknown Artist' OR album = 'Unknown Album' OR title LIKE '%. %'"
             ).fetchall()
             for tid, t_title, lpath in unknown_rows:
-                clean_t = re.sub(r"^\d+\.\s*", "", t_title).strip().lower()
-                if not clean_t:
+                c_t = clean_title(t_title)
+                if not c_t:
                     continue
                 for t in am_tracks:
-                    am_t = str(t.get("title", "")).strip().lower()
-                    if clean_t == am_t:
+                    am_t = clean_title(str(t.get("title", "")))
+                    if c_t == am_t:
                         conn.execute(
                             "UPDATE tracks SET title = ?, artist = ?, album = ?, am_track_id = ? WHERE track_id = ?",
-                            (t.get("title", clean_t), t.get("artist", "Unknown Artist"), t.get("album", "Unknown Album"), str(t.get("id", "")), tid)
+                            (t.get("title", t_title), t.get("artist", "Unknown Artist"), t.get("album", "Unknown Album"), str(t.get("id", "")), tid)
                         )
                         res = conn.execute(
                             "INSERT OR IGNORE INTO playlist_tracks VALUES (?, ?)",
@@ -506,23 +629,45 @@ class StateManager:
                         existing_ids.add(str(am_id))
 
             # 2. Match by normalized title + artist
-            all_rows = conn.execute("SELECT track_id, title, artist, album, am_track_id FROM tracks").fetchall()
-            lib_by_key: dict[tuple[str, str], tuple[str, Optional[str]]] = {}
-            for tid, t_title, t_artist, t_album, db_am_id in all_rows:
-                k = (t_title.strip().lower(), t_artist.strip().lower())
-                lib_by_key[k] = (tid, db_am_id)
+            all_rows = conn.execute("SELECT track_id, title, artist, album, am_track_id, local_path FROM tracks").fetchall()
+            lib_exact: dict[tuple[str, str], tuple[str, Optional[str]]] = {}
+            lib_clean: list[tuple[str, str, str, Optional[str]]] = []
+
+            for tid, t_title, t_artist, t_album, db_am_id, lpath in all_rows:
+                lib_exact[(t_title.strip().lower(), t_artist.strip().lower())] = (tid, db_am_id)
+                c_t = clean_title(t_title)
+                c_a = clean_artist(t_artist)
+                if c_t:
+                    lib_clean.append((c_t, c_a, tid, db_am_id))
 
             updates: list[tuple[str, str]] = []
             for t in am_tracks:
                 t_id = str(t.get("id", ""))
                 if not t_id or t_id in existing_ids:
                     continue
-                k = (str(t.get("title", "")).strip().lower(), str(t.get("artist", "")).strip().lower())
-                if k in lib_by_key:
-                    tid, db_am_id = lib_by_key[k]
+                t_title = str(t.get("title", "") or t.get("name", ""))
+                t_artist = str(t.get("artist", ""))
+
+                k_exact = (t_title.strip().lower(), t_artist.strip().lower())
+                matched_tid = None
+                matched_db_am_id = None
+                if k_exact in lib_exact:
+                    matched_tid, matched_db_am_id = lib_exact[k_exact]
+                else:
+                    c_title = clean_title(t_title)
+                    c_artist = clean_artist(t_artist)
+                    if c_title:
+                        for db_ct, db_ca, db_tid, db_amid in lib_clean:
+                            if db_ct == c_title:
+                                if not c_artist or not db_ca or db_ca == c_artist or (len(c_artist) > 3 and c_artist in db_ca) or (len(db_ca) > 3 and db_ca in c_artist):
+                                    matched_tid = db_tid
+                                    matched_db_am_id = db_amid
+                                    break
+
+                if matched_tid:
                     existing_ids.add(t_id)
-                    if not db_am_id:
-                        updates.append((t_id, tid))
+                    if not matched_db_am_id:
+                        updates.append((t_id, matched_tid))
 
             if updates:
                 conn.executemany(

@@ -14,7 +14,7 @@ from mutagen.mp4 import MP4
 
 from alac_rip.metadata import embed_cover_art, read_tags, save_cover_file, write_tags
 from alac_rip.organizer import ensure_album_dir, sanitize, track_path
-from alac_rip.state import StateManager, Track
+from alac_rip.state import StateManager, Track, clean_artist, clean_title
 
 LogCallback = Callable[[str, str], None]  # (message, phase)
 ProgressCallback = Callable[[int, int], None]  # (current, total)
@@ -347,17 +347,6 @@ class SyncEngine:
                 tags = read_tags(src)
                 track_id = self._track_id(str(src.relative_to(valid_staging)))
 
-                if self.state.is_downloaded(track_id):
-                    skipped_count += 1
-                    src.unlink(missing_ok=True)
-                    if self.playlist_name:
-                        self.state.add_track_to_playlist(self.playlist_name, track_id)
-                    continue
-
-                # Progress callback
-                if self.on_progress:
-                    self.on_progress(i, total_files, f"[{i}/{total_files}] {src.name}", "processing")
-                
                 artist = tags["artist"] or "Unknown Artist"
                 album_artist = tags["album_artist"] or artist
                 album = tags["album"] or "Unknown Album"
@@ -366,6 +355,41 @@ class SyncEngine:
 
                 dest = track_path(self.music_dir, album_artist, album, track_num, title, ext=".flac")
                 album_dir = ensure_album_dir(self.music_dir, album_artist, album)
+
+                # Check if this track already exists in library
+                matched_track = None
+                if self.state.is_downloaded(track_id):
+                    matched_track = self.state.get_track(track_id)
+                elif self.state.has_track_by_title_artist(title, artist):
+                    matched_track = self.state.get_track_by_title_artist(title, artist)
+                else:
+                    path_track = self.state.get_track_by_path(str(dest))
+                    if (
+                        path_track is not None
+                        and clean_title(path_track.title) == clean_title(title)
+                        and (
+                            not artist
+                            or not path_track.artist
+                            or clean_artist(path_track.artist) == clean_artist(artist)
+                        )
+                    ):
+                        matched_track = path_track
+
+                if matched_track is not None:
+                    skipped_count += 1
+                    try:
+                        src.unlink(missing_ok=True)
+                        src.with_suffix(".lrc").unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    if self.playlist_name:
+                        self.state.add_track_to_playlist(self.playlist_name, matched_track.track_id)
+                    self._log(f"[{i}/{total_files}] skipped (already in library): {artist} — {title}", "processing")
+                    continue
+
+                # Progress callback
+                if self.on_progress:
+                    self.on_progress(i, total_files, f"[{i}/{total_files}] {src.name}", "processing")
 
                 if dest.exists():
                     dest = album_dir / f"{track_num:02d} - {sanitize(title)}_coll_{i}.flac"

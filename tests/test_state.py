@@ -218,3 +218,66 @@ def test_get_playlist_thumbnail_returns_none_when_no_artwork(tmp_path):
     sm.add_track(t)
     sm.add_track_to_playlist("PL", "id1")
     assert sm.get_playlist_thumbnail("PL") is None
+
+
+def test_has_track_by_title_artist_exact_and_normalized(tmp_path):
+    sm = StateManager(tmp_path / "state.db")
+    track = Track(
+        track_id="artists/ONE OK ROCK/Jinsei x Boku/01 Jinsei x Boku.flac",
+        title="Jinsei×Boku=",
+        artist="ONE OK ROCK",
+        album="Jinsei×Boku=",
+        local_path="/Music/artists/ONE OK ROCK/Jinsei x Boku/01 Jinsei x Boku.flac",
+        downloaded_at=datetime.now().isoformat(),
+    )
+    sm.add_track(track)
+
+    # Exact match
+    assert sm.has_track_by_title_artist("Jinsei×Boku=", "ONE OK ROCK") is True
+
+    # Punctuation / space difference match
+    assert sm.has_track_by_title_artist("Jinsei x Boku =", "ONE OK ROCK") is True
+
+    # Remastered suffix match
+    assert sm.has_track_by_title_artist("Jinsei×Boku= (Remastered 2024)", "ONE OK ROCK") is True
+
+    # Featured artist tag match
+    assert sm.has_track_by_title_artist("Jinsei x Boku", "ONE OK ROCK feat. Someone") is True
+
+    # Unrelated track
+    assert sm.has_track_by_title_artist("Stand Out Fit In", "ONE OK ROCK") is False
+
+
+def test_find_existing_am_track_ids_with_cross_release_variations(tmp_path):
+    sm = StateManager(tmp_path / "state.db")
+    t1 = Track(
+        track_id="artists/ONE OK ROCK/Niche Syndrome/01 Kanzen Kankaku Dreamer.flac",
+        title="Kanzen Kankaku Dreamer",
+        artist="ONE OK ROCK",
+        album="Niche Syndrome",
+        local_path="/Music/artists/ONE OK ROCK/Niche Syndrome/01 Kanzen Kankaku Dreamer.flac",
+        downloaded_at=datetime.now().isoformat(),
+    )
+    sm.add_track(t1)
+
+    am_tracks = [
+        # Track 1 from a different release/remaster
+        {
+            "id": "am-101",
+            "title": "Kanzen Kankaku Dreamer (Remastered)",
+            "artist": "ONE OK ROCK",
+            "album": "Greatest Hits",
+        },
+        # Track 2 which is new
+        {
+            "id": "am-102",
+            "title": "We are",
+            "artist": "ONE OK ROCK",
+            "album": "Ambitions",
+        }
+    ]
+
+    existing_ids = sm.find_existing_am_track_ids(am_tracks)
+    assert "am-101" in existing_ids
+    assert "am-102" not in existing_ids
+

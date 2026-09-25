@@ -425,3 +425,39 @@ def test_sync_m3u_flattens_control_characters(music_dir, staging_dir, sync_state
     # Verify no multi-line broken EXTINF
     assert any(line.startswith("#EXTINF:-1,Artist Name - Song With Newlines") for line in lines)
 
+
+def test_sync_skips_cross_release_and_playlist_duplicates(music_dir, staging_dir, sync_state):
+    # 1. Song originally added via a playlist under staging path "J-Rock/01 - Stand Out Fit In.flac"
+    original_dest = music_dir / "artists" / "ONE OK ROCK" / "Eye of the Storm" / "03 - Stand Out Fit In.flac"
+    original_dest.parent.mkdir(parents=True, exist_ok=True)
+    original_dest.write_bytes(b"dummy flac content exceeding 1024 bytes" * 50)
+
+    sync_state.add_track(Track(
+        track_id="J-Rock/01 - Stand Out Fit In.flac",  # Staging relative ID was playlist-based
+        title="Stand Out Fit In",
+        artist="ONE OK ROCK",
+        album="Eye of the Storm",
+        local_path=str(original_dest),
+        downloaded_at=datetime.now().isoformat(),
+    ))
+
+    # 2. Later, downloading the album generates a new staging file under album staging path
+    album_staging = staging_dir / "ONE OK ROCK" / "Eye of the Storm" / "03 - Stand Out Fit In.m4a"
+    make_fake_m4a(
+        album_staging,
+        title="Stand Out Fit In",
+        artist="ONE OK ROCK",
+        album="Eye of the Storm",
+        track_num=3,
+    )
+
+    engine = SyncEngine(state=sync_state, music_dir=music_dir)
+    result = engine.sync(staging_dir)
+
+    # Must skip without downloading/converting and must NOT create collision files
+    assert result.new_count == 0
+    assert result.skipped_count == 1
+    assert not (music_dir / "artists" / "ONE OK ROCK" / "Eye of the Storm" / "03 - Stand Out Fit In_coll_1.flac").exists()
+    assert not album_staging.exists()
+
+
