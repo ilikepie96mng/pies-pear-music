@@ -50,11 +50,24 @@ COPY --from=frontend-builder /app/build ./web
 COPY --from=go-builder /bin/amd-main /usr/local/bin/amd-main
 RUN chmod +x /usr/local/bin/amd-main
 
-# Copy native decryption wrapper and rootfs
-COPY vendor/wrapper/wrapper /app/wrapper
-COPY vendor/wrapper/rootfs /app/rootfs
-RUN chmod +x /app/wrapper && \
-    mkdir -p /app/rootfs/dev
+# Setup native decryption wrapper and rootfs (uses local files if present, or downloads upstream release)
+COPY vendor/wrapper/ /tmp/wrapper-src/
+RUN if [ -f /tmp/wrapper-src/wrapper ] && [ -d /tmp/wrapper-src/rootfs/system ]; then \
+        echo "Using local decryption wrapper assets..." && \
+        mv /tmp/wrapper-src/wrapper /app/wrapper && \
+        mv /tmp/wrapper-src/rootfs /app/rootfs; \
+    else \
+        echo "Downloading decryption wrapper from upstream release..." && \
+        mkdir -p /tmp/wrap-extract /app && \
+        curl -sSL -o /tmp/wrapper.tar.gz "https://github.com/zhaarey/wrapper/releases/download/linux/wrapper.linux.x86_64.tar.gz" && \
+        tar -xzf /tmp/wrapper.tar.gz -C /tmp/wrap-extract && \
+        mv /tmp/wrap-extract/wrapper /app/wrapper && \
+        mv /tmp/wrap-extract/rootfs /app/rootfs && \
+        rm -rf /tmp/wrap-extract /tmp/wrapper.tar.gz; \
+    fi && \
+    chmod +x /app/wrapper && \
+    mkdir -p /app/rootfs/dev && \
+    rm -rf /tmp/wrapper-src
 
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh

@@ -32,5 +32,5 @@ def test_diagnostics_do_not_expose_local_paths(tmp_path, monkeypatch):
 
 
 def test_runtime_error_redaction_hides_absolute_paths():
-    message = "could not open /home/example/private/Music/song.m4a: permission denied"
+    message = "could not open /var/music/private/Music/song.m4a: permission denied"
     assert server._redact_runtime_paths(message) == "could not open <local path>: permission denied"

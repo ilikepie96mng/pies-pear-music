@@ -2,8 +2,8 @@
 Type=Application
 Name=Pies Pear Music (Development)
 Comment=Launch the Pies Pear Music development checkout
-Exec=/var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/scripts/launch-dev.sh
-Icon=/var/home/ilikepie/Documents/VS-Projects/pies-alac-rip-tool/app/src-tauri/icons/128x128.png
+Exec=sh -c '"$(dirname "%k")"/launch-dev.sh'
+Icon=pies-pear-music
 Terminal=false
 Categories=AudioVideo;Audio;
 StartupNotify=true

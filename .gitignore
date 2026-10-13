@@ -43,3 +43,12 @@ logs/
 .DS_Store
 *.log
 .claude/
+
+# Proprietary vendor wrapper binaries and rootfs
+vendor/wrapper/wrapper
+vendor/wrapper/rootfs/system/
+vendor/wrapper/rootfs/data/
+vendor/wrapper/rootfs/dev/
+!vendor/wrapper/rootfs/dev/.gitkeep
+!vendor/wrapper/rootfs/data/data/com.apple.android.music/.gitkeep
+*.so

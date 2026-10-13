@@ -128,7 +128,7 @@ def test_gemini_header_auth_and_schema_validation():
 def test_config_secrets_redaction():
     """Verify that integration and API keys are recursively redacted in get_config."""
     raw_cfg = {
-        "music_dir": "/home/user/Music",
+        "music_dir": "/data/music",
         "gemini_api_key": "top_secret_gemini",
         "lastfm_api_key": "top_secret_lastfm",
         "integrations": {

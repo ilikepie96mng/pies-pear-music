@@ -41,9 +41,10 @@ from alac_rip.state import StateManager
 from alac_rip.sync import StagingValidationError, SyncEngine, validate_staging_dir
 
 # Ensure standard user tool directories (Linuxbrew, local bin, go bin) are present in PATH
+_brew_prefix = os.environ.get("HOMEBREW_PREFIX", os.path.join(os.sep, "home", "linuxbrew", ".linuxbrew"))
 extra_tool_paths = [
-    "/home/linuxbrew/.linuxbrew/bin",
-    "/home/linuxbrew/.linuxbrew/sbin",
+    os.path.join(_brew_prefix, "bin"),
+    os.path.join(_brew_prefix, "sbin"),
     str(Path.home() / ".local" / "bin"),
     str(Path.home() / "go" / "bin"),
 ]
@@ -1132,7 +1133,7 @@ def _run_job(job: dict) -> None:
 
     env = os.environ.copy()
     # Ensure linuxbrew is in PATH for MP4Box and other tools
-    linuxbrew_bin = "/home/linuxbrew/.linuxbrew/bin"
+    linuxbrew_bin = os.path.join(os.environ.get("HOMEBREW_PREFIX", os.path.join(os.sep, "home", "linuxbrew", ".linuxbrew")), "bin")
     current_path = env.get("PATH", "")
     if linuxbrew_bin not in current_path:
         env["PATH"] = f"{linuxbrew_bin}:{current_path}" if current_path else linuxbrew_bin
