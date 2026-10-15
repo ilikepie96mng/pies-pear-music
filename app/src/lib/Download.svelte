@@ -11,6 +11,9 @@
     type CatalogTrack,
     type QueueSummary,
     type QueueJob,
+    type SubscribedArtist,
+    type PendingRelease,
+    type ArtistCheckResult,
   } from "../api";
   import {
     notifyDownloadStarted,
@@ -31,7 +34,15 @@
   let searchLoading = $state(false);
   let searchError = $state<string | null>(null);
   let searchResults = $state<CatalogSearchResult>({ songs: [], albums: [], artists: [] });
-  let activeEntityFilter = $state<"all" | "albums" | "artists" | "songs">("all");
+  let activeEntityFilter = $state<"all" | "albums" | "artists" | "songs" | "subscribed">("all");
+
+  // Subscribed Artists & Releases State
+  let subscribedArtists = $state<SubscribedArtist[]>([]);
+  let pendingReleases = $state<PendingRelease[]>([]);
+  let checkingReleases = $state(false);
+  let subscribingArtistId = $state<string | null>(null);
+  let downloadingPendingId = $state<number | null>(null);
+  let checkResultMessage = $state<string | null>(null);
 
   // Global download format
   let format = $state("ALAC");
@@ -346,6 +357,120 @@
   });
 
   // =========================================================================
+  // SUBSCRIBED ARTISTS & RELEASE CHECKER ACTIONS
+  // =========================================================================
+
+  function getSubscribedArtist(artistId?: string | null): SubscribedArtist | undefined {
+    if (!artistId) return undefined;
+    return subscribedArtists.find((a) => a.artist_id === String(artistId));
+  }
+
+  function isArtistSubscribed(artistId?: string | null): boolean {
+    return !!getSubscribedArtist(artistId);
+  }
+
+  async function refreshSubscriptions() {
+    try {
+      const [subs, pending] = await Promise.all([
+        api.artists.getSubscriptions(),
+        api.artists.getPendingReleases("available"),
+      ]);
+      subscribedArtists = subs;
+      pendingReleases = pending;
+    } catch (err) {
+      console.error("Failed to refresh artist subscriptions:", err);
+    }
+  }
+
+  async function toggleArtistSubscription(artist: { id: string; name: string; url?: string; artwork_url?: string | null }) {
+    const existing = getSubscribedArtist(artist.id);
+    subscribingArtistId = artist.id;
+    try {
+      if (existing) {
+        await api.artists.unsubscribe(artist.id, existing.service || "apple_music");
+        subscribedArtists = subscribedArtists.filter((a) => a.artist_id !== artist.id);
+      } else {
+        const res = await api.artists.subscribe({
+          artist_id: artist.id,
+          name: artist.name,
+          url: artist.url,
+          artwork_url: artist.artwork_url,
+          auto_download: false,
+        });
+        if (res.artist) {
+          subscribedArtists = [...subscribedArtists.filter((a) => a.artist_id !== artist.id), res.artist];
+        }
+        await refreshSubscriptions();
+      }
+    } catch (err) {
+      console.error("Failed to toggle artist subscription:", err);
+    } finally {
+      subscribingArtistId = null;
+    }
+  }
+
+  async function updateArtistAutoDownload(artistId: string, autoDownload: boolean) {
+    try {
+      await api.artists.updateSubscription(artistId, autoDownload);
+      subscribedArtists = subscribedArtists.map((a) => (a.artist_id === artistId ? { ...a, auto_download: autoDownload } : a));
+    } catch (err) {
+      console.error("Failed to update auto_download:", err);
+    }
+  }
+
+  async function checkReleasesNow(artistId?: string) {
+    checkingReleases = true;
+    checkResultMessage = null;
+    try {
+      const res = await api.artists.checkReleases(artistId);
+      await refreshSubscriptions();
+      if (res.total_new_releases && res.total_new_releases > 0) {
+        checkResultMessage = `Found ${res.total_new_releases} new ${res.total_new_releases === 1 ? 'release' : 'releases'}! (${res.total_enqueued || 0} queued)`;
+      } else {
+        checkResultMessage = "All subscribed artists are up to date.";
+      }
+      setTimeout(() => { checkResultMessage = null; }, 5000);
+    } catch (err) {
+      checkResultMessage = err instanceof Error ? err.message : String(err);
+      setTimeout(() => { checkResultMessage = null; }, 5000);
+    } finally {
+      checkingReleases = false;
+    }
+  }
+
+  async function downloadPendingRelease(relId: number) {
+    downloadingPendingId = relId;
+    try {
+      await api.artists.downloadPendingRelease(relId);
+      pendingReleases = pendingReleases.filter((r) => r.id !== relId);
+      refreshQueue();
+    } catch (err) {
+      console.error("Failed to download release:", err);
+    } finally {
+      downloadingPendingId = null;
+    }
+  }
+
+  async function downloadAllPending() {
+    try {
+      await api.artists.downloadAllPendingReleases();
+      pendingReleases = [];
+      refreshQueue();
+    } catch (err) {
+      console.error("Failed to download all releases:", err);
+    }
+  }
+
+  async function dismissPending(relId: number) {
+    try {
+      await api.artists.dismissPendingRelease(relId);
+      pendingReleases = pendingReleases.filter((r) => r.id !== relId);
+    } catch (err) {
+      console.error("Failed to dismiss release:", err);
+    }
+  }
+
+  // =========================================================================
   // DOWNLOAD STREAM RUNNER (Single Track, Album, Artist Batch, Direct URL)
   // =========================================================================
 
@@ -629,6 +754,7 @@
 
   onMount(() => {
     refreshQueue();
+    refreshSubscriptions();
     queuePollTimer = setInterval(refreshQueue, 2000);
   });
 
@@ -771,7 +897,7 @@
             </div>
 
             <!-- Filter Pills -->
-            <div class="flex items-center gap-2 mt-4">
+            <div class="flex items-center gap-2 mt-4 flex-wrap">
               <button
                 onclick={() => (activeEntityFilter = "all")}
                 class="px-3 py-1 rounded-lg text-xs font-semibold transition-all {activeEntityFilter === 'all' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-[#15131a] text-zinc-400 border border-[#262330] hover:text-white'}"
@@ -796,6 +922,55 @@
               >
                 Tracks ({searchResults.songs?.length || 0})
               </button>
+              <button
+                onclick={() => (activeEntityFilter = "subscribed")}
+                class="px-3 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 {activeEntityFilter === 'subscribed' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-[#15131a] text-zinc-400 border border-[#262330] hover:text-white'}"
+              >
+                <span>★ Followed</span>
+                <span class="text-[11px] opacity-80">({subscribedArtists.length})</span>
+              </button>
+
+              <div class="ml-auto flex items-center gap-2">
+                {#if checkResultMessage}
+                  <span class="text-xs text-amber-400 font-medium">{checkResultMessage}</span>
+                {/if}
+                <button
+                  onclick={() => checkReleasesNow()}
+                  disabled={checkingReleases}
+                  class="px-3 py-1 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/10 transition-all flex items-center gap-1.5 disabled:opacity-50"
+                  title="Check discographies for new releases from all subscribed artists"
+                >
+                  <span class={checkingReleases ? 'animate-spin' : ''}>⚡</span>
+                  <span>{checkingReleases ? 'Checking…' : 'Check New Releases'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        {/if}
+
+        {#if pendingReleases.length > 0}
+          <div class="mb-6 p-4 rounded-2xl bg-gradient-to-r from-amber-950/40 via-[#1e1915] to-[#14121a] border border-amber-500/30 flex items-center justify-between gap-4 shadow-lg">
+            <div class="flex items-center gap-3">
+              <span class="text-2xl">💿</span>
+              <div>
+                <div class="text-xs font-bold text-amber-400 flex items-center gap-2">
+                  <span>New Releases from Subscribed Artists</span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold">
+                    {pendingReleases.length} {pendingReleases.length === 1 ? 'Release' : 'Releases'}
+                  </span>
+                </div>
+                <div class="text-[11px] text-zinc-400 mt-0.5">
+                  New music detected from artists you follow. Ready to download into your library.
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <button
+                onclick={downloadAllPending}
+                class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all shadow flex items-center gap-1.5"
+              >
+                <span>⚡ Download All ({pendingReleases.length})</span>
+              </button>
             </div>
           </div>
         {/if}
@@ -808,7 +983,88 @@
             </div>
           {/if}
 
-          {#if !searchQuery.trim()}
+          {#if activeEntityFilter === "subscribed"}
+            <div class="mb-10">
+              <div class="flex items-center justify-between mb-4">
+                <div class="text-xs font-bold uppercase tracking-wider text-amber-500 flex items-center gap-2">
+                  <span>Followed Artists</span>
+                  <span class="text-zinc-600 text-[11px] font-normal">({subscribedArtists.length})</span>
+                </div>
+                <div class="text-xs text-zinc-500">
+                  Pear Music monitors discographies and detects new releases automatically.
+                </div>
+              </div>
+
+              {#if subscribedArtists.length === 0}
+                <div class="p-12 text-center rounded-2xl bg-[#14121a] border border-[#23202e]">
+                  <div class="text-3xl mb-2">⭐</div>
+                  <div class="text-white text-sm font-semibold mb-1">No followed artists yet</div>
+                  <div class="text-zinc-500 text-xs max-w-md mx-auto">
+                    Search for any artist and click the star button to follow them. Pear Music will quickly check their discography and download or surface new music as soon as it's released!
+                  </div>
+                </div>
+              {:else}
+                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {#each subscribedArtists as sub (sub.id)}
+                    <div class="p-3.5 rounded-2xl bg-[#14121a] border border-[#23202e] hover:border-amber-500/30 flex flex-col justify-between gap-3 shadow-sm transition-all group">
+                      <div class="flex items-center gap-3">
+                        <div class="w-12 h-12 rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border border-white/5">
+                          {#if sub.artwork_url}
+                            <img src={formatArtwork(sub.artwork_url, 120)} alt={sub.name} class="w-full h-full object-cover" />
+                          {:else}
+                            <div class="w-full h-full flex items-center justify-center text-zinc-500 text-sm">👤</div>
+                          {/if}
+                        </div>
+                        <div class="flex-1 min-w-0">
+                          <button
+                            onclick={() => openArtist(sub.artist_id)}
+                            class="text-white text-sm font-semibold truncate hover:text-amber-400 transition-colors text-left block w-full"
+                          >
+                            {sub.name}
+                          </button>
+                          <div class="text-zinc-500 text-[11px] flex items-center gap-2 mt-0.5">
+                            <span>{sub.service === 'apple_music' ? 'Apple Music' : 'Tidal'}</span>
+                            <span>•</span>
+                            <span>{sub.known_releases_count || 0} tracked</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="flex items-center justify-between pt-2 border-t border-white/5 text-xs">
+                        <label class="flex items-center gap-1.5 cursor-pointer text-[11px] text-zinc-400 hover:text-zinc-200">
+                          <input
+                            type="checkbox"
+                            checked={sub.auto_download}
+                            onchange={(e) => updateArtistAutoDownload(sub.artist_id, (e.target as HTMLInputElement).checked)}
+                            class="rounded bg-zinc-900 border-zinc-700 text-amber-500 focus:ring-0 focus:ring-offset-0 w-3.5 h-3.5 cursor-pointer"
+                          />
+                          <span>Auto-download</span>
+                        </label>
+
+                        <div class="flex items-center gap-1">
+                          <button
+                            onclick={() => checkReleasesNow(sub.artist_id)}
+                            disabled={checkingReleases}
+                            title="Check now for new releases"
+                            class="px-2 py-0.5 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-[11px] transition-colors disabled:opacity-50"
+                          >
+                            Check
+                          </button>
+                          <button
+                            onclick={() => toggleArtistSubscription({ id: sub.artist_id, name: sub.name, url: sub.url, artwork_url: sub.artwork_url })}
+                            title="Unsubscribe"
+                            class="px-2 py-0.5 rounded-lg bg-red-950/20 hover:bg-red-950/40 text-red-400 text-[11px] transition-colors"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {:else if !searchQuery.trim()}
             <div class="flex flex-col items-center justify-center py-20 text-center text-zinc-600">
               <div class="text-4xl mb-3 opacity-60">💿</div>
               <div class="text-white text-base font-semibold">Explore the Apple Music Lossless Catalog</div>
@@ -831,25 +1087,50 @@
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   {#each searchResults.artists as art (art.id)}
-                    <button
-                      onclick={() => openArtist(art.id)}
-                      class="flex items-center gap-3.5 p-3 rounded-2xl bg-[#14121a] hover:bg-[#1c1924] border border-[#23202e] hover:border-amber-500/40 text-left transition-all group shadow-sm"
+                    {@const isSub = isArtistSubscribed(art.id)}
+                    <div
+                      class="flex items-center gap-3 p-3 rounded-2xl bg-[#14121a] hover:bg-[#1c1924] border border-[#23202e] hover:border-amber-500/40 text-left transition-all group shadow-sm"
                     >
-                      <div class="w-13 h-13 rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border border-white/5">
-                        {#if art.artwork_url}
-                          <img src={formatArtwork(art.artwork_url, 120)} alt={art.name} class="w-full h-full object-cover" />
-                        {:else}
-                          <div class="w-full h-full flex items-center justify-center text-zinc-500 text-sm">👤</div>
-                        {/if}
-                      </div>
-                      <div class="flex-1 min-w-0">
-                        <div class="text-white text-sm font-semibold truncate group-hover:text-amber-400 transition-colors">{art.name}</div>
-                        <div class="text-zinc-500 text-xs truncate mt-0.5">
-                          {art.genre_names?.join(", ") || art.genres?.join(", ") || "Artist"}
+                      <button
+                        onclick={() => openArtist(art.id)}
+                        class="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      >
+                        <div class="w-12 h-12 rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border border-white/5">
+                          {#if art.artwork_url}
+                            <img src={formatArtwork(art.artwork_url, 120)} alt={art.name} class="w-full h-full object-cover" />
+                          {:else}
+                            <div class="w-full h-full flex items-center justify-center text-zinc-500 text-sm">👤</div>
+                          {/if}
                         </div>
+                        <div class="flex-1 min-w-0">
+                          <div class="text-white text-sm font-semibold truncate group-hover:text-amber-400 transition-colors">{art.name}</div>
+                          <div class="text-zinc-500 text-xs truncate mt-0.5">
+                            {art.genre_names?.join(", ") || art.genres?.join(", ") || "Artist"}
+                          </div>
+                        </div>
+                      </button>
+
+                      <div class="flex items-center gap-1 flex-shrink-0">
+                        <button
+                          onclick={(e) => { e.stopPropagation(); toggleArtistSubscription(art); }}
+                          disabled={subscribingArtistId === art.id}
+                          title={isSub ? "Followed (Click to unfollow)" : "Follow artist for new releases"}
+                          class="p-1.5 rounded-xl transition-all {isSub ? 'text-amber-400 bg-amber-500/10 hover:bg-amber-500/20' : 'text-zinc-600 hover:text-zinc-300 hover:bg-white/5'}"
+                        >
+                          {#if subscribingArtistId === art.id}
+                            <span class="inline-block w-4 h-4 border-2 border-amber-500/40 border-t-amber-400 rounded-full animate-spin"></span>
+                          {:else}
+                            <span class="text-sm">{isSub ? "★" : "☆"}</span>
+                          {/if}
+                        </button>
+                        <button
+                          onclick={() => openArtist(art.id)}
+                          class="text-zinc-600 group-hover:text-amber-400 group-hover:translate-x-0.5 transition-all text-sm font-bold px-1"
+                        >
+                          →
+                        </button>
                       </div>
-                      <span class="text-zinc-600 group-hover:text-amber-400 group-hover:translate-x-0.5 transition-all text-sm font-bold pr-1">→</span>
-                    </button>
+                    </div>
                   {/each}
                 </div>
               </div>
@@ -951,6 +1232,7 @@
             </div>
           {:else if selectedArtist}
             <!-- Artist Hero Card -->
+            {@const sub = getSubscribedArtist(selectedArtist.id)}
             <div class="p-6 rounded-3xl bg-gradient-to-r from-[#171420] via-[#14121a] to-[#121018] border border-[#282438] flex items-center justify-between gap-6 mb-8 shadow-xl">
               <div class="flex items-center gap-5">
                 <div class="w-20 h-20 rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border-2 border-amber-500/30 shadow-lg">
@@ -961,7 +1243,14 @@
                   {/if}
                 </div>
                 <div>
-                  <div class="text-[10px] uppercase tracking-widest text-amber-400 font-bold mb-1">Artist Discography</div>
+                  <div class="text-[10px] uppercase tracking-widest text-amber-400 font-bold mb-1 flex items-center gap-2">
+                    <span>Artist Discography</span>
+                    {#if sub}
+                      <span class="px-2 py-0.5 rounded-full text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold">
+                        ★ Subscribed
+                      </span>
+                    {/if}
+                  </div>
                   <h1 class="text-white text-2xl font-bold">{selectedArtist.name}</h1>
                   <div class="flex items-center gap-3 text-xs text-zinc-400 mt-1">
                     <span>{selectedArtist.genres?.join(", ") || selectedArtist.genre_names?.join(", ") || "Artist"}</span>
@@ -971,8 +1260,39 @@
                 </div>
               </div>
 
-              <!-- Quick Selection Actions -->
+              <!-- Quick Selection Actions & Subscription Controls -->
               <div class="flex items-center gap-2 flex-wrap justify-end">
+                {#if sub}
+                  <div class="flex items-center gap-1.5 p-1 rounded-xl bg-amber-500/10 border border-amber-500/30">
+                    <button
+                      onclick={() => toggleArtistSubscription({ id: selectedArtist.id, name: selectedArtist.name, url: selectedArtist.url, artwork_url: selectedArtist.artwork_url })}
+                      class="px-2.5 py-1 rounded-lg text-xs font-semibold text-amber-300 hover:text-white transition-colors"
+                      title="Click to unsubscribe"
+                    >
+                      ★ Subscribed
+                    </button>
+                    <label class="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-black/40 text-[11px] text-zinc-300 cursor-pointer" title="Auto-download new music directly or notify first">
+                      <input
+                        type="checkbox"
+                        checked={sub.auto_download}
+                        onchange={(e) => updateArtistAutoDownload(sub.artist_id, (e.target as HTMLInputElement).checked)}
+                        class="rounded bg-zinc-900 border-zinc-700 text-amber-500 focus:ring-0 focus:ring-offset-0 w-3 h-3 cursor-pointer"
+                      />
+                      <span>Auto-DL</span>
+                    </label>
+                  </div>
+                {:else}
+                  <button
+                    onclick={() => toggleArtistSubscription({ id: selectedArtist.id, name: selectedArtist.name, url: selectedArtist.url, artwork_url: selectedArtist.artwork_url })}
+                    disabled={subscribingArtistId === selectedArtist.id}
+                    class="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-xs font-semibold text-amber-300 transition-all flex items-center gap-1.5"
+                  >
+                    <span>{subscribingArtistId === selectedArtist.id ? 'Subscribing…' : '☆ Subscribe'}</span>
+                  </button>
+                {/if}
+
+                <div class="h-4 w-px bg-white/10 mx-1"></div>
+
                 <button
                   onclick={selectAllAlbums}
                   class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors"

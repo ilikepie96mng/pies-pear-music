@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { api, type Stats, type DiagnosticCheck, type SyncRun, type IntegrationsHealth } from "../api";
+  import { api, type Stats, type DiagnosticCheck, type SyncRun, type IntegrationsHealth, type PendingRelease } from "../api";
 
   interface Props {
     onstartSync: (name: string) => void;
@@ -17,6 +17,46 @@
   let integrationsHealth = $state<IntegrationsHealth | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
+
+  // Subscribed Artist Releases
+  let pendingReleases = $state<PendingRelease[]>([]);
+  let releaseDownloading = $state<Record<number, boolean>>({});
+
+  async function loadPendingReleases() {
+    try {
+      pendingReleases = await api.artists.getPendingReleases("available");
+    } catch {}
+  }
+
+  async function downloadRelease(rel: PendingRelease) {
+    releaseDownloading[rel.id] = true;
+    try {
+      await api.artists.downloadPendingRelease(rel.id);
+      pendingReleases = pendingReleases.filter(r => r.id !== rel.id);
+    } catch (e) {
+      console.error("Failed to download release:", e);
+    } finally {
+      releaseDownloading[rel.id] = false;
+    }
+  }
+
+  async function downloadAllReleases() {
+    try {
+      await api.artists.downloadAllPendingReleases();
+      pendingReleases = [];
+    } catch (e) {
+      console.error("Failed to download all releases:", e);
+    }
+  }
+
+  async function dismissRelease(relId: number) {
+    try {
+      await api.artists.dismissPendingRelease(relId);
+      pendingReleases = pendingReleases.filter(r => r.id !== relId);
+    } catch (e) {
+      console.error("Failed to dismiss release:", e);
+    }
+  }
 
   // Widget customizer toggles
   let showStatsWidget = $state(true);
@@ -162,6 +202,7 @@
     }
     pollWrapper();
     pollTimer = setInterval(pollWrapper, 2000);
+    loadPendingReleases();
   });
 
   function saveWidgetPreferences() {
@@ -266,6 +307,78 @@
   {:else if error}
     <div class="bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3 text-red-400 text-sm">{error}</div>
   {:else if stats}
+
+    <!-- New Releases from Subscribed Artists Card -->
+    {#if pendingReleases.length > 0}
+      <div class="border border-amber-500/30 rounded-2xl overflow-hidden mb-6 bg-gradient-to-r from-amber-950/20 via-[#171412] to-[#12100e] shadow-xl">
+        <div class="px-5 py-3.5 bg-black/40 border-b border-amber-500/20 flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <span class="text-base text-amber-400">💿</span>
+            <div>
+              <div class="text-xs font-bold uppercase tracking-wider text-amber-400 flex items-center gap-2">
+                <span>New Releases from Subscribed Artists</span>
+                <span class="px-2 py-0.5 rounded-full text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold">
+                  {pendingReleases.length} {pendingReleases.length === 1 ? 'Release' : 'Releases'}
+                </span>
+              </div>
+              <div class="text-[11px] text-zinc-400 mt-0.5">
+                New music detected from artists you follow. Ready for ALAC/FLAC archival.
+              </div>
+            </div>
+          </div>
+          <button
+            onclick={downloadAllReleases}
+            class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all flex items-center gap-1.5 shadow"
+          >
+            <span>⚡ Download All ({pendingReleases.length})</span>
+          </button>
+        </div>
+
+        <div class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          {#each pendingReleases as rel (rel.id)}
+            <div class="p-3 rounded-xl bg-black/40 border border-white/5 flex items-center gap-3 group hover:border-amber-500/30 transition-all">
+              <div class="w-12 h-12 rounded-lg bg-zinc-800 overflow-hidden flex-shrink-0 border border-white/5">
+                {#if rel.artwork_url}
+                  <img src={rel.artwork_url.replace("{w}x{h}", "120x120")} alt={rel.title} class="w-full h-full object-cover" />
+                {:else}
+                  <div class="w-full h-full flex items-center justify-center text-zinc-600 text-sm">💿</div>
+                {/if}
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-white text-xs font-bold truncate group-hover:text-amber-400 transition-colors" title={rel.title}>
+                  {rel.title}
+                </div>
+                <div class="text-amber-400/80 text-[11px] truncate font-medium">{rel.artist_name}</div>
+                <div class="text-zinc-500 text-[10px] flex items-center gap-1.5 mt-0.5">
+                  <span>{rel.release_date || 'New'}</span>
+                  {#if rel.is_single}
+                    <span>•</span>
+                    <span class="text-amber-500/70">Single/EP</span>
+                  {/if}
+                </div>
+              </div>
+              <div class="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onclick={() => downloadRelease(rel)}
+                  disabled={releaseDownloading[rel.id]}
+                  title="Download now"
+                  class="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black text-[11px] font-bold transition-colors"
+                >
+                  {releaseDownloading[rel.id] ? "…" : "Download"}
+                </button>
+                <button
+                  onclick={() => dismissRelease(rel.id)}
+                  title="Dismiss release"
+                  class="p-1 rounded-lg text-zinc-600 hover:text-zinc-300 transition-colors text-xs"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     <!-- Live Integration Health Card -->
     {#if showHealthWidget && integrationsHealth}

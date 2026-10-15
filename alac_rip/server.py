@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 
 import uvicorn
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request, Header
+from fastapi import FastAPI, HTTPException, Query, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,6 +37,7 @@ from alac_rip.dap_export import DapExportError, export_dap_playlist
 from alac_rip.metadata import read_tags
 from alac_rip.organizer import sanitize
 from alac_rip.scheduler import BackgroundSyncScheduler
+from alac_rip.artist_sync import ArtistReleaseChecker
 from alac_rip.state import StateManager
 from alac_rip.subsonic_sync import SubsonicClient, SubsonicSyncEngine, SubsonicError
 from alac_rip.sync import StagingValidationError, SyncEngine, validate_staging_dir
@@ -378,6 +379,7 @@ def stream_wrapper_logs(pipe, target_list, email=None, password=None, auto_login
                 wrapper_needs_2fa = False
                 wrapper_2fa_type = ""
                 login_successful = True
+                threading.Thread(target=_async_check_subscribed_artists, daemon=True, name="artist-check-on-login").start()
                 if auto_login:
                     target_list.append("Auto-login successful. Ready for downloads.")
                 else:
@@ -656,6 +658,36 @@ def _subsonic_poller_worker() -> None:
             logger.debug(f"Subsonic poller loop error: {e}")
 
 
+# ── Subscribed Artists Release Checker Helpers ───────────────────────────────
+
+def _get_artist_release_checker() -> Optional[ArtistReleaseChecker]:
+    if state is None:
+        return None
+    return ArtistReleaseChecker(
+        state=state,
+        storefront=_get_storefront(),
+        on_queue_wake=lambda: _queue_wake_event.set(),
+        on_broadcast_event=lambda ev: _broadcast_queue_event(ev),
+    )
+
+
+def _async_check_subscribed_artists() -> None:
+    try:
+        checker = _get_artist_release_checker()
+        if checker:
+            checker.check_all_subscribed_artists()
+    except Exception as exc:
+        logger.debug(f"Background artist release check failed: {exc}")
+
+
+def _async_delayed_artist_check() -> None:
+    try:
+        time.sleep(5)
+        _async_check_subscribed_artists()
+    except Exception as exc:
+        logger.debug(f"Delayed artist release check error: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global cfg, state, sync_scheduler
@@ -669,6 +701,7 @@ async def lifespan(app: FastAPI):
     threading.Thread(target=attempt_auto_login, daemon=True).start()
     threading.Thread(target=_queue_worker, daemon=True).start()
     threading.Thread(target=_subsonic_poller_worker, daemon=True, name="subsonic-poller").start()
+    threading.Thread(target=_async_delayed_artist_check, daemon=True, name="artist-release-check-on-launch").start()
 
     sched_cfg = cfg.scheduler or {}
     interval = int(sched_cfg.get("interval_minutes", 60))
@@ -3751,6 +3784,7 @@ def _get_storefront() -> str:
 
 @app.get("/catalog/search")
 def get_catalog_search(
+    background_tasks: BackgroundTasks,
     q: str = Query(..., min_length=1),
     types: str = Query("songs,albums,artists"),
     limit: int = Query(8, ge=1, le=25),
@@ -3768,6 +3802,17 @@ def get_catalog_search(
 
     try:
         results = am_api.search_apple_music_catalog(q, bearer, storefront=storefront, types=type_list, limit=limit)
+        if state:
+            checker = _get_artist_release_checker()
+            if checker:
+                artists_found = results.get("artists", [])
+                if artists_found:
+                    subscribed_list = state.get_subscribed_artists()
+                    sub_map = {s.artist_id: s for s in subscribed_list}
+                    for a in artists_found:
+                        aid = str(a.get("id"))
+                        if aid and aid in sub_map:
+                            background_tasks.add_task(checker.check_artist, sub_map[aid])
         return results
     except Exception as exc:
         raise HTTPException(500, f"Catalog search failed: {exc}")
@@ -4264,6 +4309,204 @@ def trigger_navidrome_subsonic_sync_endpoint():
 def get_navidrome_subsonic_sync_status_endpoint():
     """Get the current Navidrome Subsonic sync engine status."""
     return _last_subsonic_sync_result
+
+
+# ── Subscribed Artists & Automatic Releases Endpoints ────────────────────────
+
+class SubscribeArtistRequest(BaseModel):
+    artist_id: str
+    name: str
+    service: str = "apple_music"
+    url: str = ""
+    artwork_url: Optional[str] = None
+    auto_download: bool = True
+
+
+class UpdateSubscriptionRequest(BaseModel):
+    auto_download: Optional[bool] = None
+
+
+@app.get("/api/v1/artists/subscriptions")
+def get_subscribed_artists_endpoint(service: Optional[str] = None):
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    artists = state.get_subscribed_artists(service=service)
+    return [
+        {
+            "id": a.id,
+            "artist_id": a.artist_id,
+            "name": a.name,
+            "service": a.service,
+            "url": a.url,
+            "artwork_url": a.artwork_url,
+            "auto_download": a.auto_download,
+            "subscribed_at": a.subscribed_at,
+            "last_checked": a.last_checked,
+            "known_releases_count": len(a.known_album_ids),
+        }
+        for a in artists
+    ]
+
+
+@app.post("/api/v1/artists/subscribe", status_code=201)
+def subscribe_artist_endpoint(req: SubscribeArtistRequest):
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    artist = state.subscribe_artist(
+        artist_id=req.artist_id,
+        name=req.name,
+        service=req.service,
+        url=req.url,
+        artwork_url=req.artwork_url,
+        auto_download=req.auto_download,
+    )
+    checker = _get_artist_release_checker()
+    check_result = None
+    if checker:
+        try:
+            check_result = checker.check_artist(artist)
+        except Exception as exc:
+            logger.debug(f"Immediate check for newly subscribed artist failed: {exc}")
+
+    return {
+        "artist": {
+            "id": artist.id,
+            "artist_id": artist.artist_id,
+            "name": artist.name,
+            "service": artist.service,
+            "url": artist.url,
+            "artwork_url": artist.artwork_url,
+            "auto_download": artist.auto_download,
+            "subscribed_at": artist.subscribed_at,
+            "last_checked": artist.last_checked,
+        },
+        "check_result": check_result,
+    }
+
+
+@app.delete("/api/v1/artists/subscriptions/{artist_id}", status_code=204)
+def unsubscribe_artist_endpoint(artist_id: str, service: str = "apple_music"):
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    ok = state.unsubscribe_artist(artist_id=artist_id, service=service)
+    if not ok:
+        raise HTTPException(404, f"Subscribed artist '{artist_id}' not found")
+    return None
+
+
+@app.patch("/api/v1/artists/subscriptions/{artist_id}")
+def update_subscription_endpoint(artist_id: str, req: UpdateSubscriptionRequest, service: str = "apple_music"):
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    updated = state.update_subscribed_artist(artist_id=artist_id, service=service, auto_download=req.auto_download)
+    if not updated:
+        raise HTTPException(404, f"Subscribed artist '{artist_id}' not found")
+    return {
+        "id": updated.id,
+        "artist_id": updated.artist_id,
+        "name": updated.name,
+        "service": updated.service,
+        "auto_download": updated.auto_download,
+        "last_checked": updated.last_checked,
+    }
+
+
+@app.post("/api/v1/artists/check-releases")
+def trigger_artist_check_endpoint(artist_id: Optional[str] = None, service: str = "apple_music"):
+    checker = _get_artist_release_checker()
+    if not checker:
+        raise HTTPException(503, "Release checker not ready")
+
+    if artist_id:
+        artist = state.get_subscribed_artist(artist_id, service=service)
+        if not artist:
+            raise HTTPException(404, f"Artist '{artist_id}' is not subscribed")
+        return checker.check_artist(artist)
+
+    return checker.check_all_subscribed_artists(service=service if service != "all" else None)
+
+
+@app.get("/api/v1/artists/pending-releases")
+def get_pending_releases_endpoint(status: str = "available"):
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    releases = state.get_pending_releases(status=status)
+    return [
+        {
+            "id": r.id,
+            "artist_id": r.artist_id,
+            "artist_name": r.artist_name,
+            "album_id": r.album_id,
+            "title": r.title,
+            "release_date": r.release_date,
+            "track_count": r.track_count,
+            "is_single": r.is_single,
+            "url": r.url,
+            "artwork_url": r.artwork_url,
+            "detected_at": r.detected_at,
+            "status": r.status,
+        }
+        for r in releases
+    ]
+
+
+@app.post("/api/v1/artists/pending-releases/{release_id}/download")
+def download_pending_release_endpoint(release_id: int):
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    rels = [r for r in state.get_pending_releases(status="all") if r.id == release_id]
+    if not rels:
+        raise HTTPException(404, f"Release {release_id} not found")
+    rel = rels[0]
+
+    job_id = state.enqueue_download_job(
+        url=rel.url,
+        title=f"{rel.title} ({rel.release_date[:4] if rel.release_date else 'New'})",
+        artist=rel.artist_name,
+        album=rel.title,
+        artwork_url=rel.artwork_url,
+        format="ALAC",
+        item_type="album",
+        total_tracks=rel.track_count,
+    )
+    state.update_pending_release_status(release_id, "downloading")
+    _queue_wake_event.set()
+    _broadcast_queue_event({"event": "queue_updated", "count": 1})
+    return {"queued": 1, "job_id": job_id}
+
+
+@app.post("/api/v1/artists/pending-releases/download-all")
+def download_all_pending_releases_endpoint():
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    available = state.get_pending_releases(status="available")
+    queued_ids = []
+    for rel in available:
+        job_id = state.enqueue_download_job(
+            url=rel.url,
+            title=f"{rel.title} ({rel.release_date[:4] if rel.release_date else 'New'})",
+            artist=rel.artist_name,
+            album=rel.title,
+            artwork_url=rel.artwork_url,
+            format="ALAC",
+            item_type="album",
+            total_tracks=rel.track_count,
+        )
+        state.update_pending_release_status(rel.id, "downloading")
+        queued_ids.append(job_id)
+
+    if queued_ids:
+        _queue_wake_event.set()
+        _broadcast_queue_event({"event": "queue_updated", "count": len(queued_ids)})
+    return {"queued": len(queued_ids), "job_ids": queued_ids}
+
+
+@app.post("/api/v1/artists/pending-releases/{release_id}/dismiss")
+def dismiss_pending_release_endpoint(release_id: int):
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    state.update_pending_release_status(release_id, "dismissed")
+    return {"status": "ok"}
 
 
 class TestWebhookRequest(BaseModel):

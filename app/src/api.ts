@@ -90,6 +90,43 @@ export interface Playlist {
   last_local_modified?: string | null;
 }
 
+export interface SubscribedArtist {
+  id: number;
+  artist_id: string;
+  name: string;
+  service: string;
+  url: string;
+  artwork_url?: string | null;
+  auto_download: boolean;
+  subscribed_at: string;
+  last_checked?: string | null;
+  known_releases_count: number;
+}
+
+export interface PendingRelease {
+  id: number;
+  artist_id: string;
+  artist_name: string;
+  album_id: string;
+  title: string;
+  release_date?: string | null;
+  track_count: number;
+  is_single: boolean;
+  url: string;
+  artwork_url?: string | null;
+  detected_at: string;
+  status: "available" | "downloading" | "downloaded" | "dismissed";
+}
+
+export interface ArtistCheckResult {
+  checked_artists_count?: number;
+  total_new_releases?: number;
+  total_enqueued?: number;
+  results?: any[];
+  new_releases?: any[];
+  enqueued_job_ids?: number[];
+}
+
 export interface Track {
   track_id: string;
   title: string;
@@ -1301,6 +1338,84 @@ export const api = {
       throw new Error(err.detail || `Token generation failed (${r.status})`);
     }
     return r.json();
+  },
+
+  artists: {
+    async getSubscriptions(service?: string): Promise<SubscribedArtist[]> {
+      const url = service ? `/api/v1/artists/subscriptions?service=${encodeURIComponent(service)}` : "/api/v1/artists/subscriptions";
+      const r = await request(url);
+      if (!r.ok) throw new Error(`Failed to fetch subscriptions (${r.status})`);
+      return r.json();
+    },
+
+    async subscribe(payload: {
+      artist_id: string;
+      name: string;
+      service?: string;
+      url?: string;
+      artwork_url?: string | null;
+      auto_download?: boolean;
+    }): Promise<{ artist: SubscribedArtist; check_result?: any }> {
+      const r = await request("/api/v1/artists/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.detail || `Subscribe failed (${r.status})`);
+      }
+      return r.json();
+    },
+
+    async unsubscribe(artist_id: string, service: string = "apple_music"): Promise<void> {
+      const r = await request(`/api/v1/artists/subscriptions/${encodeURIComponent(artist_id)}?service=${encodeURIComponent(service)}`, {
+        method: "DELETE",
+      });
+      if (!r.ok && r.status !== 204) throw new Error(`Unsubscribe failed (${r.status})`);
+    },
+
+    async updateSubscription(artist_id: string, auto_download: boolean, service: string = "apple_music"): Promise<any> {
+      const r = await request(`/api/v1/artists/subscriptions/${encodeURIComponent(artist_id)}?service=${encodeURIComponent(service)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_download }),
+      });
+      if (!r.ok) throw new Error(`Update subscription failed (${r.status})`);
+      return r.json();
+    },
+
+    async checkReleases(artist_id?: string, service: string = "apple_music"): Promise<ArtistCheckResult> {
+      const url = artist_id
+        ? `/api/v1/artists/check-releases?artist_id=${encodeURIComponent(artist_id)}&service=${encodeURIComponent(service)}`
+        : `/api/v1/artists/check-releases?service=${encodeURIComponent(service)}`;
+      const r = await request(url, { method: "POST" });
+      if (!r.ok) throw new Error(`Check releases failed (${r.status})`);
+      return r.json();
+    },
+
+    async getPendingReleases(status: string = "available"): Promise<PendingRelease[]> {
+      const r = await request(`/api/v1/artists/pending-releases?status=${encodeURIComponent(status)}`);
+      if (!r.ok) throw new Error(`Failed to fetch pending releases (${r.status})`);
+      return r.json();
+    },
+
+    async downloadPendingRelease(release_id: number): Promise<{ queued: number; job_id: number }> {
+      const r = await request(`/api/v1/artists/pending-releases/${release_id}/download`, { method: "POST" });
+      if (!r.ok) throw new Error(`Failed to download release (${r.status})`);
+      return r.json();
+    },
+
+    async downloadAllPendingReleases(): Promise<{ queued: number; job_ids: number[] }> {
+      const r = await request(`/api/v1/artists/pending-releases/download-all`, { method: "POST" });
+      if (!r.ok) throw new Error(`Failed to download releases (${r.status})`);
+      return r.json();
+    },
+
+    async dismissPendingRelease(release_id: number): Promise<void> {
+      const r = await request(`/api/v1/artists/pending-releases/${release_id}/dismiss`, { method: "POST" });
+      if (!r.ok) throw new Error(`Failed to dismiss release (${r.status})`);
+    },
   },
 
   queue: {

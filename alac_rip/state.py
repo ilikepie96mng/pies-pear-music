@@ -1,9 +1,10 @@
-import sqlite3
 import json
-from dataclasses import dataclass
+import re
+import sqlite3
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -42,6 +43,36 @@ class SyncRun:
     error_count: int
     log_path: str
     error_message: Optional[str]
+
+
+@dataclass
+class SubscribedArtist:
+    id: int
+    artist_id: str
+    name: str
+    service: str = "apple_music"
+    url: str = ""
+    artwork_url: Optional[str] = None
+    auto_download: bool = True
+    subscribed_at: str = ""
+    last_checked: Optional[str] = None
+    known_album_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PendingRelease:
+    id: int
+    artist_id: str
+    artist_name: str
+    album_id: str
+    title: str
+    release_date: Optional[str] = None
+    track_count: int = 0
+    is_single: bool = False
+    url: str = ""
+    artwork_url: Optional[str] = None
+    detected_at: str = ""
+    status: str = "available"  # "available" | "downloading" | "downloaded" | "dismissed"
 
 
 class StateManager:
@@ -194,6 +225,40 @@ class StateManager:
                     updated_at  TEXT NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS subscribed_artists (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    artist_id       TEXT NOT NULL,
+                    name            TEXT NOT NULL,
+                    service         TEXT NOT NULL DEFAULT 'apple_music',
+                    url             TEXT NOT NULL DEFAULT '',
+                    artwork_url     TEXT,
+                    auto_download   INTEGER NOT NULL DEFAULT 1,
+                    subscribed_at   TEXT NOT NULL,
+                    last_checked    TEXT,
+                    known_album_ids TEXT NOT NULL DEFAULT '[]',
+                    UNIQUE(artist_id, service)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_subscribed_artists_svc ON subscribed_artists (service, name)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pending_artist_releases (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    artist_id       TEXT NOT NULL,
+                    artist_name     TEXT NOT NULL,
+                    album_id        TEXT NOT NULL,
+                    title           TEXT NOT NULL,
+                    release_date    TEXT,
+                    track_count     INTEGER NOT NULL DEFAULT 0,
+                    is_single       INTEGER NOT NULL DEFAULT 0,
+                    url             TEXT NOT NULL,
+                    artwork_url     TEXT,
+                    detected_at     TEXT NOT NULL,
+                    status          TEXT NOT NULL DEFAULT 'available',
+                    UNIQUE(artist_id, album_id)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pending_releases_status ON pending_artist_releases (status, detected_at)")
 
     def auto_rebase_paths(self, current_music_dir: Path) -> int:
         """
@@ -1503,5 +1568,245 @@ class StateManager:
                 """
             )
             return cur.rowcount
+
+    # ── Subscribed Artists & Automatic Releases ──────────────────────────────
+
+    def subscribe_artist(
+        self,
+        artist_id: str,
+        name: str,
+        service: str = "apple_music",
+        url: str = "",
+        artwork_url: Optional[str] = None,
+        auto_download: bool = True,
+        known_album_ids: Optional[list[str]] = None,
+    ) -> SubscribedArtist:
+        now = datetime.now().isoformat()
+        known_json = json.dumps(list(known_album_ids) if known_album_ids is not None else [])
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO subscribed_artists (artist_id, name, service, url, artwork_url, auto_download, subscribed_at, last_checked, known_album_ids)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(artist_id, service) DO UPDATE SET
+                    name = excluded.name,
+                    url = CASE WHEN excluded.url != '' THEN excluded.url ELSE subscribed_artists.url END,
+                    artwork_url = CASE WHEN excluded.artwork_url IS NOT NULL THEN excluded.artwork_url ELSE subscribed_artists.artwork_url END,
+                    auto_download = excluded.auto_download
+                """,
+                (artist_id, name, service, url, artwork_url, 1 if auto_download else 0, now, None, known_json),
+            )
+            row = conn.execute(
+                "SELECT id, artist_id, name, service, url, artwork_url, auto_download, subscribed_at, last_checked, known_album_ids FROM subscribed_artists WHERE artist_id = ? AND service = ?",
+                (artist_id, service),
+            ).fetchone()
+            return SubscribedArtist(
+                id=row[0],
+                artist_id=row[1],
+                name=row[2],
+                service=row[3],
+                url=row[4],
+                artwork_url=row[5],
+                auto_download=bool(row[6]),
+                subscribed_at=row[7],
+                last_checked=row[8],
+                known_album_ids=json.loads(row[9] or "[]"),
+            )
+
+    def unsubscribe_artist(self, artist_id: str, service: str = "apple_music") -> bool:
+        with self._conn() as conn:
+            cur = conn.execute(
+                "DELETE FROM subscribed_artists WHERE artist_id = ? AND service = ?",
+                (artist_id, service),
+            )
+            return cur.rowcount > 0
+
+    def get_subscribed_artists(self, service: Optional[str] = None) -> list[SubscribedArtist]:
+        with self._conn() as conn:
+            if service:
+                rows = conn.execute(
+                    "SELECT id, artist_id, name, service, url, artwork_url, auto_download, subscribed_at, last_checked, known_album_ids FROM subscribed_artists WHERE service = ? ORDER BY name ASC",
+                    (service,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, artist_id, name, service, url, artwork_url, auto_download, subscribed_at, last_checked, known_album_ids FROM subscribed_artists ORDER BY name ASC"
+                ).fetchall()
+            return [
+                SubscribedArtist(
+                    id=r[0],
+                    artist_id=r[1],
+                    name=r[2],
+                    service=r[3],
+                    url=r[4],
+                    artwork_url=r[5],
+                    auto_download=bool(r[6]),
+                    subscribed_at=r[7],
+                    last_checked=r[8],
+                    known_album_ids=json.loads(r[9] or "[]"),
+                )
+                for r in rows
+            ]
+
+    def get_subscribed_artist(self, artist_id: str, service: str = "apple_music") -> Optional[SubscribedArtist]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT id, artist_id, name, service, url, artwork_url, auto_download, subscribed_at, last_checked, known_album_ids FROM subscribed_artists WHERE artist_id = ? AND service = ?",
+                (artist_id, service),
+            ).fetchone()
+            if not row:
+                return None
+            return SubscribedArtist(
+                id=row[0],
+                artist_id=row[1],
+                name=row[2],
+                service=row[3],
+                url=row[4],
+                artwork_url=row[5],
+                auto_download=bool(row[6]),
+                subscribed_at=row[7],
+                last_checked=row[8],
+                known_album_ids=json.loads(row[9] or "[]"),
+            )
+
+    def update_subscribed_artist(
+        self,
+        artist_id: str,
+        service: str = "apple_music",
+        auto_download: Optional[bool] = None,
+        last_checked: Optional[str] = None,
+        known_album_ids: Optional[Any] = None,
+    ) -> Optional[SubscribedArtist]:
+        with self._conn() as conn:
+            if auto_download is not None:
+                conn.execute(
+                    "UPDATE subscribed_artists SET auto_download = ? WHERE artist_id = ? AND service = ?",
+                    (1 if auto_download else 0, artist_id, service),
+                )
+            if last_checked is not None:
+                conn.execute(
+                    "UPDATE subscribed_artists SET last_checked = ? WHERE artist_id = ? AND service = ?",
+                    (last_checked, artist_id, service),
+                )
+            if known_album_ids is not None:
+                conn.execute(
+                    "UPDATE subscribed_artists SET known_album_ids = ? WHERE artist_id = ? AND service = ?",
+                    (json.dumps(list(known_album_ids)), artist_id, service),
+                )
+        return self.get_subscribed_artist(artist_id, service)
+
+    def record_pending_release(
+        self,
+        artist_id: str,
+        artist_name: str,
+        album_id: str,
+        title: str,
+        release_date: Optional[str] = None,
+        track_count: int = 0,
+        is_single: bool = False,
+        url: str = "",
+        artwork_url: Optional[str] = None,
+    ) -> PendingRelease:
+        now = datetime.now().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO pending_artist_releases (
+                    artist_id, artist_name, album_id, title, release_date, track_count, is_single, url, artwork_url, detected_at, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'available')
+                ON CONFLICT(artist_id, album_id) DO UPDATE SET
+                    title = excluded.title,
+                    release_date = excluded.release_date,
+                    track_count = excluded.track_count,
+                    url = excluded.url,
+                    artwork_url = excluded.artwork_url
+                """,
+                (artist_id, artist_name, album_id, title, release_date, track_count, 1 if is_single else 0, url, artwork_url, now),
+            )
+            row = conn.execute(
+                "SELECT id, artist_id, artist_name, album_id, title, release_date, track_count, is_single, url, artwork_url, detected_at, status FROM pending_artist_releases WHERE artist_id = ? AND album_id = ?",
+                (artist_id, album_id),
+            ).fetchone()
+            return PendingRelease(
+                id=row[0],
+                artist_id=row[1],
+                artist_name=row[2],
+                album_id=row[3],
+                title=row[4],
+                release_date=row[5],
+                track_count=row[6],
+                is_single=bool(row[7]),
+                url=row[8],
+                artwork_url=row[9],
+                detected_at=row[10],
+                status=row[11],
+            )
+
+    def get_pending_releases(self, status: str = "available") -> list[PendingRelease]:
+        with self._conn() as conn:
+            if status == "all":
+                rows = conn.execute(
+                    "SELECT id, artist_id, artist_name, album_id, title, release_date, track_count, is_single, url, artwork_url, detected_at, status FROM pending_artist_releases ORDER BY detected_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, artist_id, artist_name, album_id, title, release_date, track_count, is_single, url, artwork_url, detected_at, status FROM pending_artist_releases WHERE status = ? ORDER BY detected_at DESC",
+                    (status,),
+                ).fetchall()
+            return [
+                PendingRelease(
+                    id=r[0],
+                    artist_id=r[1],
+                    artist_name=r[2],
+                    album_id=r[3],
+                    title=r[4],
+                    release_date=r[5],
+                    track_count=r[6],
+                    is_single=bool(r[7]),
+                    url=r[8],
+                    artwork_url=r[9],
+                    detected_at=r[10],
+                    status=r[11],
+                )
+                for r in rows
+            ]
+
+    def update_pending_release_status(self, release_id: int, status: str) -> bool:
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE pending_artist_releases SET status = ? WHERE id = ?",
+                (status, release_id),
+            )
+            return cur.rowcount > 0
+
+    def has_album_in_library(self, artist: str, album_title: str) -> bool:
+        if not artist or not album_title:
+            return False
+        a_clean = artist.strip().lower()
+        t_clean = album_title.strip().lower()
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM tracks
+                WHERE LOWER(artist) = ? AND LOWER(album) = ?
+                LIMIT 1
+                """,
+                (a_clean, t_clean),
+            ).fetchone()
+            if row:
+                return True
+            t_simple = re.sub(r"\s*[\(\[].*?[\)\]]", "", t_clean).strip()
+            if t_simple and t_simple != t_clean:
+                row2 = conn.execute(
+                    """
+                    SELECT 1 FROM tracks
+                    WHERE LOWER(artist) = ? AND LOWER(album) LIKE ?
+                    LIMIT 1
+                    """,
+                    (a_clean, f"%{t_simple}%"),
+                ).fetchone()
+                if row2:
+                    return True
+        return False
 
 
