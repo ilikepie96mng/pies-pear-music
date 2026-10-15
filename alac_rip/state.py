@@ -24,6 +24,10 @@ class Playlist:
     url: str
     last_synced: Optional[str]
     paused: bool = False
+    staging_folder: Optional[str] = None
+    navidrome_id: Optional[str] = None
+    remote_changed_at: Optional[str] = None
+    last_local_modified: Optional[str] = None
 
 
 @dataclass
@@ -99,6 +103,13 @@ class StateManager:
                 conn.execute("ALTER TABLE playlists ADD COLUMN paused INTEGER NOT NULL DEFAULT 0")
             if "staging_folder" not in cols:
                 conn.execute("ALTER TABLE playlists ADD COLUMN staging_folder TEXT")
+            if "navidrome_id" not in cols:
+                conn.execute("ALTER TABLE playlists ADD COLUMN navidrome_id TEXT")
+            if "remote_changed_at" not in cols:
+                conn.execute("ALTER TABLE playlists ADD COLUMN remote_changed_at TEXT")
+            if "last_local_modified" not in cols:
+                conn.execute("ALTER TABLE playlists ADD COLUMN last_local_modified TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_playlists_navidrome_id ON playlists(navidrome_id)")
             # am_track_id migration
             track_cols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
             if "am_track_id" not in track_cols:
@@ -585,12 +596,159 @@ class StateManager:
             conn.execute("DELETE FROM sync_runs WHERE playlist_name = ?", (name,))
             conn.execute("DELETE FROM playlists WHERE name = ?", (name,))
 
+    def get_playlist(self, name: str) -> Optional[Playlist]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT name, url, last_synced, paused, staging_folder, navidrome_id, remote_changed_at, last_local_modified FROM playlists WHERE name = ?",
+                (name,),
+            ).fetchone()
+            if not row:
+                return None
+            return Playlist(
+                name=row[0],
+                url=row[1],
+                last_synced=row[2],
+                paused=bool(row[3]),
+                staging_folder=row[4],
+                navidrome_id=row[5],
+                remote_changed_at=row[6],
+                last_local_modified=row[7],
+            )
+
+    def get_playlist_by_navidrome_id(self, navidrome_id: str) -> Optional[Playlist]:
+        if not navidrome_id:
+            return None
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT name, url, last_synced, paused, staging_folder, navidrome_id, remote_changed_at, last_local_modified FROM playlists WHERE navidrome_id = ?",
+                (navidrome_id,),
+            ).fetchone()
+            if not row:
+                return None
+            return Playlist(
+                name=row[0],
+                url=row[1],
+                last_synced=row[2],
+                paused=bool(row[3]),
+                staging_folder=row[4],
+                navidrome_id=row[5],
+                remote_changed_at=row[6],
+                last_local_modified=row[7],
+            )
+
     def get_playlists(self) -> list[Playlist]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT name, url, last_synced, paused FROM playlists"
+                "SELECT name, url, last_synced, paused, staging_folder, navidrome_id, remote_changed_at, last_local_modified FROM playlists"
             ).fetchall()
-            return [Playlist(name=r[0], url=r[1], last_synced=r[2], paused=bool(r[3])) for r in rows]
+            return [
+                Playlist(
+                    name=r[0],
+                    url=r[1],
+                    last_synced=r[2],
+                    paused=bool(r[3]),
+                    staging_folder=r[4],
+                    navidrome_id=r[5],
+                    remote_changed_at=r[6],
+                    last_local_modified=r[7],
+                )
+                for r in rows
+            ]
+
+    def link_playlist_navidrome(self, name: str, navidrome_id: str, remote_changed_at: Optional[str] = None) -> None:
+        with self._conn() as conn:
+            if remote_changed_at:
+                conn.execute(
+                    "UPDATE playlists SET navidrome_id = ?, remote_changed_at = ? WHERE name = ?",
+                    (navidrome_id, remote_changed_at, name),
+                )
+            else:
+                conn.execute(
+                    "UPDATE playlists SET navidrome_id = ? WHERE name = ?",
+                    (navidrome_id, name),
+                )
+
+    def update_playlist_remote_metadata(self, name: str, remote_changed_at: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE playlists SET remote_changed_at = ? WHERE name = ?",
+                (remote_changed_at, name),
+            )
+
+    def touch_playlist_local_modified(self, name: str, modified_at: Optional[str] = None) -> None:
+        ts = modified_at or datetime.now().isoformat()
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE playlists SET last_local_modified = ? WHERE name = ?",
+                (ts, name),
+            )
+
+    def set_playlist_tracks(self, playlist_name: str, track_ids: list[str]) -> None:
+        """Atomically replace all tracks in a playlist."""
+        with self._conn() as conn:
+            conn.execute("DELETE FROM playlist_tracks WHERE playlist_name = ?", (playlist_name,))
+            for tid in track_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO playlist_tracks (playlist_name, track_id) VALUES (?, ?)",
+                    (playlist_name, tid),
+                )
+
+    def remove_track_from_playlist(self, playlist_name: str, track_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_name = ? AND track_id = ?",
+                (playlist_name, track_id),
+            )
+
+    def find_track_by_path(self, path: str) -> Optional[Track]:
+        """Look up a track by matching its relative or absolute path."""
+        if not path:
+            return None
+        norm = path.replace("\\", "/").strip().lstrip("/")
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url, am_track_id FROM tracks WHERE local_path = ?",
+                (path,),
+            ).fetchone()
+            if row:
+                return Track(
+                    track_id=row[0], title=row[1], artist=row[2], album=row[3],
+                    local_path=row[4], downloaded_at=row[5], artwork_url=row[6], am_track_id=row[7]
+                )
+            rows = conn.execute(
+                "SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url, am_track_id FROM tracks"
+            ).fetchall()
+            for r in rows:
+                stored = (r[4] or "").replace("\\", "/")
+                if stored.endswith(norm) or norm.endswith(stored.lstrip("/")):
+                    return Track(
+                        track_id=r[0], title=r[1], artist=r[2], album=r[3],
+                        local_path=r[4], downloaded_at=r[5], artwork_url=r[6], am_track_id=r[7]
+                    )
+        return None
+
+    def find_track_by_title_artist(self, title: str, artist: str) -> Optional[Track]:
+        """Look up track by artist and title case-insensitively."""
+        if not title or not artist:
+            return None
+        t_clean = title.strip().lower()
+        a_clean = artist.strip().lower()
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT track_id, title, artist, album, local_path, downloaded_at, artwork_url, am_track_id
+                FROM tracks
+                WHERE LOWER(title) = ? AND LOWER(artist) = ?
+                LIMIT 1
+                """,
+                (t_clean, a_clean),
+            ).fetchone()
+            if row:
+                return Track(
+                    track_id=row[0], title=row[1], artist=row[2], album=row[3],
+                    local_path=row[4], downloaded_at=row[5], artwork_url=row[6], am_track_id=row[7]
+                )
+        return None
 
     def rename_playlist(self, old_name: str, new_name: str) -> None:
         with self._conn() as conn:

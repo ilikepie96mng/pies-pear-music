@@ -85,6 +85,9 @@ export interface Playlist {
   last_synced: string | null;
   paused: boolean;
   thumbnail_url: string | null;
+  navidrome_id?: string | null;
+  remote_changed_at?: string | null;
+  last_local_modified?: string | null;
 }
 
 export interface Track {
@@ -754,6 +757,40 @@ export const api = {
     if (!r.ok) {
       const text = await r.text();
       return { success: false, message: `Server error (${r.status}): ${text}` };
+    }
+    return r.json();
+  },
+
+  async syncNavidromePlaylists(): Promise<{
+    status: string;
+    imported_from_remote?: number;
+    updated_local?: number;
+    pushed_to_remote?: number;
+    errors?: string[];
+    message?: string;
+  }> {
+    const r = await request("/api/v1/integrations/navidrome/sync", {
+      method: "POST",
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Navidrome sync failed (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async getNavidromeSyncStatus(): Promise<{
+    last_sync_time: string | null;
+    status: string;
+    imported_from_remote: number;
+    updated_local: number;
+    pushed_to_remote: number;
+    errors: string[];
+  }> {
+    const r = await request("/api/v1/integrations/navidrome/sync-status");
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch sync status (${r.status})`);
     }
     return r.json();
   },

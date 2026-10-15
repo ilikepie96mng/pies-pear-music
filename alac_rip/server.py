@@ -38,6 +38,7 @@ from alac_rip.metadata import read_tags
 from alac_rip.organizer import sanitize
 from alac_rip.scheduler import BackgroundSyncScheduler
 from alac_rip.state import StateManager
+from alac_rip.subsonic_sync import SubsonicClient, SubsonicSyncEngine, SubsonicError
 from alac_rip.sync import StagingValidationError, SyncEngine, validate_staging_dir
 
 # Ensure standard user tool directories (Linuxbrew, local bin, go bin) are present in PATH
@@ -574,6 +575,87 @@ def resolve_db_path(state_dir: Path) -> Path:
     return state_dir / "downloaded.db"
 
 
+# ── Navidrome Subsonic Bidirectional Playlist Sync ───────────────────────────
+
+_last_subsonic_sync_result: dict[str, Any] = {
+    "last_sync_time": None,
+    "status": "idle",
+    "imported_from_remote": 0,
+    "updated_local": 0,
+    "pushed_to_remote": 0,
+    "errors": [],
+}
+
+
+def get_navidrome_client() -> Optional[SubsonicClient]:
+    if cfg is None:
+        return None
+    nav = (cfg.integrations or {}).get("navidrome", {})
+    if not nav.get("enabled"):
+        return None
+    server_url = nav.get("server_url", "")
+    user = nav.get("user", "")
+    token = nav.get("token", "")
+    salt = nav.get("salt", "")
+    if not server_url or not user or not token:
+        return None
+    return SubsonicClient(server_url=server_url, user=user, token=token, salt=salt)
+
+
+def run_navidrome_subsonic_sync() -> dict[str, Any]:
+    global _last_subsonic_sync_result
+    client = get_navidrome_client()
+    if not client:
+        return {"status": "skipped", "message": "Navidrome integration not enabled or configured"}
+    if state is None:
+        return {"status": "skipped", "message": "Library state not ready"}
+
+    music_dir = cfg.music_dir if cfg else None
+    engine = SubsonicSyncEngine(state=state, client=client, music_dir=music_dir)
+    res = engine.sync_all()
+    _last_subsonic_sync_result = {
+        "last_sync_time": datetime.now().isoformat(),
+        "status": res.get("status", "ok"),
+        "imported_from_remote": res.get("imported_from_remote", 0),
+        "updated_local": res.get("updated_local", 0),
+        "pushed_to_remote": res.get("pushed_to_remote", 0),
+        "errors": res.get("errors", []),
+    }
+    return res
+
+
+def _async_push_to_navidrome(name: str) -> None:
+    try:
+        client = get_navidrome_client()
+        if client and state:
+            music_dir = cfg.music_dir if cfg else None
+            engine = SubsonicSyncEngine(state=state, client=client, music_dir=music_dir)
+            engine.push_local_playlist_to_remote(name)
+    except Exception as exc:
+        logger.debug(f"Outbound Navidrome sync for '{name}' failed: {exc}")
+
+
+def _async_delete_from_navidrome(navidrome_id: str) -> None:
+    try:
+        client = get_navidrome_client()
+        if client and navidrome_id:
+            client.delete_playlist(navidrome_id)
+    except Exception as exc:
+        logger.debug(f"Outbound Navidrome delete for '{navidrome_id}' failed: {exc}")
+
+
+def _subsonic_poller_worker() -> None:
+    while True:
+        try:
+            time.sleep(30)
+            if cfg and state:
+                nav = (cfg.integrations or {}).get("navidrome", {})
+                if nav.get("enabled") and nav.get("bidirectional_sync", True):
+                    run_navidrome_subsonic_sync()
+        except Exception as e:
+            logger.debug(f"Subsonic poller loop error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global cfg, state, sync_scheduler
@@ -586,6 +668,7 @@ async def lifespan(app: FastAPI):
         pass
     threading.Thread(target=attempt_auto_login, daemon=True).start()
     threading.Thread(target=_queue_worker, daemon=True).start()
+    threading.Thread(target=_subsonic_poller_worker, daemon=True, name="subsonic-poller").start()
 
     sched_cfg = cfg.scheduler or {}
     interval = int(sched_cfg.get("interval_minutes", 60))
@@ -885,7 +968,10 @@ def _playlist_dict(p) -> dict:
         "url": p.url,
         "last_synced": p.last_synced,
         "paused": p.paused,
-        "thumbnail_url": state.get_playlist_thumbnail(p.name),
+        "navidrome_id": getattr(p, "navidrome_id", None),
+        "remote_changed_at": getattr(p, "remote_changed_at", None),
+        "last_local_modified": getattr(p, "last_local_modified", None),
+        "thumbnail_url": state.get_playlist_thumbnail(p.name) if state else None,
     }
 
 
@@ -902,15 +988,22 @@ def add_playlist(body: PlaylistIn):
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     state.add_playlist(name, url)
-    # Fetch the newly added playlist and return via _playlist_dict for consistency
-    from alac_rip.state import Playlist
-    playlist = Playlist(name=name, url=url, last_synced=None, paused=False)
+    state.touch_playlist_local_modified(name)
+    threading.Thread(target=_async_push_to_navidrome, args=(name,), daemon=True).start()
+    playlist = state.get_playlist(name)
+    if not playlist:
+        from alac_rip.state import Playlist
+        playlist = Playlist(name=name, url=url, last_synced=None, paused=False)
     return _playlist_dict(playlist)
 
 
 @app.delete("/playlists/{name}", status_code=204)
 def delete_playlist(name: str):
+    pl = state.get_playlist(name) if state else None
+    nav_id = getattr(pl, "navidrome_id", None) if pl else None
     state.delete_playlist(name)
+    if nav_id:
+        threading.Thread(target=_async_delete_from_navidrome, args=(nav_id,), daemon=True).start()
     return None
 
 
@@ -935,7 +1028,9 @@ def patch_playlist(name: str, body: PlaylistPatch):
         name = new_name
     if body.paused is not None:
         state.set_playlist_paused(name, body.paused)
-    updated = {p.name: p for p in state.get_playlists()}[name]
+    state.touch_playlist_local_modified(name)
+    threading.Thread(target=_async_push_to_navidrome, args=(name,), daemon=True).start()
+    updated = state.get_playlist(name) or {p.name: p for p in state.get_playlists()}[name]
     return _playlist_dict(updated)
 
 
@@ -1372,10 +1467,12 @@ def _run_job(job: dict) -> None:
         except Exception as exc:
             write_log(f"[playlist] warning: could not write m3u8 playlist: {exc}")
         state.update_playlist_synced(playlist_name)
+        state.touch_playlist_local_modified(playlist_name)
         state.record_sync_run(
             playlist_name, started_at.isoformat(), datetime.now().isoformat(), "success",
             result.new_count, result.skipped_count, result.error_count, str(log_path),
         )
+        threading.Thread(target=_async_push_to_navidrome, args=(playlist_name,), daemon=True).start()
 
     # Trigger media server webhooks (Jellyfin / Navidrome) asynchronously
     try:
@@ -2073,6 +2170,10 @@ def deduplicate_playlist(name: str):
             ).start()
     except Exception as e:
         logger.warning(f"Webhook dispatch error after deduplication: {e}")
+
+    if result.get("removed", 0) > 0:
+        state.touch_playlist_local_modified(name)
+        threading.Thread(target=_async_push_to_navidrome, args=(name,), daemon=True).start()
 
     return result
 
@@ -3617,7 +3718,9 @@ def post_gemini_save_playlist(req: GeminiSavePlaylistRequest):
         state.add_track_to_playlist(name, tid)
 
     from alac_rip.state import Playlist
-    playlist = Playlist(name=name, url=f"https://music.apple.com/us/playlist/gemini-{prompt_tag}", last_synced=None, paused=False)
+    state.touch_playlist_local_modified(name)
+    threading.Thread(target=_async_push_to_navidrome, args=(name,), daemon=True).start()
+    playlist = state.get_playlist(name) or Playlist(name=name, url=f"https://music.apple.com/us/playlist/gemini-{prompt_tag}", last_synced=None, paused=False)
     return _playlist_dict(playlist)
 
 
@@ -4151,6 +4254,18 @@ def generate_navidrome_token_endpoint(req: GenerateNavidromeTokenRequest):
     return smb_helper.generate_subsonic_token(req.password)
 
 
+@app.post("/api/v1/integrations/navidrome/sync")
+def trigger_navidrome_subsonic_sync_endpoint():
+    """Trigger an immediate bidirectional Subsonic playlist sync with Navidrome."""
+    return run_navidrome_subsonic_sync()
+
+
+@app.get("/api/v1/integrations/navidrome/sync-status")
+def get_navidrome_subsonic_sync_status_endpoint():
+    """Get the current Navidrome Subsonic sync engine status."""
+    return _last_subsonic_sync_result
+
+
 class TestWebhookRequest(BaseModel):
     service: str  # "discord", "telegram", "gotify", "jellyfin", "navidrome"
     url: Optional[str] = None
@@ -4265,22 +4380,21 @@ def _find_web_dir() -> Optional[Path]:
 
 
 _web_dir = _find_web_dir()
-if _web_dir:
-    if (_web_dir / "_app").exists():
-        app.mount("/_app", StaticFiles(directory=str(_web_dir / "_app")), name="app_assets")
-    if (_web_dir / "favicon.png").exists():
-        @app.get("/favicon.png", include_in_schema=False)
-        def favicon():
-            return FileResponse(_web_dir / "favicon.png")
+if _web_dir and (_web_dir / "_app").exists():
+    app.mount("/_app", StaticFiles(directory=str(_web_dir / "_app")), name="app_assets")
 
-    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
-    async def serve_spa_frontend(full_path: str):
-        if full_path.startswith("api/") or full_path in ("health", "diagnostics", "metrics", "docs", "openapi.json"):
-            raise HTTPException(status_code=404, detail="Not Found")
-        file_path = _web_dir / full_path
-        if file_path.is_file():
-            return FileResponse(file_path)
-        return FileResponse(_web_dir / "index.html")
+
+@app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+async def serve_spa_frontend(full_path: str):
+    target_dir = _web_dir or (cfg.web_dir if cfg and cfg.web_dir else None) or _find_web_dir()
+    if not target_dir or not (target_dir / "index.html").exists():
+        raise HTTPException(status_code=404, detail="Not Found")
+    if full_path.startswith("api/") or full_path in ("health", "diagnostics", "metrics", "docs", "openapi.json"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    file_path = target_dir / full_path
+    if full_path and file_path.is_file():
+        return FileResponse(file_path)
+    return FileResponse(target_dir / "index.html")
 
 
 def _read_sidecar_handshake(value: str) -> tuple[int, str]:

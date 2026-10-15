@@ -48,6 +48,10 @@
   let naviGenerating = $state(false);
   let naviGenResult = $state<string | null>(null);
 
+  // Navidrome sync state
+  let naviSyncing = $state(false);
+  let naviSyncStatus = $state<string | null>(null);
+
   // Database import/export state
   let dbImporting = $state(false);
   let dbImportResult = $state<string | null>(null);
@@ -130,6 +134,25 @@
     }
   }
 
+  async function syncNavidromeNow() {
+    naviSyncing = true;
+    naviSyncStatus = null;
+    try {
+      const res = await api.syncNavidromePlaylists();
+      if (res.status === "ok") {
+        naviSyncStatus = `✓ Synced! (Imported: ${res.imported_from_remote ?? 0}, Updated: ${res.updated_local ?? 0}, Pushed: ${res.pushed_to_remote ?? 0})`;
+      } else if (res.status === "skipped") {
+        naviSyncStatus = `ℹ ${res.message || "Skipped"}`;
+      } else {
+        naviSyncStatus = `✗ Error: ${res.message || (res.errors && res.errors.join(", ")) || "Sync failed"}`;
+      }
+    } catch (e) {
+      naviSyncStatus = `✗ Error: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      naviSyncing = false;
+    }
+  }
+
   async function testDiscord() {
     discordTesting = true;
     discordStatus = null;
@@ -204,7 +227,8 @@
       cfg.integrations = {};
     }
     if (!cfg.integrations.jellyfin) cfg.integrations.jellyfin = { enabled: false, server_url: "", api_key: "", auto_refresh: true };
-    if (!cfg.integrations.navidrome) cfg.integrations.navidrome = { enabled: false, server_url: "", user: "", token: "", salt: "", auto_refresh: true };
+    if (!cfg.integrations.navidrome) cfg.integrations.navidrome = { enabled: false, server_url: "", user: "", token: "", salt: "", auto_refresh: true, bidirectional_sync: true };
+    if (cfg.integrations.navidrome.bidirectional_sync === undefined) cfg.integrations.navidrome.bidirectional_sync = true;
     if (!cfg.integrations.discord) cfg.integrations.discord = { enabled: false, webhook_url: "" };
     if (!cfg.integrations.telegram) cfg.integrations.telegram = { enabled: false, bot_token: "", chat_id: "" };
     if (!cfg.integrations.gotify) cfg.integrations.gotify = { enabled: false, server_url: "", token: "" };
@@ -789,6 +813,33 @@
               <input type="checkbox" id="navi-auto" bind:checked={cfg.integrations.navidrome.auto_refresh} class="accent-amber-400" />
               <label for="navi-auto" class="text-[11px] text-zinc-400">Trigger startScan on sync / download completion</label>
             </div>
+
+            <div class="flex items-center justify-between pt-1 border-t border-[rgba(255,255,255,0.06)]">
+              <div class="flex items-center gap-2">
+                <input type="checkbox" id="navi-bisync" bind:checked={cfg.integrations.navidrome.bidirectional_sync} class="accent-amber-400" />
+                <label for="navi-bisync" class="text-[11px] text-zinc-300 font-medium cursor-pointer">
+                  Bidirectional Playlist Sync (Symfonium / Feishin ⇄ Navidrome ⇄ Pear Music)
+                </label>
+              </div>
+              <button
+                type="button"
+                onclick={syncNavidromeNow}
+                disabled={naviSyncing || !cfg.integrations.navidrome.enabled}
+                class="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-zinc-800 hover:bg-zinc-700 text-amber-300 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+              >
+                {#if naviSyncing}
+                  <span class="w-2.5 h-2.5 border border-amber-300 border-t-transparent rounded-full animate-spin"></span>
+                  <span>Syncing…</span>
+                {:else}
+                  <span>🔄 Sync Playlists Now</span>
+                {/if}
+              </button>
+            </div>
+            {#if naviSyncStatus}
+              <div class="text-[11px] font-mono {naviSyncStatus.startsWith('✓') ? 'text-emerald-400 font-bold' : naviSyncStatus.startsWith('ℹ') ? 'text-amber-300' : 'text-red-400'}">
+                {naviSyncStatus}
+              </div>
+            {/if}
           </div>
         {/if}
 
