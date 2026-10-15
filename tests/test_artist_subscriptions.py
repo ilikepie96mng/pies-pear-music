@@ -296,6 +296,51 @@ class TestArtistReleaseChecker(unittest.TestCase):
         self.assertEqual(result["new_releases_count"], 0)
         self.assertEqual(result["enqueued_count"], 0)
 
+    @patch("alac_rip.artist_sync._fetch_tidal_artist_albums")
+    def test_check_tidal_artist_with_auto_download(self, mock_fetch):
+        # Create checker with mock tidal client
+        mock_tidal_client = MagicMock()
+        tidal_checker = ArtistReleaseChecker(
+            state=self.state,
+            storefront="us",
+            on_queue_wake=self.queue_wake,
+            on_broadcast_event=self.broadcast_event,
+            tidal_client=mock_tidal_client,
+        )
+
+        artist = self.state.subscribe_artist(
+            artist_id="tidal:artist:12345",
+            name="Daft Punk",
+            service="tidal",
+            auto_download=True,
+            known_album_ids=["tidal:album:111"],
+        )
+
+        mock_fetch.return_value = (
+            "Daft Punk",
+            "https://tidal.com/browse/artist/12345",
+            "https://resources.tidal.com/images/daftpunk/1280x1280.jpg",
+            [
+                {"id": "tidal:album:111", "title": "Homework", "artist": "Daft Punk", "url": "https://tidal.com/browse/album/111", "provider": "tidal"},
+                {"id": "tidal:album:222", "title": "Discovery", "artist": "Daft Punk", "url": "https://tidal.com/browse/album/222", "provider": "tidal"},
+            ],
+        )
+
+        result = tidal_checker.check_artist(artist)
+        self.assertEqual(result["new_releases_count"], 1)
+        self.assertEqual(result["enqueued_count"], 1)
+        self.assertEqual(len(result["enqueued_job_ids"]), 1)
+
+        # Queue wake should have been called
+        self.queue_wake.assert_called()
+
+        # Job in queue should be FLAC format
+        jobs = self.state.get_queue_jobs()
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Discovery (New)")
+        self.assertEqual(jobs[0]["artist"], "Daft Punk")
+        self.assertEqual(jobs[0]["format"], "FLAC")
+
 
 from fastapi.testclient import TestClient
 from alac_rip import server
@@ -385,6 +430,30 @@ class TestArtistServerEndpoints(unittest.TestCase):
         get_res_after = self.client.get("/api/v1/artists/pending-releases")
         self.assertEqual(get_res_after.status_code, 200)
         self.assertEqual(len(get_res_after.json()), 0)
+
+    def test_download_pending_release_endpoint_tidal(self):
+        rel = self.state.record_pending_release(
+            artist_id="tidal:artist:12345",
+            artist_name="Daft Punk",
+            album_id="tidal:album:222",
+            title="Discovery",
+            release_date="2001-03-12",
+            track_count=14,
+            is_single=False,
+            url="https://tidal.com/browse/album/222",
+        )
+
+        # 1. Download pending release
+        dl_res = self.client.post(f"/api/v1/artists/pending-releases/{rel.id}/download")
+        self.assertEqual(dl_res.status_code, 200)
+        data = dl_res.json()
+        self.assertEqual(data["queued"], 1)
+        job = [j for j in self.state.get_queue_jobs() if j["id"] == data["job_id"]][0]
+        self.assertEqual(job["format"], "FLAC")
+
+        # 2. Check pending releases now marked downloaded
+        get_res = self.client.get("/api/v1/artists/pending-releases?status=available")
+        self.assertEqual(len(get_res.json()), 0)
 
 
 if __name__ == "__main__":

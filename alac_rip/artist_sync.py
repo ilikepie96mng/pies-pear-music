@@ -17,6 +17,13 @@ import requests
 from alac_rip import am_api
 from alac_rip.state import StateManager, SubscribedArtist, PendingRelease
 
+try:
+    from alac_rip.tidal_api import TidalClient, extract_tidal_artist, format_tidal_image
+except ImportError:
+    TidalClient = None  # type: ignore
+    extract_tidal_artist = None  # type: ignore
+    format_tidal_image = None  # type: ignore
+
 logger = logging.getLogger("alac_rip.artist_sync")
 
 
@@ -102,6 +109,80 @@ def _fetch_apple_music_artist_albums(
     return artist_name, artist_url, artwork_url, albums
 
 
+def _fetch_tidal_artist_albums(
+    artist_id_or_url: str,
+    client: Optional[Any] = None,
+) -> tuple[str, str, Optional[str], list[dict[str, Any]]]:
+    """
+    Fetch artist information and albums using Tidal API.
+    Returns: (artist_name, artist_url, artwork_url, albums_list)
+    """
+    artist_name = "Unknown Artist"
+    artist_url = ""
+    artwork_url = None
+    albums: list[dict[str, Any]] = []
+
+    # Clean artist ID
+    artist_id = str(artist_id_or_url).strip()
+    if artist_id.startswith("tidal:artist:"):
+        artist_id = artist_id.replace("tidal:artist:", "")
+    elif artist_id.startswith("tidal:"):
+        artist_id = artist_id.replace("tidal:", "")
+    elif "tidal.com" in artist_id:
+        m = re.search(r"/artist/(\d+)", artist_id)
+        if m:
+            artist_id = m.group(1)
+
+    if client is None:
+        try:
+            if TidalClient is not None:
+                client = TidalClient()
+        except Exception:
+            return artist_name, artist_url, artwork_url, albums
+
+    if client is None:
+        return artist_name, artist_url, artwork_url, albums
+
+    try:
+        art = client.get_artist(artist_id)
+        if art:
+            artist_name = art.get("name") or artist_name
+            artist_url = f"https://tidal.com/browse/artist/{artist_id}"
+            pic = art.get("picture")
+            if pic and format_tidal_image is not None:
+                artwork_url = format_tidal_image(pic)
+    except Exception as exc:
+        logger.debug(f"Failed to fetch Tidal artist info for {artist_id}: {exc}")
+
+    try:
+        raw_albums = client.get_artist_albums(artist_id, limit=100)
+        for a in raw_albums:
+            alb_id = f"tidal:{a['id']}"
+            alb_title = a.get("title") or "Unknown Title"
+            art_name = extract_tidal_artist(a, fallback=artist_name) if extract_tidal_artist is not None else artist_name
+            release_date = a.get("releaseDate") or str(a.get("year") or "")
+            track_count = int(a.get("numberOfTracks") or 0)
+            is_single = a.get("type") in ("SINGLE", "EP") or track_count <= 2
+            alb_url = f"https://tidal.com/browse/album/{a['id']}"
+            cover = a.get("cover")
+            art_cover = format_tidal_image(cover) if (cover and format_tidal_image is not None) else None
+
+            albums.append({
+                "id": alb_id,
+                "title": alb_title,
+                "artist": art_name,
+                "release_date": release_date[:10] if release_date else None,
+                "track_count": track_count,
+                "is_single": is_single,
+                "url": alb_url,
+                "artwork_url": art_cover,
+            })
+    except Exception as exc:
+        logger.warning(f"Failed to fetch Tidal artist albums for {artist_id}: {exc}")
+
+    return artist_name, artist_url, artwork_url, albums
+
+
 class ArtistReleaseChecker:
     """Manages check runs and enqueuing for subscribed artists."""
 
@@ -109,11 +190,15 @@ class ArtistReleaseChecker:
         self,
         state: StateManager,
         storefront: str = "us",
+        tidal_client: Optional[Any] = None,
+        get_tidal_client: Optional[Callable[[], Any]] = None,
         on_queue_wake: Optional[Callable[[], None]] = None,
         on_broadcast_event: Optional[Callable[[dict[str, Any]], None]] = None,
     ):
         self.state = state
         self.storefront = storefront or "us"
+        self.tidal_client = tidal_client
+        self.get_tidal_client = get_tidal_client
         self.on_queue_wake = on_queue_wake
         self.on_broadcast_event = on_broadcast_event
 
@@ -131,7 +216,20 @@ class ArtistReleaseChecker:
         detected_new: list[dict[str, Any]] = []
         enqueued: list[int] = []
 
-        if artist.service == "apple_music":
+        is_tidal = (artist.service == "tidal") or str(artist.artist_id).startswith("tidal:")
+
+        if is_tidal:
+            client = self.tidal_client
+            if client is None and self.get_tidal_client is not None:
+                try:
+                    client = self.get_tidal_client()
+                except Exception:
+                    client = None
+            artist_name, artist_url, art_url, albums = _fetch_tidal_artist_albums(
+                artist.artist_id,
+                client=client,
+            )
+        elif artist.service == "apple_music":
             artist_name, artist_url, art_url, albums = _fetch_apple_music_artist_albums(
                 artist.artist_id,
                 bearer_token=bearer_token,
@@ -187,13 +285,15 @@ class ArtistReleaseChecker:
 
             # If auto-download is enabled, immediately enqueue into download_queue
             if auto_dl:
+                item_is_tidal = is_tidal or ("tidal.com" in alb.get("url", "")) or str(alb.get("url", "")).startswith("tidal:")
+                item_format = "FLAC" if item_is_tidal else "ALAC"
                 job_id = self.state.enqueue_download_job(
                     url=alb["url"],
                     title=f"{alb['title']} ({alb.get('release_date', '')[:4] or 'New'})",
                     artist=artist.name,
                     album=alb["title"],
                     artwork_url=alb.get("artwork_url"),
-                    format="ALAC",
+                    format=item_format,
                     item_type="album",
                     total_tracks=alb.get("track_count", 0),
                 )
@@ -208,6 +308,7 @@ class ArtistReleaseChecker:
             last_checked=now_ts,
             known_album_ids=sorted(updated_known_ids),
         )
+
 
         if enqueued and self.on_queue_wake:
             self.on_queue_wake()

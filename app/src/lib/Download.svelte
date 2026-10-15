@@ -35,6 +35,7 @@
   let searchError = $state<string | null>(null);
   let searchResults = $state<CatalogSearchResult>({ songs: [], albums: [], artists: [] });
   let activeEntityFilter = $state<"all" | "albums" | "artists" | "songs" | "subscribed">("all");
+  let activeProvider = $state<"all" | "apple" | "tidal">("all");
 
   // Subscribed Artists & Releases State
   let subscribedArtists = $state<SubscribedArtist[]>([]);
@@ -164,7 +165,12 @@
 
   function formatArtwork(url: string | null | undefined, size: number = 300): string {
     if (!url) return "";
-    return url.replace("{w}", String(size)).replace("{h}", String(size));
+    let formatted = url.replace("{w}", String(size)).replace("{h}", String(size));
+    if (formatted.includes("resources.tidal.com")) {
+      const target = size <= 160 ? "160x160" : size <= 320 ? "320x320" : size <= 640 ? "640x640" : "1280x1280";
+      formatted = formatted.replace(/\d+x\d+\.jpg$/, `${target}.jpg`);
+    }
+    return formatted;
   }
 
   function formatDuration(ms: number): string {
@@ -262,8 +268,12 @@
   function handleSearchInput(e: Event) {
     const val = (e.target as HTMLInputElement).value;
     searchQuery = val;
+    executeSearch(val);
+  }
+
+  function executeSearch(query: string) {
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-    if (!val.trim()) {
+    if (!query.trim()) {
       searchResults = { songs: [], albums: [], artists: [] };
       searchLoading = false;
       searchError = null;
@@ -273,7 +283,7 @@
     searchError = null;
     searchDebounceTimer = setTimeout(async () => {
       try {
-        const res = await api.searchCatalog(val.trim(), ["songs", "albums", "artists"], 12);
+        const res = await api.searchCatalog(query.trim(), ["songs", "albums", "artists"], 16, activeProvider);
         searchResults = res;
       } catch (err) {
         searchError = err instanceof Error ? err.message : String(err);
@@ -283,14 +293,24 @@
     }, 350);
   }
 
+  function setProvider(provider: "all" | "apple" | "tidal") {
+    activeProvider = provider;
+    try {
+      localStorage.setItem("preferred_catalog_provider", provider);
+    } catch {}
+    if (searchQuery.trim()) {
+      executeSearch(searchQuery.trim());
+    }
+  }
+
   // Open Artist Discography
-  async function openArtist(artistIdOrUrl: string) {
+  async function openArtist(artistIdOrUrl: string, provider?: "apple" | "tidal") {
     artistLoading = true;
     artistError = null;
     selectedAlbumIds = new Set();
     searchSubView = "artist";
     try {
-      selectedArtist = await api.catalogArtist(artistIdOrUrl);
+      selectedArtist = await api.catalogArtist(artistIdOrUrl, provider);
     } catch (err) {
       artistError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -299,12 +319,12 @@
   }
 
   // Open Album Inspector
-  async function openAlbum(albumIdOrUrl: string) {
+  async function openAlbum(albumIdOrUrl: string, provider?: "apple" | "tidal") {
     albumLoading = true;
     albumError = null;
     searchSubView = "album";
     try {
-      selectedAlbum = await api.catalogAlbum(albumIdOrUrl);
+      selectedAlbum = await api.catalogAlbum(albumIdOrUrl, provider);
     } catch (err) {
       albumError = err instanceof Error ? err.message : String(err);
     } finally {
@@ -360,13 +380,19 @@
   // SUBSCRIBED ARTISTS & RELEASE CHECKER ACTIONS
   // =========================================================================
 
-  function getSubscribedArtist(artistId?: string | null): SubscribedArtist | undefined {
+  function getSubscribedArtist(artistId?: string | null, service?: string): SubscribedArtist | undefined {
     if (!artistId) return undefined;
-    return subscribedArtists.find((a) => a.artist_id === String(artistId));
+    const cleanId = String(artistId).replace(/^tidal:(?:artist:)?/, "");
+    return subscribedArtists.find((a) => {
+      const aClean = a.artist_id.replace(/^tidal:(?:artist:)?/, "");
+      const idMatch = a.artist_id === String(artistId) || aClean === cleanId;
+      if (!idMatch) return false;
+      return service ? a.service === service : true;
+    });
   }
 
-  function isArtistSubscribed(artistId?: string | null): boolean {
-    return !!getSubscribedArtist(artistId);
+  function isArtistSubscribed(artistId?: string | null, service?: string): boolean {
+    return !!getSubscribedArtist(artistId, service);
   }
 
   async function refreshSubscriptions() {
@@ -382,23 +408,26 @@
     }
   }
 
-  async function toggleArtistSubscription(artist: { id: string; name: string; url?: string; artwork_url?: string | null }) {
-    const existing = getSubscribedArtist(artist.id);
+  async function toggleArtistSubscription(artist: { id: string; name: string; url?: string; artwork_url?: string | null; service?: string; provider?: string }) {
+    const isTidal = artist.service === "tidal" || artist.provider === "tidal" || artist.id.startsWith("tidal:") || (artist.url?.includes("tidal.com") ?? false);
+    const service = isTidal ? "tidal" : "apple_music";
+    const existing = getSubscribedArtist(artist.id, service);
     subscribingArtistId = artist.id;
     try {
       if (existing) {
-        await api.artists.unsubscribe(artist.id, existing.service || "apple_music");
-        subscribedArtists = subscribedArtists.filter((a) => a.artist_id !== artist.id);
+        await api.artists.unsubscribe(artist.id, existing.service || service);
+        subscribedArtists = subscribedArtists.filter((a) => !(a.artist_id === artist.id && a.service === service));
       } else {
         const res = await api.artists.subscribe({
           artist_id: artist.id,
           name: artist.name,
+          service,
           url: artist.url,
           artwork_url: artist.artwork_url,
           auto_download: false,
         });
         if (res.artist) {
-          subscribedArtists = [...subscribedArtists.filter((a) => a.artist_id !== artist.id), res.artist];
+          subscribedArtists = [...subscribedArtists.filter((a) => !(a.artist_id === artist.id && a.service === service)), res.artist];
         }
         await refreshSubscriptions();
       }
@@ -411,7 +440,9 @@
 
   async function updateArtistAutoDownload(artistId: string, autoDownload: boolean) {
     try {
-      await api.artists.updateSubscription(artistId, autoDownload);
+      const existing = getSubscribedArtist(artistId);
+      const service = existing?.service || (artistId.startsWith("tidal:") ? "tidal" : "apple_music");
+      await api.artists.updateSubscription(artistId, autoDownload, service);
       subscribedArtists = subscribedArtists.map((a) => (a.artist_id === artistId ? { ...a, auto_download: autoDownload } : a));
     } catch (err) {
       console.error("Failed to update auto_download:", err);
@@ -422,7 +453,14 @@
     checkingReleases = true;
     checkResultMessage = null;
     try {
-      const res = await api.artists.checkReleases(artistId);
+      let res: ArtistCheckResult;
+      if (artistId) {
+        const existing = getSubscribedArtist(artistId);
+        const service = existing?.service || (artistId.startsWith("tidal:") ? "tidal" : "apple_music");
+        res = await api.artists.checkReleases(artistId, service);
+      } else {
+        res = await api.artists.checkReleases(undefined, "all");
+      }
       await refreshSubscriptions();
       if (res.total_new_releases && res.total_new_releases > 0) {
         checkResultMessage = `Found ${res.total_new_releases} new ${res.total_new_releases === 1 ? 'release' : 'releases'}! (${res.total_enqueued || 0} queued)`;
@@ -437,6 +475,7 @@
       checkingReleases = false;
     }
   }
+
 
   async function downloadPendingRelease(relId: number) {
     downloadingPendingId = relId;
@@ -624,20 +663,26 @@
   async function downloadSelectedAlbums() {
     if (!selectedArtist?.albums || selectedAlbumIds.size === 0) return;
     const selected = selectedArtist.albums.filter((a) => selectedAlbumIds.has(a.id));
-    const items = selected.map((alb) => ({
-      url: alb.url || `https://music.apple.com/us/album/${alb.id}`,
-      title: alb.title,
-      artist: alb.artist || selectedArtist?.name,
-      album: alb.title,
-      artwork_url: alb.artwork_url || selectedArtist?.artwork_url,
-      total_tracks: alb.track_count || alb.tracks?.length || 0,
-      item_type: "album",
-    }));
+    const isTidal = selectedArtist.provider === "tidal";
+    const items = selected.map((alb) => {
+      const albIsTidal = isTidal || alb.provider === "tidal" || alb.id.startsWith("tidal:");
+      const cleanId = alb.id.replace(/^tidal:(?:album:)?/, "");
+      const defaultUrl = albIsTidal ? `https://tidal.com/browse/album/${cleanId}` : `https://music.apple.com/us/album/${alb.id}`;
+      return {
+        url: alb.url || defaultUrl,
+        title: alb.title,
+        artist: alb.artist || selectedArtist?.name,
+        album: alb.title,
+        artwork_url: alb.artwork_url || selectedArtist?.artwork_url,
+        total_tracks: alb.track_count || alb.tracks?.length || 0,
+        item_type: "album",
+      };
+    });
 
     try {
       await api.queue.add({
         items,
-        format,
+        format: isTidal ? "FLAC" : format,
         batch_title: `${selectedArtist.name} — Discography Batch`,
       });
       selectedAlbumIds = new Set();
@@ -645,16 +690,22 @@
       await refreshQueue();
     } catch (err: any) {
       console.error("Failed to enqueue discography:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      artistError = `Enqueue failed: ${msg}`;
+      notifyDownloadFailed(selectedArtist.name, msg);
     }
   }
 
   // Quick Action: Download Current Album
   async function downloadCurrentAlbum() {
     if (!selectedAlbum) return;
+    const isTidal = selectedAlbum.provider === "tidal" || selectedAlbum.id.startsWith("tidal:") || (selectedAlbum.url?.includes("tidal.com") ?? false);
+    const cleanId = selectedAlbum.id.replace(/^tidal:(?:album:)?/, "");
+    const defaultUrl = isTidal ? `https://tidal.com/browse/album/${cleanId}` : `https://music.apple.com/us/album/${selectedAlbum.id}`;
     try {
       await api.queue.add({
         items: [{
-          url: selectedAlbum.url || `https://music.apple.com/us/album/${selectedAlbum.id}`,
+          url: selectedAlbum.url || defaultUrl,
           title: selectedAlbum.title,
           artist: selectedAlbum.artist,
           album: selectedAlbum.title,
@@ -662,19 +713,25 @@
           total_tracks: selectedAlbum.tracks?.length || selectedAlbum.track_count || 0,
           item_type: "album",
         }],
-        format,
+        format: isTidal ? "FLAC" : format,
         batch_title: selectedAlbum.title,
       });
       mainTab = "queue";
       await refreshQueue();
     } catch (err: any) {
       console.error("Failed to enqueue album:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      albumError = `Enqueue failed: ${msg}`;
+      notifyDownloadFailed(selectedAlbum.title, msg);
     }
   }
 
   // Quick Action: Download Single Track
   async function downloadSingleTrack(track: CatalogTrack | CatalogSong) {
-    const url = track.url || `https://music.apple.com/us/song/${track.id}`;
+    const isTidal = track.provider === "tidal" || track.id.startsWith("tidal:") || (track.url?.includes("tidal.com") ?? false);
+    const cleanId = track.id.replace(/^tidal:(?:track:)?/, "");
+    const defaultUrl = isTidal ? `https://tidal.com/browse/track/${cleanId}` : `https://music.apple.com/us/song/${track.id}`;
+    const url = track.url || defaultUrl;
     try {
       await api.queue.add({
         items: [{
@@ -686,13 +743,15 @@
           total_tracks: 1,
           item_type: "single",
         }],
-        format,
+        format: isTidal ? "FLAC" : format,
         batch_title: track.title,
       });
       mainTab = "queue";
       await refreshQueue();
     } catch (err: any) {
       console.error("Failed to enqueue single track:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      notifyDownloadFailed(track.title, msg);
     }
   }
 
@@ -700,10 +759,11 @@
   async function startDirectDownload() {
     if (!directUrl.trim()) return;
     const url = directUrl.trim();
+    const isTidal = url.includes("tidal.com") || url.startsWith("tidal:");
     try {
       await api.queue.add({
         urls: [url],
-        format,
+        format: isTidal ? "FLAC" : format,
       });
       directUrl = "";
       mainTab = "queue";
@@ -753,6 +813,12 @@
   }
 
   onMount(() => {
+    try {
+      const saved = localStorage.getItem("preferred_catalog_provider");
+      if (saved === "all" || saved === "apple" || saved === "tidal") {
+        activeProvider = saved;
+      }
+    } catch {}
     refreshQueue();
     refreshSubscriptions();
     queuePollTimer = setInterval(refreshQueue, 2000);
@@ -779,7 +845,7 @@
             </span>
           {/if}
         </div>
-        <h2 class="text-white text-2xl font-bold tracking-tight">Apple Music Lossless Downloader</h2>
+        <h2 class="text-white text-2xl font-bold tracking-tight">Lossless Music Downloader</h2>
       </div>
 
       <!-- Format Selector -->
@@ -789,7 +855,7 @@
           bind:value={format}
           class="bg-transparent text-xs font-bold text-amber-400 outline-none cursor-pointer"
         >
-          <option value="ALAC">ALAC (Lossless / Hi-Res)</option>
+          <option value="ALAC">ALAC / FLAC (Lossless)</option>
           <option value="AAC">AAC (256kbps)</option>
           <option value="ATMOS">Dolby Atmos (Spatial)</option>
         </select>
@@ -841,40 +907,121 @@
     <!-- TAB 1: CATALOG SEARCH & EXPLORER -->
     {#if mainTab === "search"}
       <div class="p-8 max-w-6xl mx-auto flex flex-col min-h-full">
-        <!-- Subview Header / Breadcrumbs -->
+        <!-- Subview Header / Breadcrumbs & Navigation Pills -->
         {#if searchSubView === "artist" && selectedArtist}
-          <div class="mb-6 flex items-center justify-between">
-            <button
-              onclick={() => { searchSubView = "results"; }}
-              class="text-xs font-medium text-zinc-400 hover:text-white flex items-center gap-1.5 transition-colors group"
-            >
-              <span class="group-hover:-translate-x-0.5 transition-transform">←</span> Back to Search Results
-            </button>
-            <div class="text-xs text-zinc-500">
-              Discography: <span class="text-white font-semibold">{selectedArtist.name}</span>
+          <div class="mb-6 flex items-center justify-between gap-4 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <button
+                onclick={() => { searchSubView = "results"; }}
+                class="px-3 py-1.5 rounded-xl bg-[#12100e] border border-[#2a2a2a] text-xs font-semibold text-zinc-400 hover:text-white hover:border-amber-500/40 flex items-center gap-1.5 transition-all shadow-sm group"
+              >
+                <span class="group-hover:-translate-x-0.5 transition-transform">←</span>
+                <span>Search Results</span>
+              </button>
+              <span class="text-zinc-600 text-xs font-bold">/</span>
+              <div class="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs font-bold text-amber-300 flex items-center gap-1.5 shadow-sm">
+                <span>👤</span>
+                <span class="truncate max-w-[200px] sm:max-w-[320px]">{selectedArtist.name}</span>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <span class="px-2.5 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 {selectedArtist.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/50' : 'bg-pink-950/80 text-pink-400 border border-pink-800/50'}">
+                {selectedArtist.provider === 'tidal' ? '🌊 Tidal Lossless' : '🍎 Apple Music'}
+              </span>
+              <button
+                onclick={() => { searchSubView = "results"; searchQuery = ""; }}
+                class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-xs transition-colors"
+                title="Start a new search"
+              >
+                New Search
+              </button>
             </div>
           </div>
         {:else if searchSubView === "album" && selectedAlbum}
-          <div class="mb-6 flex items-center justify-between">
-            <button
-              onclick={() => {
-                if (selectedArtist) {
-                  searchSubView = "artist";
-                } else {
-                  searchSubView = "results";
-                }
-              }}
-              class="text-xs font-medium text-zinc-400 hover:text-white flex items-center gap-1.5 transition-colors group"
-            >
-              <span class="group-hover:-translate-x-0.5 transition-transform">←</span> Back
-            </button>
-            <div class="text-xs text-zinc-500">
-              Album Inspector: <span class="text-white font-semibold">{selectedAlbum.title}</span>
+          <div class="mb-6 flex items-center justify-between gap-4 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <button
+                onclick={() => { searchSubView = "results"; }}
+                class="px-3 py-1.5 rounded-xl bg-[#12100e] border border-[#2a2a2a] text-xs font-semibold text-zinc-400 hover:text-white hover:border-amber-500/40 flex items-center gap-1.5 transition-all shadow-sm group"
+              >
+                <span class="group-hover:-translate-x-0.5 transition-transform">←</span>
+                <span>Search</span>
+              </button>
+              <span class="text-zinc-600 text-xs font-bold">/</span>
+              {#if selectedArtist}
+                <button
+                  onclick={() => { searchSubView = "artist"; }}
+                  class="px-3 py-1.5 rounded-xl bg-[#12100e] border border-[#2a2a2a] text-xs font-semibold text-zinc-400 hover:text-white hover:border-amber-500/40 flex items-center gap-1.5 transition-all shadow-sm group"
+                >
+                  <span>👤</span>
+                  <span class="truncate max-w-[150px] sm:max-w-[220px]">{selectedArtist.name}</span>
+                </button>
+                <span class="text-zinc-600 text-xs font-bold">/</span>
+              {/if}
+              <div class="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs font-bold text-amber-300 flex items-center gap-1.5 shadow-sm">
+                <span>💿</span>
+                <span class="truncate max-w-[200px] sm:max-w-[320px]">{selectedAlbum.title}</span>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <span class="px-2.5 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 {selectedAlbum.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/50' : 'bg-pink-950/80 text-pink-400 border border-pink-800/50'}">
+                {selectedAlbum.provider === 'tidal' ? '🌊 Tidal Lossless' : '🍎 Apple Music'}
+              </span>
+              <button
+                onclick={() => { searchSubView = "results"; searchQuery = ""; }}
+                class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-xs transition-colors"
+                title="Start a new search"
+              >
+                New Search
+              </button>
             </div>
           </div>
         {:else}
-          <!-- Search Bar -->
+          <!-- Search Bar & Provider Toggle -->
           <div class="mb-8">
+            <!-- Provider Selector Tabs -->
+            <div class="flex items-center justify-between gap-4 flex-wrap mb-4">
+              <div class="flex items-center gap-1.5 p-1 bg-[#12100e] border border-[#2a2a2a] rounded-xl shadow-inner">
+                <button
+                  onclick={() => setProvider("all")}
+                  class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 {activeProvider === 'all' ? 'bg-amber-500 text-black shadow-md shadow-amber-500/20' : 'text-zinc-400 hover:text-white'}"
+                >
+                  <span>🌐</span>
+                  <span>All Sources</span>
+                </button>
+                <button
+                  onclick={() => setProvider("apple")}
+                  class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 {activeProvider === 'apple' ? 'bg-pink-600 text-white shadow-md shadow-pink-600/20' : 'text-zinc-400 hover:text-white'}"
+                >
+                  <span>🍎</span>
+                  <span>Apple Music</span>
+                </button>
+                <button
+                  onclick={() => setProvider("tidal")}
+                  class="px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 {activeProvider === 'tidal' ? 'bg-cyan-500 text-black shadow-md shadow-cyan-500/20' : 'text-zinc-400 hover:text-white'}"
+                >
+                  <span>🌊</span>
+                  <span>Tidal</span>
+                </button>
+              </div>
+
+              <div class="text-xs text-zinc-500 flex items-center gap-2">
+                <span>Active Provider:</span>
+                <span class="px-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-zinc-300 font-semibold text-[11px] flex items-center gap-1.5">
+                  {#if activeProvider === "apple"}
+                    <span class="text-pink-400 font-bold">🍎 Apple Music (ALAC)</span>
+                  {:else if activeProvider === "tidal"}
+                    <span class="text-cyan-400 font-bold">🌊 Tidal (Hi-Res FLAC)</span>
+                  {:else}
+                    <span class="text-amber-400 font-bold">🌐 Multi-Source Search</span>
+                  {/if}
+                </span>
+              </div>
+            </div>
+
+            <!-- Search Input -->
             <div class="relative flex items-center">
               <span class="absolute left-4 text-zinc-500 text-sm">🔍</span>
               <input
@@ -1008,16 +1155,16 @@
                   {#each subscribedArtists as sub (sub.id)}
                     <div class="p-3.5 rounded-2xl bg-[#14121a] border border-[#23202e] hover:border-amber-500/30 flex flex-col justify-between gap-3 shadow-sm transition-all group">
                       <div class="flex items-center gap-3">
-                        <div class="w-12 h-12 rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border border-white/5">
+                        <div class="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border border-white/5" style="width: 48px; height: 48px; min-width: 48px; min-height: 48px;">
                           {#if sub.artwork_url}
-                            <img src={formatArtwork(sub.artwork_url, 120)} alt={sub.name} class="w-full h-full object-cover" />
+                            <img src={formatArtwork(sub.artwork_url, 120)} alt={sub.name} width="48" height="48" class="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-full object-cover flex-shrink-0" style="width: 48px; height: 48px;" />
                           {:else}
                             <div class="w-full h-full flex items-center justify-center text-zinc-500 text-sm">👤</div>
                           {/if}
                         </div>
                         <div class="flex-1 min-w-0">
                           <button
-                            onclick={() => openArtist(sub.artist_id)}
+                            onclick={() => openArtist(sub.artist_id, sub.service === 'tidal' || sub.artist_id.startsWith('tidal:') ? 'tidal' : 'apple')}
                             class="text-white text-sm font-semibold truncate hover:text-amber-400 transition-colors text-left block w-full"
                           >
                             {sub.name}
@@ -1067,9 +1214,9 @@
           {:else if !searchQuery.trim()}
             <div class="flex flex-col items-center justify-center py-20 text-center text-zinc-600">
               <div class="text-4xl mb-3 opacity-60">💿</div>
-              <div class="text-white text-base font-semibold">Explore the Apple Music Lossless Catalog</div>
+              <div class="text-white text-base font-semibold">Explore Lossless Music Catalog</div>
               <div class="text-xs text-zinc-500 mt-1 max-w-md">
-                Search for any artist to download their entire studio discography, inspect lossless albums with full tracklists, or rip individual tracks with real-time log feedback.
+                Search Apple Music and Tidal for any artist to download complete discographies, inspect albums with full tracklists, or download lossless tracks with unified library organization.
               </div>
             </div>
           {:else if searchResults.artists.length === 0 && searchResults.albums.length === 0 && searchResults.songs.length === 0 && !searchLoading}
@@ -1092,18 +1239,23 @@
                       class="flex items-center gap-3 p-3 rounded-2xl bg-[#14121a] hover:bg-[#1c1924] border border-[#23202e] hover:border-amber-500/40 text-left transition-all group shadow-sm"
                     >
                       <button
-                        onclick={() => openArtist(art.id)}
+                        onclick={() => openArtist(art.id, art.provider)}
                         class="flex items-center gap-3 flex-1 min-w-0 text-left"
                       >
-                        <div class="w-12 h-12 rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border border-white/5">
+                        <div class="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border border-white/5 relative" style="width: 48px; height: 48px; min-width: 48px; min-height: 48px;">
                           {#if art.artwork_url}
-                            <img src={formatArtwork(art.artwork_url, 120)} alt={art.name} class="w-full h-full object-cover" />
+                            <img src={formatArtwork(art.artwork_url, 120)} alt={art.name} width="48" height="48" class="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-full object-cover flex-shrink-0" style="width: 48px; height: 48px;" />
                           {:else}
                             <div class="w-full h-full flex items-center justify-center text-zinc-500 text-sm">👤</div>
                           {/if}
                         </div>
                         <div class="flex-1 min-w-0">
-                          <div class="text-white text-sm font-semibold truncate group-hover:text-amber-400 transition-colors">{art.name}</div>
+                          <div class="flex items-center gap-2">
+                            <span class="text-white text-sm font-semibold truncate group-hover:text-amber-400 transition-colors">{art.name}</span>
+                            <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider {art.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/40' : 'bg-pink-950/80 text-pink-400 border border-pink-800/40'}">
+                              {art.provider === 'tidal' ? '🌊 Tidal' : '🍎 Apple'}
+                            </span>
+                          </div>
                           <div class="text-zinc-500 text-xs truncate mt-0.5">
                             {art.genre_names?.join(", ") || art.genres?.join(", ") || "Artist"}
                           </div>
@@ -1124,7 +1276,7 @@
                           {/if}
                         </button>
                         <button
-                          onclick={() => openArtist(art.id)}
+                          onclick={() => openArtist(art.id, art.provider)}
                           class="text-zinc-600 group-hover:text-amber-400 group-hover:translate-x-0.5 transition-all text-sm font-bold px-1"
                         >
                           →
@@ -1149,7 +1301,7 @@
                       class="group flex flex-col bg-[#14121a] rounded-2xl border border-[#23202e] hover:border-amber-500/40 overflow-hidden transition-all shadow-sm"
                     >
                       <button
-                        onclick={() => openAlbum(alb.id)}
+                        onclick={() => openAlbum(alb.id, alb.provider)}
                         class="aspect-square bg-zinc-900 overflow-hidden relative text-left"
                       >
                         {#if alb.artwork_url}
@@ -1157,12 +1309,15 @@
                         {:else}
                           <div class="w-full h-full flex items-center justify-center text-2xl text-zinc-600">💿</div>
                         {/if}
+                        <div class="absolute top-2.5 right-2.5 px-1.5 py-0.5 rounded text-[9px] font-bold backdrop-blur-md {alb.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-300 border border-cyan-500/30' : 'bg-pink-950/80 text-pink-300 border border-pink-500/30'}">
+                          {alb.provider === 'tidal' ? '🌊 Tidal' : (alb.is_single ? 'SINGLE' : '🍎 Apple')}
+                        </div>
                         <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <span class="px-3 py-1 rounded-full bg-amber-500 text-black text-xs font-bold shadow-lg">Inspect Tracks</span>
                         </div>
                       </button>
                       <div class="p-3 flex flex-col flex-1">
-                        <button onclick={() => openAlbum(alb.id)} class="text-left">
+                        <button onclick={() => openAlbum(alb.id, alb.provider)} class="text-left">
                           <div class="text-white text-xs font-bold truncate group-hover:text-amber-400 transition-colors" title={alb.title}>
                             {alb.title}
                           </div>
@@ -1191,17 +1346,26 @@
                 <div class="divide-y divide-white/5 bg-[#14121a] rounded-2xl border border-[#23202e] overflow-hidden">
                   {#each searchResults.songs as s (s.id)}
                     <div class="flex items-center justify-between p-3 hover:bg-white/5 transition-colors gap-3">
-                      <div class="w-10 h-10 rounded-xl bg-zinc-800 overflow-hidden flex-shrink-0">
+                      <div class="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-xl bg-zinc-800 overflow-hidden flex-shrink-0 relative" style="width: 40px; height: 40px; min-width: 40px; min-height: 40px;">
                         {#if s.artwork_url}
-                          <img src={formatArtwork(s.artwork_url, 80)} alt={s.title} class="w-full h-full object-cover" />
+                          <img src={formatArtwork(s.artwork_url, 80)} alt={s.title} width="40" height="40" class="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-xl object-cover flex-shrink-0" style="width: 40px; height: 40px;" />
                         {:else}
                           <div class="w-full h-full flex items-center justify-center text-xs text-zinc-500">🎵</div>
                         {/if}
                       </div>
                       <div class="flex-1 min-w-0">
-                        <div class="text-white text-xs font-bold truncate">{s.title}</div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-white text-xs font-bold truncate">{s.title}</span>
+                          <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider {s.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/40' : 'bg-pink-950/80 text-pink-400 border border-pink-800/40'}">
+                            {s.provider === 'tidal' ? '🌊 Tidal' : '🍎 Apple'}
+                          </span>
+                        </div>
                         <div class="text-zinc-400 text-[11px] truncate mt-0.5">
-                          {s.artist} <span class="text-zinc-600">•</span> {s.album}
+                          {#if s.artist && s.album}
+                            {s.artist} <span class="text-zinc-600">•</span> {s.album}
+                          {:else}
+                            {s.artist || s.album || "Track"}
+                          {/if}
                         </div>
                       </div>
                       <button
@@ -1235,16 +1399,19 @@
             {@const sub = getSubscribedArtist(selectedArtist.id)}
             <div class="p-6 rounded-3xl bg-gradient-to-r from-[#171420] via-[#14121a] to-[#121018] border border-[#282438] flex items-center justify-between gap-6 mb-8 shadow-xl">
               <div class="flex items-center gap-5">
-                <div class="w-20 h-20 rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border-2 border-amber-500/30 shadow-lg">
+                <div class="w-20 h-20 min-w-[80px] min-h-[80px] max-w-[80px] max-h-[80px] rounded-full bg-zinc-800 overflow-hidden flex-shrink-0 border-2 border-amber-500/30 shadow-lg" style="width: 80px; height: 80px; min-width: 80px; min-height: 80px;">
                   {#if selectedArtist.artwork_url}
-                    <img src={formatArtwork(selectedArtist.artwork_url, 200)} alt={selectedArtist.name} class="w-full h-full object-cover" />
+                    <img src={formatArtwork(selectedArtist.artwork_url, 200)} alt={selectedArtist.name} width="80" height="80" class="w-20 h-20 min-w-[80px] min-h-[80px] max-w-[80px] max-h-[80px] rounded-full object-cover flex-shrink-0" style="width: 80px; height: 80px;" />
                   {:else}
                     <div class="w-full h-full flex items-center justify-center text-2xl text-zinc-500">👤</div>
                   {/if}
                 </div>
                 <div>
-                  <div class="text-[10px] uppercase tracking-widest text-amber-400 font-bold mb-1 flex items-center gap-2">
-                    <span>Artist Discography</span>
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-[10px] uppercase tracking-widest text-amber-400 font-bold">Artist Discography</span>
+                    <span class="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider {selectedArtist.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/50' : 'bg-pink-950/80 text-pink-400 border border-pink-800/50'}">
+                      {selectedArtist.provider === 'tidal' ? '🌊 Tidal' : '🍎 Apple Music'}
+                    </span>
                     {#if sub}
                       <span class="px-2 py-0.5 rounded-full text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold">
                         ★ Subscribed
@@ -1361,7 +1528,7 @@
 
                   <!-- Cover Art -->
                   <button
-                    onclick={() => openAlbum(alb.id)}
+                    onclick={() => openAlbum(alb.id, alb.provider || selectedArtist?.provider || (alb.id.startsWith('tidal:') ? 'tidal' : 'apple'))}
                     class="aspect-square bg-zinc-900 overflow-hidden relative text-left"
                   >
                     {#if alb.artwork_url}
@@ -1378,7 +1545,7 @@
 
                   <!-- Details -->
                   <div class="p-3 flex flex-col flex-1">
-                    <button onclick={() => openAlbum(alb.id)} class="text-left">
+                    <button onclick={() => openAlbum(alb.id, alb.provider || selectedArtist?.provider || (alb.id.startsWith('tidal:') ? 'tidal' : 'apple'))} class="text-left">
                       <div class="text-white text-xs font-bold truncate group-hover:text-amber-400 transition-colors" title={alb.title}>
                         {alb.title}
                       </div>
@@ -1395,7 +1562,7 @@
                         {isSelected ? '✓ Selected' : '+ Select'}
                       </button>
                       <button
-                        onclick={() => openAlbum(alb.id)}
+                        onclick={() => openAlbum(alb.id, alb.provider || selectedArtist?.provider || (alb.id.startsWith('tidal:') ? 'tidal' : 'apple'))}
                         class="text-[11px] text-zinc-600 hover:text-amber-400 font-medium"
                       >
                         Tracks →
@@ -1468,8 +1635,13 @@
                   {/if}
                 </div>
                 <div>
-                  <div class="text-[10px] uppercase tracking-widest text-amber-400 font-bold mb-1">
-                    {selectedAlbum.is_single ? "Single / EP" : "Album"}
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-[10px] uppercase tracking-widest text-amber-400 font-bold">
+                      {selectedAlbum.is_single ? "Single / EP" : "Album"}
+                    </span>
+                    <span class="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider {selectedAlbum.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/50' : 'bg-pink-950/80 text-pink-400 border border-pink-800/50'}">
+                      {selectedAlbum.provider === 'tidal' ? '🌊 Tidal Lossless' : '🍎 Apple Music ALAC'}
+                    </span>
                   </div>
                   <h1 class="text-white text-2xl font-bold">{selectedAlbum.title}</h1>
                   <div class="text-zinc-300 text-sm font-semibold mt-0.5">{selectedAlbum.artist}</div>
@@ -1496,7 +1668,7 @@
                   class="w-full md:w-auto px-6 py-3 rounded-2xl font-bold text-xs text-black transition-all hover:bg-amber-400 flex items-center justify-center gap-2 shadow-xl shadow-amber-500/20"
                   style="background:var(--accent);"
                 >
-                  <span>↓ Download Full Album ({format})</span>
+                  <span>↓ Download Full Album ({selectedAlbum.provider === 'tidal' ? 'FLAC' : format})</span>
                 </button>
               </div>
             </div>

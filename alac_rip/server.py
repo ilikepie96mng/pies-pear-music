@@ -63,24 +63,27 @@ def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-_DOWNLOAD_FORMATS = frozenset({"ALAC", "AAC", "ATMOS"})
+_DOWNLOAD_FORMATS = frozenset({"ALAC", "AAC", "ATMOS", "FLAC"})
 _MAX_PLAYLIST_NAME_LENGTH = 120
 _ABSOLUTE_PATH_RE = re.compile(r"(?<![\w:])/(?:[^\s:'\"]+/?)+")
 _TRACK_PROGRESS_RE = re.compile(r"^Track\s+(\d+)\s+of\s+(\d+):\s*(.*)$")
 
 
 def _validate_apple_music_url(value: str) -> str:
-    """Accept only absolute Apple Music HTTPS URLs suitable for the downloader."""
+    """Accept absolute Apple Music or Tidal HTTPS URLs or tidal: URIs suitable for the downloader."""
     url = value.strip()
+    if url.startswith("tidal:"):
+        clean_id = url.replace("tidal:album:", "").replace("tidal:track:", "").replace("tidal:artist:", "").replace("tidal:", "")
+        return f"https://tidal.com/browse/album/{clean_id}"
     parsed = urlparse(url)
     if (
         parsed.scheme != "https"
-        or parsed.hostname != "music.apple.com"
         or parsed.username is not None
         or parsed.password is not None
         or not parsed.path.strip("/")
+        or parsed.hostname not in ("music.apple.com", "tidal.com", "listen.tidal.com")
     ):
-        raise ValueError("URL must be an HTTPS music.apple.com link")
+        raise ValueError("URL must be an HTTPS music.apple.com or tidal.com link")
     return url
 
 
@@ -1685,14 +1688,26 @@ def post_queue_add(req: QueueAddRequest):
     for item in req.items:
         url = item.get("url") or ""
         alb_id = str(item.get("id") or item.get("album_id") or "")
+        is_tidal = (item.get("provider") == "tidal") or alb_id.startswith("tidal:") or ("tidal.com" in url) or url.startswith("tidal:")
         if not url and alb_id:
-            url = f"https://music.apple.com/us/album/{alb_id}"
+            if is_tidal:
+                tid = alb_id.replace("tidal:album:", "").replace("tidal:track:", "").replace("tidal:", "")
+                item_type = item.get("item_type") or "album"
+                etype = "track" if item_type in ("single", "track") else "album"
+                url = f"https://tidal.com/browse/{etype}/{tid}"
+            else:
+                url = f"https://music.apple.com/us/album/{alb_id}"
         if not url:
             continue
-        try:
-            valid_url = _validate_apple_music_url(url)
-        except ValueError:
-            continue
+        if is_tidal:
+            valid_url = url
+            item_format = "FLAC" if format_ in ("ALAC", "ATMOS") else format_
+        else:
+            try:
+                valid_url = _validate_apple_music_url(url)
+            except ValueError:
+                continue
+            item_format = "ALAC" if format_ == "FLAC" else format_
         jobs_to_insert.append({
             "batch_id": batch_id,
             "batch_title": req.batch_title or item.get("batch_title"),
@@ -1701,16 +1716,22 @@ def post_queue_add(req: QueueAddRequest):
             "artist": item.get("artist") or "",
             "album": item.get("album") or item.get("title") or "",
             "artwork_url": item.get("artwork_url"),
-            "format": format_,
+            "format": item_format,
             "item_type": item.get("item_type") or "album",
             "total_tracks": item.get("total_tracks") or item.get("track_count") or 0,
         })
 
     for url_raw in req.urls:
-        try:
-            valid_url = _validate_apple_music_url(url_raw)
-        except ValueError:
-            continue
+        is_tidal = "tidal.com" in url_raw or url_raw.startswith("tidal:")
+        if is_tidal:
+            valid_url = url_raw
+            item_format = "FLAC" if format_ in ("ALAC", "ATMOS") else format_
+        else:
+            try:
+                valid_url = _validate_apple_music_url(url_raw)
+            except ValueError:
+                continue
+            item_format = "ALAC" if format_ == "FLAC" else format_
         jobs_to_insert.append({
             "batch_id": batch_id,
             "batch_title": req.batch_title,
@@ -1719,7 +1740,7 @@ def post_queue_add(req: QueueAddRequest):
             "artist": "",
             "album": "",
             "artwork_url": None,
-            "format": format_,
+            "format": item_format,
             "item_type": "album",
             "total_tracks": 0,
         })
@@ -4419,11 +4440,13 @@ def trigger_artist_check_endpoint(artist_id: Optional[str] = None, service: str 
 
     if artist_id:
         artist = state.get_subscribed_artist(artist_id, service=service)
+        if not artist and service == "apple_music":
+            artist = state.get_subscribed_artist(artist_id, service="tidal")
         if not artist:
             raise HTTPException(404, f"Artist '{artist_id}' is not subscribed")
         return checker.check_artist(artist)
 
-    return checker.check_all_subscribed_artists(service=service if service != "all" else None)
+    return checker.check_all_subscribed_artists(service=service if service not in ("all", "") else None)
 
 
 @app.get("/api/v1/artists/pending-releases")
@@ -4459,13 +4482,16 @@ def download_pending_release_endpoint(release_id: int):
         raise HTTPException(404, f"Release {release_id} not found")
     rel = rels[0]
 
+    is_tidal = (rel.url and ("tidal.com" in rel.url or rel.url.startswith("tidal:"))) or (rel.artist_id and rel.artist_id.startswith("tidal:"))
+    item_format = "FLAC" if is_tidal else "ALAC"
+
     job_id = state.enqueue_download_job(
         url=rel.url,
         title=f"{rel.title} ({rel.release_date[:4] if rel.release_date else 'New'})",
         artist=rel.artist_name,
         album=rel.title,
         artwork_url=rel.artwork_url,
-        format="ALAC",
+        format=item_format,
         item_type="album",
         total_tracks=rel.track_count,
     )
@@ -4482,13 +4508,15 @@ def download_all_pending_releases_endpoint():
     available = state.get_pending_releases(status="available")
     queued_ids = []
     for rel in available:
+        is_tidal = (rel.url and ("tidal.com" in rel.url or rel.url.startswith("tidal:"))) or (rel.artist_id and rel.artist_id.startswith("tidal:"))
+        item_format = "FLAC" if is_tidal else "ALAC"
         job_id = state.enqueue_download_job(
             url=rel.url,
             title=f"{rel.title} ({rel.release_date[:4] if rel.release_date else 'New'})",
             artist=rel.artist_name,
             album=rel.title,
             artwork_url=rel.artwork_url,
-            format="ALAC",
+            format=item_format,
             item_type="album",
             total_tracks=rel.track_count,
         )
