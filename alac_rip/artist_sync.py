@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 import requests
@@ -183,6 +184,20 @@ def _fetch_tidal_artist_albums(
     return artist_name, artist_url, artwork_url, albums
 
 
+def _is_recent_release(release_date_str: Optional[str], max_days: int = 60) -> bool:
+    """Return True if release_date is within max_days or could not be parsed."""
+    if not release_date_str:
+        return True
+    try:
+        dt_str = str(release_date_str).strip()[:10]
+        if len(dt_str) == 4:
+            return int(dt_str) >= datetime.now().year
+        rd = datetime.fromisoformat(dt_str)
+        return (datetime.now() - rd).days <= max_days
+    except Exception:
+        return True
+
+
 class ArtistReleaseChecker:
     """Manages check runs and enqueuing for subscribed artists."""
 
@@ -190,6 +205,7 @@ class ArtistReleaseChecker:
         self,
         state: StateManager,
         storefront: str = "us",
+        music_dir: Optional[Any] = None,
         tidal_client: Optional[Any] = None,
         get_tidal_client: Optional[Callable[[], Any]] = None,
         on_queue_wake: Optional[Callable[[], None]] = None,
@@ -197,10 +213,26 @@ class ArtistReleaseChecker:
     ):
         self.state = state
         self.storefront = storefront or "us"
+        self.music_dir = Path(music_dir) if music_dir else None
         self.tidal_client = tidal_client
         self.get_tidal_client = get_tidal_client
         self.on_queue_wake = on_queue_wake
         self.on_broadcast_event = on_broadcast_event
+
+    def clean_existing_pending_releases(self) -> int:
+        """Scan available pending releases and dismiss any that are already in library."""
+        pending = self.state.get_pending_releases(status="available")
+        cleaned_count = 0
+        for p in pending:
+            if self.state.has_album_in_library(
+                p.artist_name,
+                p.title,
+                is_single=p.is_single,
+                music_dir=self.music_dir,
+            ):
+                self.state.update_pending_release_status(p.id, "dismissed")
+                cleaned_count += 1
+        return cleaned_count
 
     def check_artist(
         self,
@@ -248,6 +280,7 @@ class ArtistReleaseChecker:
 
         known_ids = set(artist.known_album_ids or [])
         updated_known_ids = set(known_ids)
+        is_first_check = len(known_ids) == 0
 
         for alb in albums:
             alb_id = str(alb["id"])
@@ -257,9 +290,22 @@ class ArtistReleaseChecker:
             if alb_id in known_ids:
                 continue
 
-            # Check if user already has this album in their local library
-            if self.state.has_album_in_library(artist.name, alb["title"]):
+            # Check if user already has this album in their local library or filesystem
+            if self.state.has_album_in_library(
+                artist.name,
+                alb["title"],
+                is_single=alb.get("is_single", False),
+                music_dir=self.music_dir,
+            ):
                 continue
+
+            # On first check / initial baseline:
+            # Don't flood the dashboard with older catalog releases (e.g. from 2018-2023).
+            # Only treat albums released within the last 60 days (or without date) as new releases.
+            if is_first_check:
+                rel_date = alb.get("release_date")
+                if rel_date and not _is_recent_release(rel_date, max_days=60):
+                    continue
 
             # New release discovered!
             rel = self.state.record_pending_release(

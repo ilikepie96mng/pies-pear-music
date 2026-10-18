@@ -669,6 +669,7 @@ def _get_artist_release_checker() -> Optional[ArtistReleaseChecker]:
     return ArtistReleaseChecker(
         state=state,
         storefront=_get_storefront(),
+        music_dir=cfg.music_dir if cfg else None,
         on_queue_wake=lambda: _queue_wake_event.set(),
         on_broadcast_event=lambda ev: _broadcast_queue_event(ev),
     )
@@ -4453,6 +4454,13 @@ def trigger_artist_check_endpoint(artist_id: Optional[str] = None, service: str 
 def get_pending_releases_endpoint(status: str = "available"):
     if state is None:
         raise HTTPException(503, "Library state not ready")
+    if status == "available":
+        checker = _get_artist_release_checker()
+        if checker:
+            try:
+                checker.clean_existing_pending_releases()
+            except Exception as e:
+                logger.debug(f"Auto-cleanup of pending releases failed: {e}")
     releases = state.get_pending_releases(status=status)
     return [
         {
@@ -4535,6 +4543,16 @@ def dismiss_pending_release_endpoint(release_id: int):
         raise HTTPException(503, "Library state not ready")
     state.update_pending_release_status(release_id, "dismissed")
     return {"status": "ok"}
+
+
+@app.post("/api/v1/artists/pending-releases/dismiss-all")
+def dismiss_all_pending_releases_endpoint():
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    available = state.get_pending_releases(status="available")
+    for r in available:
+        state.update_pending_release_status(r.id, "dismissed")
+    return {"status": "ok", "dismissed": len(available)}
 
 
 class TestWebhookRequest(BaseModel):

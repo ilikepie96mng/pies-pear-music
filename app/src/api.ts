@@ -1416,6 +1416,11 @@ export const api = {
       const r = await request(`/api/v1/artists/pending-releases/${release_id}/dismiss`, { method: "POST" });
       if (!r.ok) throw new Error(`Failed to dismiss release (${r.status})`);
     },
+
+    async dismissAllPendingReleases(): Promise<void> {
+      const r = await request(`/api/v1/artists/pending-releases/dismiss-all`, { method: "POST" });
+      if (!r.ok) throw new Error(`Failed to dismiss releases (${r.status})`);
+    },
   },
 
   queue: {

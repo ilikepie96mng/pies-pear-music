@@ -123,26 +123,49 @@ class TestArtistSubscriptions(unittest.TestCase):
         self.assertEqual(len(downloaded), 1)
 
     def test_has_album_in_library(self):
-        # Insert a track into the library
+        # Insert tracks into the library
         self.state.add_track(
             Track(
                 track_id="trk-1",
                 title="Get Lucky",
-                artist="Daft Punk",
+                artist="Daft Punk feat. Pharrell Williams",
                 album="Random Access Memories",
                 local_path="/music/Daft Punk/Random Access Memories/01 Get Lucky.m4a",
                 downloaded_at="2024-01-01T00:00:00",
                 am_track_id="123456",
             )
         )
+        self.state.add_track(
+            Track(
+                track_id="trk-2",
+                title="Alive",
+                artist="ReoNa",
+                album="Alive",
+                local_path="/music/artists/ReoNa/Alive/01 - Alive.m4a",
+                downloaded_at="2024-01-01T00:00:00",
+            )
+        )
 
-        # Should match title and artist (has_album_in_library takes artist, album_title)
+        # 1. Exact match
         self.assertTrue(self.state.has_album_in_library("Daft Punk", "Random Access Memories"))
-        # Case-insensitive
+        # 2. Case-insensitive
         self.assertTrue(self.state.has_album_in_library("daft punk", "random access memories"))
-        # Non-existent album
+        # 3. Single suffix normalization: catalog "Alive - Single" matches library "Alive"
+        self.assertTrue(self.state.has_album_in_library("ReoNa", "Alive - Single"))
+        # 4. EP / Deluxe edition normalization
+        self.assertTrue(self.state.has_album_in_library("Daft Punk", "Random Access Memories (10th Anniversary Edition)"))
+        # 5. Single matched by track title
+        self.assertTrue(self.state.has_album_in_library("Daft Punk", "Get Lucky - Single", is_single=True))
+        # 6. Non-existent album
         self.assertFalse(self.state.has_album_in_library("Daft Punk", "Homework"))
         self.assertFalse(self.state.has_album_in_library("The Weeknd", "Random Access Memories"))
+
+        # 7. Filesystem check
+        music_dir = Path(self.temp_dir.name) / "music"
+        alb_dir = music_dir / "artists" / "ReoNa" / "unknown"
+        alb_dir.mkdir(parents=True)
+        (alb_dir / "01 - unknown.flac").touch()
+        self.assertTrue(self.state.has_album_in_library("ReoNa", "unknown", music_dir=music_dir))
 
 
 class TestArtistReleaseChecker(unittest.TestCase):
@@ -454,6 +477,35 @@ class TestArtistServerEndpoints(unittest.TestCase):
         # 2. Check pending releases now marked downloaded
         get_res = self.client.get("/api/v1/artists/pending-releases?status=available")
         self.assertEqual(len(get_res.json()), 0)
+
+    def test_dismiss_all_pending_releases(self):
+        self.state.record_pending_release("a1", "Artist 1", "alb1", "Title 1")
+        self.state.record_pending_release("a2", "Artist 2", "alb2", "Title 2")
+        self.assertEqual(len(self.state.get_pending_releases(status="available")), 2)
+
+        res = self.client.post("/api/v1/artists/pending-releases/dismiss-all")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(self.state.get_pending_releases(status="available")), 0)
+
+    def test_pending_releases_auto_cleanup(self):
+        # Record pending release for an album
+        rel = self.state.record_pending_release("art1", "ReoNa", "alb_alive", "Alive - Single", is_single=True)
+        # Add the track to library
+        self.state.add_track(
+            Track(
+                track_id="trk-reona-1",
+                title="Alive",
+                artist="ReoNa",
+                album="Alive",
+                local_path="/music/Alive.m4a",
+                downloaded_at="2024-01-01T00:00:00",
+            )
+        )
+
+        # Calling GET /api/v1/artists/pending-releases should auto-clean it since it's already in library
+        res = self.client.get("/api/v1/artists/pending-releases")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.json()), 0)
 
 
 if __name__ == "__main__":

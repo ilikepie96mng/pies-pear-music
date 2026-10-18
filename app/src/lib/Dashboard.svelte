@@ -40,6 +40,15 @@
     }
   }
 
+  async function dismissAllReleases() {
+    try {
+      await api.artists.dismissAllPendingReleases();
+      pendingReleases = [];
+    } catch (e) {
+      console.error("Failed to dismiss all releases:", e);
+    }
+  }
+
   async function downloadAllReleases() {
     try {
       await api.artists.downloadAllPendingReleases();
@@ -326,12 +335,21 @@
               </div>
             </div>
           </div>
-          <button
-            onclick={downloadAllReleases}
-            class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all flex items-center gap-1.5 shadow"
-          >
-            <span>⚡ Download All ({pendingReleases.length})</span>
-          </button>
+          <div class="flex items-center gap-2">
+            <button
+              onclick={dismissAllReleases}
+              class="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-xs font-semibold transition-all border border-white/5"
+              title="Dismiss all pending releases"
+            >
+              Dismiss All
+            </button>
+            <button
+              onclick={downloadAllReleases}
+              class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all flex items-center gap-1.5 shadow"
+            >
+              <span>⚡ Download All ({pendingReleases.length})</span>
+            </button>
+          </div>
         </div>
 
         <div class="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">

@@ -1,10 +1,57 @@
 import json
 import re
 import sqlite3
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+
+def clean_artist(artist: Optional[str]) -> str:
+    """Normalize artist name by removing featured artists, collaborators, and punctuation."""
+    if not artist:
+        return ""
+    s = unicodedata.normalize("NFKC", str(artist))
+    s = s.lower()
+    # Strip feat./ft./featuring/with/prod. by...
+    s = re.sub(r"\s+(?:feat\.?|ft\.?|featuring|with|prod\.?|prod\s+by)\s+.*$", "", s, flags=re.IGNORECASE)
+    # Strip secondary artist after comma or semicolon
+    s = re.sub(r"\s*[,;]\s*.*$", "", s)
+    # Replace symbols with padded words/spaces
+    s = s.replace("×", " x ").replace("&", " and ").replace("+", " and ").replace("_", " ")
+    # Strip punctuation and symbols, collapse whitespace
+    s = re.sub(r"[^\w\s]", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def normalize_music_title(title: Optional[str]) -> str:
+    """Normalize album and track titles by removing release format tags, edition qualifiers, and punctuation."""
+    if not title:
+        return ""
+    t = unicodedata.normalize("NFKC", str(title)).lower().strip()
+    # Remove release format tags at end of string: " - Single", " - EP", " - Single - EP", " - Single Version", " - Deluxe Edition", etc.
+    t = re.sub(
+        r"\s*[-–—]\s*(?:single(?:\s+version)?|ep|single\s+[-–—]\s+ep|deluxe(?:\s+edition)?|special(?:\s+edition)?|remastered(?:\s+edition)?|theme\s+song\s+e\.?p\.?)\s*$",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    )
+    # Remove parenthetical / bracketed qualifiers: (Single), [EP], (Special Edition), [Deluxe], (English Version), (Remastered), etc.
+    t = re.sub(
+        r"\s*[\(\[]\s*(?:single|ep|deluxe|special|remastered|explicit|anniversary|expanded|english\s+version|instrumental|acoustic).*?[\)\]]",
+        "",
+        t,
+        flags=re.IGNORECASE,
+    )
+    # Remove featuring in title: (feat. ...)
+    t = re.sub(r"\s*[\(\[]\s*(?:feat\.?|featuring|with)\s+.*?[\)\]]", "", t, flags=re.IGNORECASE)
+    # Remove any other parenthetical / bracketed suffix
+    t = re.sub(r"\s*[\(\[].*?[\)\]]", "", t).strip()
+    # Strip punctuation & whitespace
+    t = re.sub(r"^[\s\-_.:]+|[\s\-_.:]+$", "", t).strip()
+    return t
+
 
 
 @dataclass
@@ -1779,34 +1826,156 @@ class StateManager:
             )
             return cur.rowcount > 0
 
-    def has_album_in_library(self, artist: str, album_title: str) -> bool:
+    def has_album_in_library(
+        self,
+        artist: str,
+        album_title: str,
+        is_single: bool = False,
+        music_dir: Optional[Path] = None,
+    ) -> bool:
         if not artist or not album_title:
             return False
-        a_clean = artist.strip().lower()
-        t_clean = album_title.strip().lower()
+
+        a_clean = clean_artist(artist).lower().strip()
+        raw_artist = artist.strip().lower()
+        t_norm = normalize_music_title(album_title)
+        raw_album = album_title.strip().lower()
+
         with self._conn() as conn:
+            # 1. Exact match on raw artist and raw album
             row = conn.execute(
                 """
                 SELECT 1 FROM tracks
                 WHERE LOWER(artist) = ? AND LOWER(album) = ?
                 LIMIT 1
                 """,
-                (a_clean, t_clean),
+                (raw_artist, raw_album),
             ).fetchone()
             if row:
                 return True
-            t_simple = re.sub(r"\s*[\(\[].*?[\)\]]", "", t_clean).strip()
-            if t_simple and t_simple != t_clean:
-                row2 = conn.execute(
+
+            # 2. Normalized match on album and flexible artist match
+            if t_norm:
+                row = conn.execute(
                     """
                     SELECT 1 FROM tracks
-                    WHERE LOWER(artist) = ? AND LOWER(album) LIKE ?
+                    WHERE (
+                        LOWER(artist) = ?
+                        OR LOWER(artist) LIKE ?
+                        OR ? LIKE '%' || LOWER(artist) || '%'
+                        OR LOWER(artist) = ?
+                        OR LOWER(artist) LIKE ?
+                    )
+                    AND (
+                        LOWER(album) = ?
+                        OR LOWER(album) = ?
+                        OR LOWER(album) LIKE ?
+                        OR ? LIKE '%' || LOWER(album) || '%'
+                    )
                     LIMIT 1
                     """,
-                    (a_clean, f"%{t_simple}%"),
+                    (
+                        raw_artist,
+                        f"%{raw_artist}%",
+                        raw_artist,
+                        a_clean,
+                        f"%{a_clean}%",
+                        raw_album,
+                        t_norm,
+                        f"%{t_norm}%",
+                        t_norm,
+                    ),
                 ).fetchone()
-                if row2:
+                if row:
                     return True
+
+            # 3. If it's a single or EP (or title is short), check track title directly
+            target_title = t_norm or raw_album
+            if is_single or target_title:
+                row = conn.execute(
+                    """
+                    SELECT 1 FROM tracks
+                    WHERE (
+                        LOWER(artist) = ?
+                        OR LOWER(artist) LIKE ?
+                        OR ? LIKE '%' || LOWER(artist) || '%'
+                        OR LOWER(artist) = ?
+                        OR LOWER(artist) LIKE ?
+                    )
+                    AND (
+                        LOWER(title) = ?
+                        OR LOWER(title) = ?
+                        OR LOWER(title) LIKE ?
+                        OR ? LIKE '%' || LOWER(title) || '%'
+                    )
+                    LIMIT 1
+                    """,
+                    (
+                        raw_artist,
+                        f"%{raw_artist}%",
+                        raw_artist,
+                        a_clean,
+                        f"%{a_clean}%",
+                        raw_album,
+                        target_title,
+                        f"%{target_title}%",
+                        target_title,
+                    ),
+                ).fetchone()
+                if row:
+                    return True
+
+        # 4. Check filesystem if music_dir is available
+        if music_dir and Path(music_dir).is_dir():
+            if self._check_album_on_disk(Path(music_dir), artist, album_title, is_single=is_single):
+                return True
+
         return False
+
+    def _check_album_on_disk(
+        self,
+        music_dir: Path,
+        artist: str,
+        album_title: str,
+        is_single: bool = False,
+    ) -> bool:
+        try:
+            norm_album = normalize_music_title(album_title)
+            a_clean = clean_artist(artist).lower().strip()
+            raw_art = artist.strip().lower()
+
+            artist_dirs: list[Path] = []
+            for base in (music_dir / "artists", music_dir):
+                if base.is_dir():
+                    for d in base.iterdir():
+                        if d.is_dir():
+                            d_lower = d.name.lower()
+                            if (
+                                d_lower == raw_art
+                                or d_lower == a_clean
+                                or a_clean in d_lower
+                                or d_lower in a_clean
+                            ):
+                                artist_dirs.append(d)
+
+            for adir in artist_dirs:
+                for sub in adir.iterdir():
+                    if sub.is_dir():
+                        sub_norm = normalize_music_title(sub.name)
+                        if sub_norm == norm_album or norm_album in sub_norm or sub_norm in norm_album:
+                            for f in sub.iterdir():
+                                if f.is_file() and f.suffix.lower() in (".flac", ".m4a", ".mp3", ".alac", ".opus", ".aac"):
+                                    return True
+                if (is_single or norm_album) and adir.is_dir():
+                    for f in adir.glob("*"):
+                        if f.is_file() and f.suffix.lower() in (".flac", ".m4a", ".mp3", ".alac", ".opus", ".aac"):
+                            f_norm = normalize_music_title(f.stem)
+                            f_clean = re.sub(r"^\d+\s*[-_.]?\s*", "", f_norm).strip()
+                            if f_clean == norm_album or norm_album in f_clean or f_clean in norm_album:
+                                return True
+        except Exception:
+            pass
+        return False
+
 
 
