@@ -35,12 +35,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install python dependencies
+# Install python dependencies and application package
 COPY pyproject.toml .
-RUN pip3 install --no-cache-dir --break-system-packages .
-
-# Copy application source
 COPY alac_rip/ ./alac_rip/
+RUN pip3 install --no-cache-dir --break-system-packages .
 COPY vendor/apple-music-downloader/ ./apple-music-downloader/
 
 # Copy built frontend SPA from Stage 1
@@ -81,6 +79,7 @@ ENV PIES_CONFIG_PATH=/config/config.yaml \
     PIES_NATIVE_WRAPPER=1 \
     HOST=0.0.0.0 \
     PORT=10025 \
+    PYTHONPATH=/app \
     PYTHONUNBUFFERED=1
 
 EXPOSE 10025

@@ -4970,7 +4970,10 @@ async def serve_spa_frontend(full_path: str):
     file_path = target_dir / full_path
     if full_path and file_path.is_file():
         return FileResponse(file_path)
-    return FileResponse(target_dir / "index.html")
+    return FileResponse(
+        target_dir / "index.html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 def _read_sidecar_handshake(value: str) -> tuple[int, str]:

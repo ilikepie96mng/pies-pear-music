@@ -2,7 +2,7 @@
   <div class="mb-8">
     <div class="text-[10px] font-semibold uppercase tracking-widest text-amber-500">Pies Pear Music</div>
     <h1 class="mt-1 text-3xl font-bold tracking-tight text-white">About & Credits</h1>
-    <p class="mt-2 text-sm text-zinc-400">Version 1.0.0 · Self-Hosted Archival & Streaming Workstation</p>
+    <p class="mt-2 text-sm text-zinc-400">Version 2.3.0 · Self-Hosted Archival & Streaming Workstation</p>
   </div>
 
   <div class="space-y-4 text-sm">
