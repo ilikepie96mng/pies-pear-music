@@ -160,3 +160,129 @@ def test_download_artist_albums_batch_endpoint(client):
     data = resp.json()
     assert data["queued"] == 2
     assert len(data["job_ids"]) == 2
+
+
+def test_version_endpoint_clean_public(client):
+    resp = client.get("/version")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["version"] == "2.3.0"
+    assert data["display"] == "v2.3.0"
+    assert "(dev)" not in data["display"]
+
+
+def test_catalog_genres_and_charts_endpoints(client):
+    resp = client.get("/catalog/genres")
+    assert resp.status_code == 200
+    genres = resp.json()["genres"]
+    assert len(genres) >= 10
+    assert any(g["id"] == "20" for g in genres)
+
+    mock_charts = {
+        "genre_id": "20",
+        "playlists": [
+            {
+                "id": "pl.alt1",
+                "title": "ALT CTRL",
+                "curator": "Apple Music Alternative",
+                "track_count": 50,
+                "provider": "apple",
+            }
+        ],
+        "albums": [],
+        "songs": [],
+    }
+    with patch("alac_rip.am_api.fetch_bearer_token", return_value="fake-bearer-token"), \
+         patch("alac_rip.am_api.fetch_genre_charts", return_value=mock_charts):
+        chart_resp = client.get("/catalog/genre/20/charts")
+        assert chart_resp.status_code == 200
+        cdata = chart_resp.json()
+        assert cdata["genre_id"] == "20"
+        assert len(cdata["playlists"]) == 1
+        assert cdata["playlists"][0]["title"] == "ALT CTRL"
+
+
+def test_catalog_playlist_details_endpoint(client):
+    mock_pl = {
+        "id": "pl.synthwave",
+        "title": "Synthwave Essentials",
+        "curator": "Apple Music Electronic",
+        "description": "Retro futuristic sounds.",
+        "track_count": 2,
+        "artwork_url": "https://example.com/pl.jpg",
+        "url": "https://music.apple.com/us/playlist/synthwave-essentials/pl.synthwave",
+        "provider": "apple",
+        "tracks": [
+            {
+                "id": "901",
+                "title": "Nightcall",
+                "artist": "Kavinsky",
+                "album": "OutRun",
+                "track_number": 1,
+                "disc_number": 1,
+                "duration_ms": 258000,
+                "url": "https://music.apple.com/us/song/901",
+            },
+            {
+                "id": "902",
+                "title": "Tech Noir",
+                "artist": "GUNSHIP",
+                "album": "GUNSHIP",
+                "track_number": 2,
+                "disc_number": 1,
+                "duration_ms": 297000,
+                "url": "https://music.apple.com/us/song/902",
+            },
+        ],
+    }
+    with patch("alac_rip.am_api.fetch_bearer_token", return_value="fake-bearer-token"), \
+         patch("alac_rip.am_api.fetch_playlist_details", return_value=mock_pl):
+        resp = client.get("/catalog/playlist?id=pl.synthwave")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["id"] == "pl.synthwave"
+        assert data["title"] == "Synthwave Essentials"
+        assert len(data["tracks"]) == 2
+        assert data["tracks"][0]["in_library"] is False
+
+
+def test_custom_playlist_and_add_tracks(client):
+    # 1. Create a decoupled custom playlist without an Apple Music URL
+    create_resp = client.post(
+        "/api/v1/playlists/custom",
+        json={
+            "name": "Late Night Drive",
+            "description": "Custom synthwave mix",
+            "cover_art_url": "https://example.com/cover.jpg",
+        },
+    )
+    assert create_resp.status_code == 201
+    pl_data = create_resp.json()
+    assert pl_data["name"] == "Late Night Drive"
+    assert pl_data["is_custom"] is True
+    assert pl_data["url"] == ""
+    assert pl_data["paused"] is True
+
+    # 2. Add tracks to the custom playlist (queues missing tracks with destination_playlist)
+    add_resp = client.post(
+        "/api/v1/playlists/Late%20Night%20Drive/add-tracks",
+        json={
+            "tracks": [
+                {
+                    "id": "901",
+                    "title": "Nightcall",
+                    "artist": "Kavinsky",
+                    "album": "OutRun",
+                    "url": "https://music.apple.com/us/song/901",
+                }
+            ],
+            "download_missing": True,
+            "format": "ALAC",
+        },
+    )
+    assert add_resp.status_code == 200
+    res_data = add_resp.json()
+    assert res_data["playlist_name"] == "Late Night Drive"
+    assert res_data["queued_downloads"] == 1
+    assert len(res_data["job_ids"]) == 1
+

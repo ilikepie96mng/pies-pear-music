@@ -79,6 +79,13 @@ export async function streamEvents(
   }
 }
 
+export interface VersionInfo {
+  version: string;
+  commit?: string;
+  is_dev?: boolean;
+  display: string;
+}
+
 export interface Playlist {
   name: string;
   url: string;
@@ -88,6 +95,9 @@ export interface Playlist {
   navidrome_id?: string | null;
   remote_changed_at?: string | null;
   last_local_modified?: string | null;
+  is_custom?: boolean;
+  description?: string;
+  cover_art_url?: string;
 }
 
 export interface SubscribedArtist {
@@ -535,6 +545,7 @@ export interface CatalogSong {
   url?: string;
   artwork_url?: string | null;
   isrc?: string;
+  provider?: "apple" | "tidal";
 }
 
 export interface CatalogTrack {
@@ -543,11 +554,14 @@ export interface CatalogTrack {
   artist: string;
   album: string;
   track_number: number;
-  disc_number: number;
+  disc_number?: number;
   duration_ms: number;
   url?: string;
   artwork_url?: string | null;
   isrc?: string;
+  in_library?: boolean;
+  is_available?: boolean;
+  provider?: "apple" | "tidal";
 }
 
 export interface CatalogAlbum {
@@ -564,6 +578,7 @@ export interface CatalogAlbum {
   is_compilation?: boolean;
   is_complete?: boolean;
   tracks?: CatalogTrack[];
+  provider?: "apple" | "tidal";
 }
 
 export interface CatalogArtist {
@@ -575,12 +590,41 @@ export interface CatalogArtist {
   genre_names?: string[];
   album_count?: number;
   albums?: CatalogAlbum[];
+  provider?: "apple" | "tidal";
+}
+
+export interface CatalogPlaylist {
+  id: string;
+  title: string;
+  curator: string;
+  description?: string;
+  track_count: number;
+  artwork_url?: string | null;
+  url?: string;
+  last_modified?: string;
+  provider: "apple" | "tidal";
+  tracks?: CatalogTrack[];
+}
+
+export interface GenreInfo {
+  id: string;
+  name: string;
+  icon: string;
+  color: string;
+}
+
+export interface GenreChartsResult {
+  genre_id: string;
+  playlists: CatalogPlaylist[];
+  albums: CatalogAlbum[];
+  songs: CatalogSong[];
 }
 
 export interface CatalogSearchResult {
   songs: CatalogSong[];
   albums: CatalogAlbum[];
   artists: CatalogArtist[];
+  playlists?: CatalogPlaylist[];
 }
 
 export interface StorageTestResult {
@@ -595,6 +639,16 @@ export interface StorageTestResult {
 }
 
 export const api = {
+  async getVersion(): Promise<VersionInfo> {
+    try {
+      const r = await request("/version");
+      if (!r.ok) return { version: "2.3.0", display: "v2.3.0" };
+      return r.json();
+    } catch {
+      return { version: "2.3.0", display: "v2.3.0" };
+    }
+  },
+
   async playlists(): Promise<Playlist[]> {
     const r = await request("/playlists");
     return r.json();
@@ -1188,11 +1242,12 @@ export const api = {
 
   async searchCatalog(
     query: string,
-    types: string[] = ["songs", "albums", "artists"],
+    types: string[] = ["songs", "albums", "artists", "playlists"],
     limit: number = 8,
+    provider: string = "all",
   ): Promise<CatalogSearchResult> {
     const typesParam = types.join(",");
-    const r = await request(`/catalog/search?q=${encodeURIComponent(query)}&types=${encodeURIComponent(typesParam)}&limit=${limit}`);
+    const r = await request(`/catalog/search?q=${encodeURIComponent(query)}&types=${encodeURIComponent(typesParam)}&limit=${limit}&provider=${encodeURIComponent(provider)}`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       throw new Error(err.detail || `Catalog search failed (${r.status})`);
@@ -1200,10 +1255,11 @@ export const api = {
     return r.json();
   },
 
-  async catalogAlbum(idOrUrl: string): Promise<CatalogAlbum> {
+  async catalogAlbum(idOrUrl: string, provider?: string): Promise<CatalogAlbum> {
     const isUrl = idOrUrl.startsWith("http");
     const param = isUrl ? `url=${encodeURIComponent(idOrUrl)}` : `id=${encodeURIComponent(idOrUrl)}`;
-    const r = await request(`/catalog/album?${param}`);
+    const provParam = provider ? `&provider=${encodeURIComponent(provider)}` : "";
+    const r = await request(`/catalog/album?${param}${provParam}`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to fetch album (${r.status})`);
@@ -1211,13 +1267,87 @@ export const api = {
     return r.json();
   },
 
-  async catalogArtist(idOrUrl: string): Promise<CatalogArtist> {
+  async catalogArtist(idOrUrl: string, provider?: string): Promise<CatalogArtist> {
     const isUrl = idOrUrl.startsWith("http");
     const param = isUrl ? `url=${encodeURIComponent(idOrUrl)}` : `id=${encodeURIComponent(idOrUrl)}`;
-    const r = await request(`/catalog/artist?${param}`);
+    const provParam = provider ? `&provider=${encodeURIComponent(provider)}` : "";
+    const r = await request(`/catalog/artist?${param}${provParam}`);
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to fetch artist discography (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async catalogPlaylist(idOrUrl: string, provider?: string): Promise<CatalogPlaylist> {
+    const isUrl = idOrUrl.startsWith("http");
+    const param = isUrl ? `url=${encodeURIComponent(idOrUrl)}` : `id=${encodeURIComponent(idOrUrl)}`;
+    const provParam = provider ? `&provider=${encodeURIComponent(provider)}` : "";
+    const r = await request(`/catalog/playlist?${param}${provParam}`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch playlist details (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async catalogGenres(): Promise<GenreInfo[]> {
+    const r = await request("/catalog/genres");
+    if (!r.ok) return [];
+    const data = await r.json().catch(() => ({ genres: [] }));
+    return data.genres || [];
+  },
+
+  async catalogGenreCharts(genreId: string): Promise<GenreChartsResult> {
+    const r = await request(`/catalog/genre/${encodeURIComponent(genreId)}/charts`);
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch genre charts (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async createCustomPlaylist(
+    name: string,
+    description: string = "",
+    coverArtUrl: string = "",
+    tracks: Array<Partial<CatalogTrack>> = [],
+  ): Promise<Playlist> {
+    const r = await request("/api/v1/playlists/custom", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        description,
+        cover_art_url: coverArtUrl,
+        tracks,
+      }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to create custom playlist (${r.status})`);
+    }
+    return r.json();
+  },
+
+  async addTracksToPlaylist(
+    playlistName: string,
+    tracks: Array<Partial<CatalogTrack>>,
+    downloadMissing: boolean = true,
+    format: string = "ALAC",
+  ): Promise<{ playlist_name: string; linked_existing: number; queued_downloads: number; job_ids: number[] }> {
+    const r = await request(`/api/v1/playlists/${encodeURIComponent(playlistName)}/add-tracks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tracks,
+        download_missing: downloadMissing,
+        format,
+      }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to add tracks to playlist (${r.status})`);
     }
     return r.json();
   },

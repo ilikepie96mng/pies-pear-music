@@ -76,6 +76,9 @@ class Playlist:
     navidrome_id: Optional[str] = None
     remote_changed_at: Optional[str] = None
     last_local_modified: Optional[str] = None
+    is_custom: bool = False
+    description: str = ""
+    cover_art_url: str = ""
 
 
 @dataclass
@@ -187,6 +190,12 @@ class StateManager:
                 conn.execute("ALTER TABLE playlists ADD COLUMN remote_changed_at TEXT")
             if "last_local_modified" not in cols:
                 conn.execute("ALTER TABLE playlists ADD COLUMN last_local_modified TEXT")
+            if "is_custom" not in cols:
+                conn.execute("ALTER TABLE playlists ADD COLUMN is_custom INTEGER NOT NULL DEFAULT 0")
+            if "description" not in cols:
+                conn.execute("ALTER TABLE playlists ADD COLUMN description TEXT DEFAULT ''")
+            if "cover_art_url" not in cols:
+                conn.execute("ALTER TABLE playlists ADD COLUMN cover_art_url TEXT DEFAULT ''")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_playlists_navidrome_id ON playlists(navidrome_id)")
             # am_track_id migration
             track_cols = {r[1] for r in conn.execute("PRAGMA table_info(tracks)")}
@@ -263,6 +272,9 @@ class StateManager:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_download_queue_status_pos ON download_queue (status, position, id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_download_queue_batch ON download_queue (batch_id)")
+            queue_cols = {r[1] for r in conn.execute("PRAGMA table_info(download_queue)")}
+            if "destination_playlist" not in queue_cols:
+                conn.execute("ALTER TABLE download_queue ADD COLUMN destination_playlist TEXT DEFAULT ''")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS audio_waveforms (
                     track_id    TEXT PRIMARY KEY,
@@ -694,12 +706,39 @@ class StateManager:
                 continue
         return False
 
-    def add_playlist(self, name: str, url: str) -> None:
+    def has_track_by_title_artist(self, title: str, artist: str) -> bool:
+        return self.get_track_by_title_artist(title, artist) is not None
+
+    def get_track_by_title_artist(self, title: str, artist: str) -> Optional[Track]:
+        return self.find_track_by_title_artist(title, artist)
+
+    def add_playlist(
+        self,
+        name: str,
+        url: str = "",
+        is_custom: bool = False,
+        description: str = "",
+        cover_art_url: str = "",
+    ) -> Playlist:
+        if not url:
+            url = f"local:playlist:{name}"
         with self._conn() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO playlists (name, url, last_synced) VALUES (?, ?, NULL)",
-                (name, url),
+                """
+                INSERT OR REPLACE INTO playlists (name, url, last_synced, paused, is_custom, description, cover_art_url)
+                VALUES (?, ?, NULL, 0, ?, ?, ?)
+                """,
+                (name, url, 1 if is_custom else 0, description or "", cover_art_url or ""),
             )
+        return Playlist(
+            name=name,
+            url=url,
+            last_synced=None,
+            paused=False,
+            is_custom=is_custom,
+            description=description or "",
+            cover_art_url=cover_art_url or "",
+        )
 
     def delete_playlist(self, name: str) -> None:
         """Remove a playlist and only the records that belong to it."""
@@ -711,7 +750,7 @@ class StateManager:
     def get_playlist(self, name: str) -> Optional[Playlist]:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT name, url, last_synced, paused, staging_folder, navidrome_id, remote_changed_at, last_local_modified FROM playlists WHERE name = ?",
+                "SELECT name, url, last_synced, paused, staging_folder, navidrome_id, remote_changed_at, last_local_modified, is_custom, description, cover_art_url FROM playlists WHERE name = ?",
                 (name,),
             ).fetchone()
             if not row:
@@ -725,6 +764,9 @@ class StateManager:
                 navidrome_id=row[5],
                 remote_changed_at=row[6],
                 last_local_modified=row[7],
+                is_custom=bool(row[8]) if len(row) > 8 else False,
+                description=str(row[9] or "") if len(row) > 9 else "",
+                cover_art_url=str(row[10] or "") if len(row) > 10 else "",
             )
 
     def get_playlist_by_navidrome_id(self, navidrome_id: str) -> Optional[Playlist]:
@@ -732,7 +774,7 @@ class StateManager:
             return None
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT name, url, last_synced, paused, staging_folder, navidrome_id, remote_changed_at, last_local_modified FROM playlists WHERE navidrome_id = ?",
+                "SELECT name, url, last_synced, paused, staging_folder, navidrome_id, remote_changed_at, last_local_modified, is_custom, description, cover_art_url FROM playlists WHERE navidrome_id = ?",
                 (navidrome_id,),
             ).fetchone()
             if not row:
@@ -746,12 +788,15 @@ class StateManager:
                 navidrome_id=row[5],
                 remote_changed_at=row[6],
                 last_local_modified=row[7],
+                is_custom=bool(row[8]) if len(row) > 8 else False,
+                description=str(row[9] or "") if len(row) > 9 else "",
+                cover_art_url=str(row[10] or "") if len(row) > 10 else "",
             )
 
     def get_playlists(self) -> list[Playlist]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT name, url, last_synced, paused, staging_folder, navidrome_id, remote_changed_at, last_local_modified FROM playlists"
+                "SELECT name, url, last_synced, paused, staging_folder, navidrome_id, remote_changed_at, last_local_modified, is_custom, description, cover_art_url FROM playlists"
             ).fetchall()
             return [
                 Playlist(
@@ -763,6 +808,9 @@ class StateManager:
                     navidrome_id=r[5],
                     remote_changed_at=r[6],
                     last_local_modified=r[7],
+                    is_custom=bool(r[8]) if len(r) > 8 else False,
+                    description=str(r[9] or "") if len(r) > 9 else "",
+                    cover_art_url=str(r[10] or "") if len(r) > 10 else "",
                 )
                 for r in rows
             ]
@@ -1361,6 +1409,7 @@ class StateManager:
         batch_id: Optional[str] = None,
         batch_title: Optional[str] = None,
         total_tracks: int = 0,
+        destination_playlist: str = "",
     ) -> int:
         now = datetime.now().isoformat()
         with self._conn() as conn:
@@ -1369,11 +1418,11 @@ class StateManager:
                 """
                 INSERT INTO download_queue (
                     batch_id, batch_title, url, title, artist, album, artwork_url,
-                    format, status, item_type, total_tracks, position, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                    format, status, item_type, total_tracks, position, created_at, destination_playlist
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                 """,
                 (batch_id, batch_title, url, title, artist, album, artwork_url,
-                 format, item_type, total_tracks, max_pos + 1, now),
+                 format, item_type, total_tracks, max_pos + 1, now, destination_playlist or ""),
             )
             return cur.lastrowid
 
@@ -1389,8 +1438,8 @@ class StateManager:
                     """
                     INSERT INTO download_queue (
                         batch_id, batch_title, url, title, artist, album, artwork_url,
-                        format, status, item_type, total_tracks, position, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+                        format, status, item_type, total_tracks, position, created_at, destination_playlist
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                     """,
                     (
                         j.get("batch_id"),
@@ -1405,6 +1454,7 @@ class StateManager:
                         j.get("total_tracks", 0),
                         max_pos + 1 + i,
                         now,
+                        j.get("destination_playlist", ""),
                     ),
                 )
                 job_ids.append(cur.lastrowid)

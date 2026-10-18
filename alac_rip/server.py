@@ -102,6 +102,8 @@ def _validate_playlist_name(value: str) -> str:
         raise ValueError(f"Playlist name must be at most {_MAX_PLAYLIST_NAME_LENGTH} characters")
     if any(ord(char) < 32 or ord(char) == 127 for char in name):
         raise ValueError("Playlist name cannot contain control characters")
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValueError("Playlist name cannot contain path separators or '..'")
     return name
 
 
@@ -784,8 +786,21 @@ def _extract_session_token(request: Request) -> Optional[str]:
 
 app = FastAPI(title="pies-alac-rip", lifespan=lifespan)
 
+VERSION = "2.3.0"
+
+
+def get_version_info() -> dict:
+    return {
+        "version": VERSION,
+        "commit": "",
+        "build_date": os.environ.get("PIES_BUILD_DATE", ""),
+        "display": f"v{VERSION}",
+    }
+
+
 PUBLIC_ROUTES = {
     ("GET", "/health"),
+    ("GET", "/version"),
     ("GET", "/auth/status"),
     ("POST", "/auth/login"),
     ("POST", "/auth/logout"),
@@ -793,6 +808,11 @@ PUBLIC_ROUTES = {
     ("GET", "/favicon.ico"),
     ("GET", "/favicon.png"),
 }
+
+
+@app.get("/version")
+def get_version():
+    return get_version_info()
 
 
 @app.middleware("http")
@@ -1000,6 +1020,7 @@ class PlaylistIn(BaseModel):
 
 
 def _playlist_dict(p) -> dict:
+    thumb = getattr(p, "cover_art_url", "") or (state.get_playlist_thumbnail(p.name) if state else None)
     return {
         "name": p.name,
         "url": p.url,
@@ -1008,7 +1029,10 @@ def _playlist_dict(p) -> dict:
         "navidrome_id": getattr(p, "navidrome_id", None),
         "remote_changed_at": getattr(p, "remote_changed_at", None),
         "last_local_modified": getattr(p, "last_local_modified", None),
-        "thumbnail_url": state.get_playlist_thumbnail(p.name) if state else None,
+        "is_custom": bool(getattr(p, "is_custom", False)),
+        "description": getattr(p, "description", "") or "",
+        "cover_art_url": getattr(p, "cover_art_url", "") or "",
+        "thumbnail_url": thumb,
     }
 
 
@@ -1080,6 +1104,7 @@ def _run_job(job: dict) -> None:
     url: str = job["url"]
     format_: str = job["format"]
     playlist_name: Optional[str] = job["playlist_name"]
+    destination_playlist: str = job.get("destination_playlist") or ""
     log_q: queue.Queue = job["log_q"]
     started_at = datetime.now()
     db_id: Optional[int] = job.get("db_id")
@@ -1465,7 +1490,7 @@ def _run_job(job: dict) -> None:
         engine = SyncEngine(
             state=state,
             music_dir=cfg.music_dir,
-            playlist_name=playlist_name,
+            playlist_name=playlist_name or destination_playlist or None,
             on_log=on_log,
             state_dir=cfg.state_dir,
         )
@@ -1510,6 +1535,13 @@ def _run_job(job: dict) -> None:
             result.new_count, result.skipped_count, result.error_count, str(log_path),
         )
         threading.Thread(target=_async_push_to_navidrome, args=(playlist_name,), daemon=True).start()
+    elif destination_playlist:
+        try:
+            engine._write_m3u8()
+            state.touch_playlist_local_modified(destination_playlist)
+            threading.Thread(target=_async_push_to_navidrome, args=(destination_playlist,), daemon=True).start()
+        except Exception as exc:
+            write_log(f"[playlist] warning: could not update destination playlist {destination_playlist}: {exc}")
 
     # Trigger media server webhooks (Jellyfin / Navidrome) asynchronously
     try:
@@ -1572,6 +1604,7 @@ def _queue_worker() -> None:
                 "url": pending_db_job["url"],
                 "format": pending_db_job.get("format", "ALAC"),
                 "playlist_name": pending_db_job.get("title") if pending_db_job.get("item_type") == "playlist" else None,
+                "destination_playlist": pending_db_job.get("destination_playlist") or "",
                 "title": pending_db_job.get("title", "Lossless Download"),
                 "artist": pending_db_job.get("artist", ""),
                 "album": pending_db_job.get("album", ""),
@@ -3808,19 +3841,19 @@ def _get_storefront() -> str:
 def get_catalog_search(
     background_tasks: BackgroundTasks,
     q: str = Query(..., min_length=1),
-    types: str = Query("songs,albums,artists"),
+    types: str = Query("songs,albums,artists,playlists"),
     limit: int = Query(8, ge=1, le=25),
 ):
-    """Search Apple Music catalog across songs, albums, and artists."""
+    """Search Apple Music catalog across songs, albums, artists, and playlists."""
     try:
         bearer = am_api.fetch_bearer_token()
     except Exception as exc:
         raise HTTPException(502, f"Failed to obtain Apple Music bearer token: {exc}")
 
     storefront = _get_storefront()
-    type_list = tuple(t.strip() for t in types.split(",") if t.strip() in ("songs", "albums", "artists"))
+    type_list = tuple(t.strip() for t in types.split(",") if t.strip() in ("songs", "albums", "artists", "playlists"))
     if not type_list:
-        type_list = ("songs", "albums", "artists")
+        type_list = ("songs", "albums", "artists", "playlists")
 
     try:
         results = am_api.search_apple_music_catalog(q, bearer, storefront=storefront, types=type_list, limit=limit)
@@ -3888,6 +3921,260 @@ def get_catalog_artist(
         raise HTTPException(404, str(exc))
     except Exception as exc:
         raise HTTPException(500, f"Failed to fetch artist discography: {exc}")
+
+
+@app.get("/catalog/playlist")
+def get_catalog_playlist(
+    id: Optional[str] = Query(None),
+    url: Optional[str] = Query(None),
+):
+    """Fetch playlist details and tracklist from Apple Music catalog."""
+    target = id or url
+    if not target:
+        raise HTTPException(400, "Must provide 'id' or 'url' parameter")
+
+    try:
+        bearer = am_api.fetch_bearer_token()
+    except Exception as exc:
+        raise HTTPException(502, f"Failed to obtain Apple Music bearer token: {exc}")
+
+    storefront = _get_storefront()
+    try:
+        pl_data = am_api.fetch_playlist_details(target, bearer, storefront=storefront)
+        pl_data["provider"] = "apple"
+    except am_api.AMApiError as exc:
+        raise HTTPException(404, str(exc))
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to fetch Apple Music playlist: {exc}")
+
+    for t in pl_data.get("tracks", []):
+        t["is_available"] = True
+        t["in_library"] = bool(
+            state and state.has_track_by_title_artist(t.get("title", ""), t.get("artist", ""))
+        )
+
+    return pl_data
+
+
+_genre_charts_cache: dict[str, tuple[float, dict]] = {}
+
+
+@app.get("/catalog/genres")
+def get_catalog_genres_endpoint():
+    """Return high-level catalog genre taxonomy."""
+    return am_api.get_catalog_genres()
+
+
+@app.get("/catalog/genre/{genre_id}/charts")
+def get_catalog_genre_charts(genre_id: str, provider: str = Query("all")):
+    """Fetch top playlists, albums, and tracks for a genre."""
+    cache_key = f"{genre_id}:{provider.lower()}"
+    now = time.time()
+    cached = _genre_charts_cache.get(cache_key)
+    if cached and (now - cached[0]) < 3600:
+        return cached[1]
+
+    genres = am_api.get_catalog_genres()
+    genre_meta = next(
+        (g for g in genres if g["id"] == genre_id or g["slug"] == genre_id.lower()),
+        {"id": genre_id, "name": genre_id.title(), "icon": "🎵", "slug": genre_id.lower()},
+    )
+    resolved_id = genre_meta["id"]
+    genre_name = genre_meta["name"]
+
+    playlists: list[dict] = []
+    albums: list[dict] = []
+    songs: list[dict] = []
+
+    try:
+        bearer = am_api.fetch_bearer_token()
+        storefront = _get_storefront()
+        if resolved_id == "100001":
+            am_search = am_api.search_apple_music_catalog(
+                "Synthwave Ambient Electronic",
+                bearer,
+                storefront=storefront,
+                types=("playlists", "albums", "songs"),
+                limit=12,
+            )
+            playlists.extend(am_search.get("playlists", []))
+            albums.extend(am_search.get("albums", []))
+            songs.extend(am_search.get("songs", []))
+        else:
+            am_charts = am_api.fetch_genre_charts(resolved_id, bearer, storefront=storefront)
+            playlists.extend(am_charts.get("playlists", []))
+            albums.extend(am_charts.get("albums", []))
+            songs.extend(am_charts.get("songs", []))
+            if not playlists:
+                am_search = am_api.search_apple_music_catalog(
+                    genre_name,
+                    bearer,
+                    storefront=storefront,
+                    types=("playlists", "albums", "songs"),
+                    limit=10,
+                )
+                playlists.extend(am_search.get("playlists", []))
+                if not albums:
+                    albums.extend(am_search.get("albums", []))
+                if not songs:
+                    songs.extend(am_search.get("songs", []))
+    except Exception as exc:
+        logger.warning(f"Apple Music genre chart fetch failed for {genre_id}: {exc}")
+
+    result = {
+        "genre_id": resolved_id,
+        "genre_name": genre_name,
+        "icon": genre_meta.get("icon", "🎵"),
+        "playlists": playlists,
+        "albums": albums,
+        "songs": songs,
+    }
+    _genre_charts_cache[cache_key] = (now, result)
+    return result
+
+
+class CreateCustomPlaylistRequest(BaseModel):
+    name: str
+    description: str = ""
+    cover_art_url: str = ""
+    sync_to_subsonic: bool = True
+
+
+class AddTracksToPlaylistRequest(BaseModel):
+    tracks: list[dict]
+    download_lossless: bool = True
+    format: str = "ALAC"
+
+
+@app.post("/api/v1/playlists/custom", status_code=201)
+def create_custom_playlist_endpoint(req: CreateCustomPlaylistRequest):
+    """Create a standalone local/custom playlist without requiring an external URL."""
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    try:
+        valid_name = _validate_playlist_name(req.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+    pl = state.add_playlist(
+        name=valid_name,
+        url=f"local:playlist:{valid_name}",
+        is_custom=True,
+        description=req.description,
+        cover_art_url=req.cover_art_url,
+    )
+    state.touch_playlist_local_modified(valid_name)
+
+    if cfg and cfg.music_dir:
+        try:
+            playlists_dir = cfg.music_dir / "playlists"
+            playlists_dir.mkdir(parents=True, exist_ok=True)
+            m3u8_path = playlists_dir / f"{sanitize(valid_name)}.m3u8"
+            if not m3u8_path.exists():
+                m3u8_path.write_text("#EXTM3U\n", encoding="utf-8")
+        except Exception as exc:
+            logger.warning(f"Could not write initial M3U8 for custom playlist {valid_name}: {exc}")
+
+    if req.sync_to_subsonic:
+        threading.Thread(target=_async_push_to_navidrome, args=(valid_name,), daemon=True).start()
+
+    return _playlist_dict(pl)
+
+
+@app.post("/api/v1/playlists/{name}/add-tracks")
+def add_tracks_to_playlist_endpoint(name: str, req: AddTracksToPlaylistRequest):
+    """Add tracks to a local/custom playlist, linking owned files immediately and queueing missing tracks."""
+    if state is None:
+        raise HTTPException(503, "Library state not ready")
+    try:
+        valid_name = _validate_playlist_name(name)
+        format_ = _validate_download_format(req.format)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+    existing_pl = state.get_playlist(valid_name)
+    if not existing_pl:
+        first_art = next((t.get("artwork_url") for t in req.tracks if t.get("artwork_url")), "") or ""
+        state.add_playlist(
+            name=valid_name,
+            url=f"local:playlist:{valid_name}",
+            is_custom=True,
+            cover_art_url=first_art,
+        )
+
+    linked_count = 0
+    jobs_to_enqueue: list[dict] = []
+    batch_id = str(uuid.uuid4())
+
+    for item in req.tracks:
+        title = (item.get("title") or "").strip()
+        artist = (item.get("artist") or "").strip()
+        album = (item.get("album") or "").strip()
+        track_id = (item.get("track_id") or "").strip()
+        url_raw = (item.get("url") or "").strip()
+        item_id = str(item.get("id") or "").strip()
+        artwork_url = item.get("artwork_url")
+
+        matched = None
+        if track_id:
+            matched = state.get_track(track_id)
+        if not matched and title:
+            matched = state.get_track_by_title_artist(title, artist)
+
+        if matched:
+            state.add_track_to_playlist(valid_name, matched.track_id)
+            linked_count += 1
+            continue
+
+        if not req.download_lossless:
+            continue
+
+        valid_url = ""
+        if not url_raw and item_id:
+            url_raw = f"https://music.apple.com/us/song/{item_id}"
+        if url_raw:
+            try:
+                valid_url = _validate_apple_music_url(url_raw)
+            except ValueError:
+                valid_url = ""
+        item_format = "ALAC" if format_ == "FLAC" else format_
+
+        if valid_url:
+            jobs_to_enqueue.append({
+                "batch_id": batch_id,
+                "batch_title": f"Playlist: {valid_name}",
+                "url": valid_url,
+                "title": title or "Track Download",
+                "artist": artist,
+                "album": album,
+                "artwork_url": artwork_url,
+                "format": item_format,
+                "item_type": "track",
+                "total_tracks": 1,
+                "destination_playlist": valid_name,
+            })
+
+    queued_job_ids: list[int] = []
+    if jobs_to_enqueue:
+        queued_job_ids = state.bulk_enqueue_download_jobs(jobs_to_enqueue)
+        _queue_wake_event.set()
+        _broadcast_queue_event({"event": "queue_updated", "count": len(queued_job_ids)})
+
+    if cfg and cfg.music_dir:
+        try:
+            SyncEngine(state=state, music_dir=cfg.music_dir, playlist_name=valid_name)._write_m3u8()
+        except Exception as exc:
+            logger.warning(f"Could not write M3U8 for {valid_name}: {exc}")
+
+    state.touch_playlist_local_modified(valid_name)
+    threading.Thread(target=_async_push_to_navidrome, args=(valid_name,), daemon=True).start()
+
+    return {
+        "playlist": valid_name,
+        "linked": linked_count,
+        "queued": len(queued_job_ids),
+        "job_ids": queued_job_ids,
+    }
 
 
 class DownloadAlbumRequest(BaseModel):

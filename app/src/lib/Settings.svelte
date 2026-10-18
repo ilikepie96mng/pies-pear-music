@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { api, type SchedulerStatus } from "../api";
+  import { api, type SchedulerStatus, type VersionInfo } from "../api";
   import {
     applyTheme, getStoredTheme, parseAppearance, serializeAppearance, textContrast, themes, type ThemeId,
     applyWallpaper, getStoredWallpaper,
@@ -14,6 +14,7 @@
   let theme = $state<ThemeId>("amber-night");
   let appearanceMessage = $state<string | null>(null);
   let contrast = $derived(textContrast(theme));
+  let versionInfo = $state<VersionInfo>({ version: "2.3.0", display: "v2.3.0" });
 
   // Custom Wallpaper Engine
   let wallpaperImage = $state("");
@@ -241,6 +242,10 @@
       schedulerStatus = await api.scheduler.getStatus();
     } catch {}
 
+    try {
+      versionInfo = await api.getVersion();
+    } catch {}
+
     loaded = true;
   });
 
@@ -422,9 +427,15 @@
 </script>
 
 <div class="p-8 max-w-2xl h-full overflow-y-auto space-y-8">
-  <div>
-    <h1 class="text-white text-2xl font-bold tracking-tight">Settings</h1>
-    <p class="text-zinc-500 text-sm mt-1">Configuring <span class="font-mono text-zinc-400 text-xs">{typeof window !== 'undefined' && window.location.hostname !== 'tauri.localhost' ? 'Headless Docker / Server Mode' : '~/.config/pies-alac-rip/config.yaml'}</span></p>
+  <div class="flex items-start justify-between gap-4">
+    <div>
+      <h1 class="text-white text-2xl font-bold tracking-tight">Settings</h1>
+      <p class="text-zinc-500 text-sm mt-1">Configuring <span class="font-mono text-zinc-400 text-xs">{typeof window !== 'undefined' && window.location.hostname !== 'tauri.localhost' ? 'Headless Docker / Server Mode' : '~/.config/pies-alac-rip/config.yaml'}</span></p>
+    </div>
+    <div class="px-3 py-1.5 rounded-xl border border-amber-500/30 bg-amber-950/20 text-right">
+      <div class="text-[10px] uppercase tracking-widest text-zinc-500 font-semibold">Build Version</div>
+      <div class="text-xs font-mono font-bold text-amber-400">{versionInfo.display || `v${versionInfo.version}`}</div>
+    </div>
   </div>
 
   <!-- SERVER VS DESKTOP SETUP HELPER -->

@@ -40,6 +40,7 @@
 
   let wrapperRunning = $state<boolean | null>(null);
   let wrapperLoggingIn = $state(false);
+  let appVersion = $state("v2.3.0");
 
   async function pollWrapperStatus() {
     try {
@@ -54,6 +55,9 @@
 
   onMount(() => {
     pollWrapperStatus();
+    api.getVersion().then((v) => {
+      if (v && v.version) appVersion = `v${v.version}`;
+    }).catch(() => {});
     const interval = setInterval(pollWrapperStatus, 10_000);
     return () => clearInterval(interval);
   });
@@ -88,7 +92,10 @@
     <span style="font-size:18px;line-height:1;">◉</span>
     <div>
       <div style="color:var(--accent);font-weight:700;font-size:13px;letter-spacing:.02em;line-height:1.1;">Pies Pear</div>
-      <div style="color:var(--text-muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase;">Music</div>
+      <div style="display:flex;align-items:center;gap:5px;margin-top:2px;">
+        <span style="color:var(--text-muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase;">Music</span>
+        <span style="color:var(--accent);font-size:9px;font-family:monospace;font-weight:700;opacity:0.9;">{appVersion}</span>
+      </div>
     </div>
   </div>
 

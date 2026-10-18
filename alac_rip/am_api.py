@@ -555,7 +555,7 @@ def _search_itunes_fallback(query: str, limit: int = 8) -> dict:
     try:
         r = requests.get(url, timeout=8)
         if r.status_code != 200:
-            return {"songs": [], "albums": [], "artists": []}
+            return {"songs": [], "albums": [], "artists": [], "playlists": []}
         data = r.json().get("results", [])
         songs = []
         albums = []
@@ -603,21 +603,21 @@ def _search_itunes_fallback(query: str, limit: int = 8) -> dict:
                     "artwork_url": art_template,
                 })
 
-        return {"songs": songs, "albums": albums, "artists": artists}
+        return {"songs": songs, "albums": albums, "artists": artists, "playlists": []}
     except Exception:
-        return {"songs": [], "albums": [], "artists": []}
+        return {"songs": [], "albums": [], "artists": [], "playlists": []}
 
 
 def search_apple_music_catalog(
     query: str,
     bearer_token: str,
     storefront: str = "us",
-    types: tuple[str, ...] = ("songs", "albums", "artists"),
+    types: tuple[str, ...] = ("songs", "albums", "artists", "playlists"),
     limit: int = 8,
 ) -> dict:
-    """Multi-entity catalog search across songs, albums, and artists."""
+    """Multi-entity catalog search across songs, albums, artists, and playlists."""
     if not query.strip():
-        return {"songs": [], "albums": [], "artists": []}
+        return {"songs": [], "albums": [], "artists": [], "playlists": []}
     if not storefront or storefront == "enter your account storefront":
         storefront = "us"
 
@@ -671,14 +671,253 @@ def search_apple_music_catalog(
                     "artwork_url": artwork.get("url"),
                 })
 
-            if songs or albums or artists:
+            playlists = []
+            for p in data.get("playlists", {}).get("data", []):
+                attrs = p.get("attributes", {})
+                art = attrs.get("artwork", {})
+                desc_obj = attrs.get("description", {})
+                desc_str = ""
+                if isinstance(desc_obj, dict):
+                    desc_str = desc_obj.get("standard") or desc_obj.get("short") or ""
+                elif isinstance(desc_obj, str):
+                    desc_str = desc_obj
+                playlists.append({
+                    "id": p.get("id", ""),
+                    "title": attrs.get("name", ""),
+                    "curator_name": attrs.get("curatorName", "Apple Music"),
+                    "description": desc_str,
+                    "track_count": attrs.get("trackCount", 0),
+                    "url": attrs.get("url", ""),
+                    "artwork_url": art.get("url"),
+                    "last_modified": attrs.get("lastModifiedDate", ""),
+                    "provider": "apple",
+                })
+
+            if songs or albums or artists or playlists:
                 return {
                     "songs": songs,
                     "albums": albums,
                     "artists": artists,
+                    "playlists": playlists,
                 }
     except Exception:
         pass
 
     # Seamless fallback to public iTunes API
     return _search_itunes_fallback(query, limit=limit)
+
+
+def fetch_playlist_details(
+    playlist_id_or_url: str,
+    bearer_token: str,
+    storefront: str = "us",
+) -> dict:
+    """Fetch playlist metadata and paginated tracklist from Apple Music AMP API."""
+    if not storefront or storefront == "enter your account storefront":
+        storefront = "us"
+
+    playlist_id = playlist_id_or_url
+    if "music.apple.com" in playlist_id_or_url or "/playlist/" in playlist_id_or_url:
+        m = re.search(r"/playlist/(?:[^/]+/)?(pl\.[^\s/?#]+)", playlist_id_or_url)
+        if m:
+            playlist_id = m.group(1)
+        else:
+            m_end = re.search(r"(pl\.[^\s/?#]+)(?:[/?]|$)", playlist_id_or_url)
+            if m_end:
+                playlist_id = m_end.group(1)
+
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Origin": "https://music.apple.com",
+    }
+
+    url = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/playlists/{playlist_id}"
+    try:
+        r = requests.get(url, headers=headers, timeout=15)
+        if r.status_code != 200:
+            raise AMApiError(f"Apple Music returned {r.status_code} for playlist {playlist_id}")
+        data = r.json()
+        pl_data = data.get("data", [])[0]
+        attrs = pl_data.get("attributes", {})
+        art = attrs.get("artwork", {})
+        desc_obj = attrs.get("description", {})
+        desc_str = ""
+        if isinstance(desc_obj, dict):
+            desc_str = desc_obj.get("standard") or desc_obj.get("short") or ""
+        elif isinstance(desc_obj, str):
+            desc_str = desc_obj
+
+        tracks: list[dict] = []
+        relationships = pl_data.get("relationships", {})
+        rel_tracks = relationships.get("tracks", {})
+        for idx, t in enumerate(rel_tracks.get("data", []), start=1):
+            t_attrs = t.get("attributes", {})
+            t_art = t_attrs.get("artwork", {})
+            tracks.append({
+                "id": t.get("id", ""),
+                "title": t_attrs.get("name", ""),
+                "artist": t_attrs.get("artistName", ""),
+                "album": t_attrs.get("albumName", ""),
+                "track_number": idx,
+                "duration_ms": t_attrs.get("durationInMillis", 0),
+                "url": t_attrs.get("url", ""),
+                "artwork_url": t_art.get("url"),
+                "isrc": t_attrs.get("isrc"),
+                "provider": "apple",
+            })
+
+        next_path = rel_tracks.get("next")
+        while next_path and len(tracks) < 300:
+            next_url = next_path if next_path.startswith("http") else f"https://amp-api.music.apple.com{next_path}"
+            try:
+                nr = requests.get(next_url, headers=headers, timeout=15)
+                if nr.status_code != 200:
+                    break
+                ndata = nr.json()
+                for t in ndata.get("data", []):
+                    t_attrs = t.get("attributes", {})
+                    t_art = t_attrs.get("artwork", {})
+                    tracks.append({
+                        "id": t.get("id", ""),
+                        "title": t_attrs.get("name", ""),
+                        "artist": t_attrs.get("artistName", ""),
+                        "album": t_attrs.get("albumName", ""),
+                        "track_number": len(tracks) + 1,
+                        "duration_ms": t_attrs.get("durationInMillis", 0),
+                        "url": t_attrs.get("url", ""),
+                        "artwork_url": t_art.get("url"),
+                        "isrc": t_attrs.get("isrc"),
+                        "provider": "apple",
+                    })
+                next_path = ndata.get("next")
+            except Exception:
+                break
+
+        return {
+            "id": playlist_id,
+            "title": attrs.get("name", ""),
+            "curator_name": attrs.get("curatorName", "Apple Music"),
+            "description": desc_str,
+            "track_count": attrs.get("trackCount", len(tracks)),
+            "artwork_url": art.get("url"),
+            "url": attrs.get("url", ""),
+            "last_modified": attrs.get("lastModifiedDate", ""),
+            "tracks": tracks,
+            "provider": "apple",
+        }
+    except AMApiError:
+        raise
+    except Exception as e:
+        raise AMApiError(f"Failed to fetch playlist {playlist_id}: {e}") from e
+
+
+def fetch_genre_charts(
+    genre_id: str,
+    bearer_token: str,
+    storefront: str = "us",
+) -> dict:
+    """Fetch top playlists, albums, and songs for a specific genre."""
+    if not storefront or storefront == "enter your account storefront":
+        storefront = "us"
+
+    headers = {
+        "Authorization": f"Bearer {bearer_token}",
+        "Origin": "https://music.apple.com",
+    }
+    url = f"https://amp-api.music.apple.com/v1/catalog/{storefront}/charts?types=playlists,albums,songs&genre={genre_id}&limit=20"
+    try:
+        r = requests.get(url, headers=headers, timeout=12)
+        if r.status_code != 200:
+            return {"genre_id": genre_id, "playlists": [], "albums": [], "songs": []}
+
+        results = r.json().get("results", {})
+
+        playlists = []
+        for chart in results.get("playlists", []):
+            for p in chart.get("data", []):
+                attrs = p.get("attributes", {})
+                art = attrs.get("artwork", {})
+                desc_obj = attrs.get("description", {})
+                desc_str = ""
+                if isinstance(desc_obj, dict):
+                    desc_str = desc_obj.get("standard") or desc_obj.get("short") or ""
+                elif isinstance(desc_obj, str):
+                    desc_str = desc_obj
+                playlists.append({
+                    "id": p.get("id", ""),
+                    "title": attrs.get("name", ""),
+                    "curator_name": attrs.get("curatorName", "Apple Music"),
+                    "description": desc_str,
+                    "artwork_url": art.get("url"),
+                    "track_count": attrs.get("trackCount", 0),
+                    "url": attrs.get("url", ""),
+                    "provider": "apple",
+                })
+
+        albums = []
+        for chart in results.get("albums", []):
+            for a in chart.get("data", []):
+                attrs = a.get("attributes", {})
+                art = attrs.get("artwork", {})
+                albums.append({
+                    "id": a.get("id", ""),
+                    "title": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", ""),
+                    "release_date": attrs.get("releaseDate", ""),
+                    "track_count": attrs.get("trackCount", 0),
+                    "artwork_url": art.get("url"),
+                    "url": attrs.get("url", ""),
+                    "provider": "apple",
+                })
+
+        songs = []
+        for chart in results.get("songs", []):
+            for s in chart.get("data", []):
+                attrs = s.get("attributes", {})
+                art = attrs.get("artwork", {})
+                songs.append({
+                    "id": s.get("id", ""),
+                    "title": attrs.get("name", ""),
+                    "artist": attrs.get("artistName", ""),
+                    "album": attrs.get("albumName", ""),
+                    "artwork_url": art.get("url"),
+                    "url": attrs.get("url", ""),
+                    "provider": "apple",
+                })
+
+        return {
+            "genre_id": genre_id,
+            "playlists": playlists,
+            "albums": albums,
+            "songs": songs,
+        }
+    except Exception:
+        return {"genre_id": genre_id, "playlists": [], "albums": [], "songs": []}
+
+
+CATALOG_GENRES: list[dict[str, str]] = [
+    {"id": "7", "name": "Electronic", "icon": "⚡", "slug": "electronic"},
+    {"id": "18", "name": "Hip-Hop / Rap", "icon": "🎤", "slug": "hip-hop"},
+    {"id": "21", "name": "Rock", "icon": "🎸", "slug": "rock"},
+    {"id": "20", "name": "Alternative", "icon": "📻", "slug": "alternative"},
+    {"id": "14", "name": "R&B / Soul", "icon": "💜", "slug": "rnb"},
+    {"id": "11", "name": "Jazz", "icon": "🎷", "slug": "jazz"},
+    {"id": "6", "name": "Country", "icon": "🤠", "slug": "country"},
+    {"id": "5", "name": "Classical", "icon": "🎻", "slug": "classical"},
+    {"id": "17", "name": "Dance", "icon": "🪩", "slug": "dance"},
+    {"id": "10", "name": "Singer/Songwriter", "icon": "☕", "slug": "acoustic"},
+    {"id": "12", "name": "Latin", "icon": "🌴", "slug": "latin"},
+    {"id": "16", "name": "Soundtrack", "icon": "🎬", "slug": "soundtrack"},
+    {"id": "24", "name": "Reggae", "icon": "☀️", "slug": "reggae"},
+    {"id": "2", "name": "Blues", "icon": "🎺", "slug": "blues"},
+    {"id": "15", "name": "Soul / Funk", "icon": "🕺", "slug": "soul"},
+    {"id": "22", "name": "Metal", "icon": "🤘", "slug": "metal"},
+    {"id": "28", "name": "J-Pop", "icon": "🌸", "slug": "j-pop"},
+    {"id": "51", "name": "K-Pop", "icon": "✨", "slug": "k-pop"},
+    {"id": "19", "name": "World", "icon": "🌍", "slug": "world"},
+    {"id": "100001", "name": "Ambient & Synthwave", "icon": "🌌", "slug": "ambient"},
+]
+
+
+def get_catalog_genres() -> list[dict[str, str]]:
+    return list(CATALOG_GENRES)

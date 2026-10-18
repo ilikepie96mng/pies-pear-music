@@ -9,6 +9,10 @@
     type CatalogArtist,
     type CatalogSong,
     type CatalogTrack,
+    type CatalogPlaylist,
+    type GenreInfo,
+    type GenreChartsResult,
+    type Playlist,
     type QueueSummary,
     type QueueJob,
     type SubscribedArtist,
@@ -23,7 +27,7 @@
 
   // Navigation & Subviews
   type MainTab = "search" | "progress" | "direct" | "queue";
-  type SearchSubView = "results" | "artist" | "album";
+  type SearchSubView = "results" | "artist" | "album" | "playlist";
 
   let mainTab = $state<MainTab>("search");
   let searchSubView = $state<SearchSubView>("results");
@@ -33,8 +37,8 @@
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let searchLoading = $state(false);
   let searchError = $state<string | null>(null);
-  let searchResults = $state<CatalogSearchResult>({ songs: [], albums: [], artists: [] });
-  let activeEntityFilter = $state<"all" | "albums" | "artists" | "songs" | "subscribed">("all");
+  let searchResults = $state<CatalogSearchResult>({ songs: [], albums: [], artists: [], playlists: [] });
+  let activeEntityFilter = $state<"all" | "albums" | "artists" | "playlists" | "genres" | "songs" | "subscribed">("all");
   let activeProvider = $state<"all" | "apple" | "tidal">("all");
 
   // Subscribed Artists & Releases State
@@ -59,6 +63,33 @@
   let selectedAlbum = $state<CatalogAlbum | null>(null);
   let albumLoading = $state(false);
   let albumError = $state<string | null>(null);
+
+  // Playlist Inspector View State
+  let selectedPlaylist = $state<CatalogPlaylist | null>(null);
+  let playlistLoading = $state(false);
+  let playlistError = $state<string | null>(null);
+  let selectedPlaylistTrackIds = $state<Set<string>>(new Set());
+
+  // Genre Hub State
+  let catalogGenresList = $state<GenreInfo[]>([]);
+  let selectedGenre = $state<GenreInfo | null>(null);
+  let genreCharts = $state<GenreChartsResult | null>(null);
+  let genreLoading = $state(false);
+  let genreError = $state<string | null>(null);
+
+  // Add to Custom/Local Playlist Modal State
+  let localPlaylists = $state<Playlist[]>([]);
+  let showAddToPlaylistModal = $state(false);
+  let modalTargetTracks = $state<Array<CatalogTrack | CatalogSong>>([]);
+  let modalDestinationMode = $state<"existing" | "new">("new");
+  let modalSelectedPlaylistName = $state("");
+  let modalNewPlaylistName = $state("");
+  let modalNewPlaylistDescription = $state("");
+  let modalNewPlaylistCoverUrl = $state("");
+  let modalDownloadMissing = $state(true);
+  let modalSubmitting = $state(false);
+  let modalFeedback = $state<string | null>(null);
+  let modalError = $state<string | null>(null);
 
   // Direct URL input state
   let directUrl = $state("");
@@ -274,7 +305,7 @@
   function executeSearch(query: string) {
     if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
     if (!query.trim()) {
-      searchResults = { songs: [], albums: [], artists: [] };
+      searchResults = { songs: [], albums: [], artists: [], playlists: [] };
       searchLoading = false;
       searchError = null;
       return;
@@ -283,7 +314,7 @@
     searchError = null;
     searchDebounceTimer = setTimeout(async () => {
       try {
-        const res = await api.searchCatalog(query.trim(), ["songs", "albums", "artists"], 16, activeProvider);
+        const res = await api.searchCatalog(query.trim(), ["songs", "albums", "artists", "playlists"], 16, activeProvider);
         searchResults = res;
       } catch (err) {
         searchError = err instanceof Error ? err.message : String(err);
@@ -329,6 +360,176 @@
       albumError = err instanceof Error ? err.message : String(err);
     } finally {
       albumLoading = false;
+    }
+  }
+
+  // Open Playlist Inspector
+  async function openPlaylist(playlistIdOrUrl: string, provider?: "apple" | "tidal") {
+    playlistLoading = true;
+    playlistError = null;
+    selectedPlaylistTrackIds = new Set();
+    searchSubView = "playlist";
+    try {
+      selectedPlaylist = await api.catalogPlaylist(playlistIdOrUrl, provider);
+      if (selectedPlaylist.tracks && selectedPlaylist.tracks.length > 0) {
+        selectedPlaylistTrackIds = new Set(selectedPlaylist.tracks.map((t) => t.id));
+      }
+    } catch (err) {
+      playlistError = err instanceof Error ? err.message : String(err);
+    } finally {
+      playlistLoading = false;
+    }
+  }
+
+  function togglePlaylistTrackSelection(trackId: string) {
+    const next = new Set(selectedPlaylistTrackIds);
+    if (next.has(trackId)) {
+      next.delete(trackId);
+    } else {
+      next.add(trackId);
+    }
+    selectedPlaylistTrackIds = next;
+  }
+
+  function selectAllPlaylistTracks() {
+    if (!selectedPlaylist?.tracks) return;
+    selectedPlaylistTrackIds = new Set(selectedPlaylist.tracks.map((t) => t.id));
+  }
+
+  function deselectAllPlaylistTracks() {
+    selectedPlaylistTrackIds = new Set();
+  }
+
+  async function selectGenre(genre: GenreInfo) {
+    selectedGenre = genre;
+    genreLoading = true;
+    genreError = null;
+    try {
+      genreCharts = await api.catalogGenreCharts(genre.id);
+    } catch (err) {
+      genreError = err instanceof Error ? err.message : String(err);
+    } finally {
+      genreLoading = false;
+    }
+  }
+
+  async function loadGenresAndPlaylists() {
+    try {
+      const [genres, pls] = await Promise.all([
+        api.catalogGenres(),
+        api.playlists(),
+      ]);
+      catalogGenresList = genres;
+      localPlaylists = pls;
+      if (pls.length > 0 && !modalSelectedPlaylistName) {
+        modalSelectedPlaylistName = pls[0].name;
+      }
+    } catch {}
+  }
+
+  function openAddToPlaylistModal(
+    tracks: Array<CatalogTrack | CatalogSong>,
+    suggestedName?: string,
+    suggestedDescription?: string,
+    suggestedCoverUrl?: string | null,
+  ) {
+    modalTargetTracks = tracks;
+    modalError = null;
+    modalFeedback = null;
+    if (suggestedName) {
+      modalNewPlaylistName = suggestedName;
+      modalNewPlaylistDescription = suggestedDescription || "";
+      modalNewPlaylistCoverUrl = suggestedCoverUrl || "";
+      modalDestinationMode = "new";
+    } else if (localPlaylists.length > 0) {
+      modalDestinationMode = "existing";
+      if (!modalSelectedPlaylistName) modalSelectedPlaylistName = localPlaylists[0].name;
+    } else {
+      modalDestinationMode = "new";
+      modalNewPlaylistName = "My Custom Playlist";
+    }
+    showAddToPlaylistModal = true;
+    api.playlists().then((pls) => {
+      localPlaylists = pls;
+      if (pls.length > 0 && !modalSelectedPlaylistName) {
+        modalSelectedPlaylistName = pls[0].name;
+      }
+    }).catch(() => {});
+  }
+
+  async function submitAddToPlaylist() {
+    if (modalTargetTracks.length === 0) return;
+    modalSubmitting = true;
+    modalError = null;
+    modalFeedback = null;
+    try {
+      let targetName = modalSelectedPlaylistName;
+      if (modalDestinationMode === "new") {
+        if (!modalNewPlaylistName.trim()) {
+          throw new Error("Please enter a playlist name.");
+        }
+        targetName = modalNewPlaylistName.trim();
+        await api.createCustomPlaylist(
+          targetName,
+          modalNewPlaylistDescription.trim(),
+          modalNewPlaylistCoverUrl,
+          [],
+        );
+      }
+      if (!targetName) {
+        throw new Error("Please select or create a destination playlist.");
+      }
+
+      const res = await api.addTracksToPlaylist(
+        targetName,
+        modalTargetTracks,
+        modalDownloadMissing,
+        format,
+      );
+      modalFeedback = `✓ Added to "${res.playlist_name}" (${res.linked_existing} linked from library, ${res.queued_downloads} queued for lossless download)!`;
+      await refreshQueue();
+      localPlaylists = await api.playlists().catch(() => localPlaylists);
+      setTimeout(() => {
+        showAddToPlaylistModal = false;
+        modalFeedback = null;
+      }, 1600);
+    } catch (err) {
+      modalError = err instanceof Error ? err.message : String(err);
+    } finally {
+      modalSubmitting = false;
+    }
+  }
+
+  async function downloadSelectedPlaylistTracks() {
+    if (!selectedPlaylist?.tracks || selectedPlaylistTrackIds.size === 0) return;
+    const tracksToDownload = selectedPlaylist.tracks.filter((t) => selectedPlaylistTrackIds.has(t.id));
+    const isTidal = selectedPlaylist.provider === "tidal";
+    const items = tracksToDownload.map((trk) => {
+      const trkIsTidal = isTidal || trk.provider === "tidal" || String(trk.id).startsWith("tidal:");
+      const cleanId = String(trk.id).replace(/^tidal:(?:track:)?/, "");
+      const defaultUrl = trkIsTidal ? `https://tidal.com/browse/track/${cleanId}` : `https://music.apple.com/us/song/${trk.id}`;
+      return {
+        url: trk.url || defaultUrl,
+        title: trk.title,
+        artist: trk.artist,
+        album: trk.album || selectedPlaylist?.title || "",
+        artwork_url: trk.artwork_url || selectedPlaylist?.artwork_url,
+        total_tracks: 1,
+        item_type: "single",
+      };
+    });
+    try {
+      await api.queue.add({
+        items,
+        format: isTidal ? "FLAC" : format,
+        batch_title: `${selectedPlaylist.title} (${items.length} tracks)`,
+      });
+      mainTab = "queue";
+      await refreshQueue();
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : String(err);
+      playlistError = `Enqueue failed: ${msg}`;
+      notifyDownloadFailed(selectedPlaylist.title, msg);
     }
   }
 
@@ -821,6 +1022,7 @@
     } catch {}
     refreshQueue();
     refreshSubscriptions();
+    loadGenresAndPlaylists();
     queuePollTimer = setInterval(refreshQueue, 2000);
   });
 
@@ -978,6 +1180,36 @@
               </button>
             </div>
           </div>
+        {:else if searchSubView === "playlist" && selectedPlaylist}
+          <div class="mb-6 flex items-center justify-between gap-4 flex-wrap">
+            <div class="flex items-center gap-2 flex-wrap">
+              <button
+                onclick={() => { searchSubView = "results"; }}
+                class="px-3 py-1.5 rounded-xl bg-[#12100e] border border-[#2a2a2a] text-xs font-semibold text-zinc-400 hover:text-white hover:border-amber-500/40 flex items-center gap-1.5 transition-all shadow-sm group"
+              >
+                <span class="group-hover:-translate-x-0.5 transition-transform">←</span>
+                <span>🔍 Search Results</span>
+              </button>
+              <span class="text-zinc-600 text-xs font-bold">/</span>
+              <div class="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs font-bold text-amber-300 flex items-center gap-1.5 shadow-sm">
+                <span>📑</span>
+                <span class="truncate max-w-[200px] sm:max-w-[320px]">{selectedPlaylist.title}</span>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+              <span class="px-2.5 py-1 rounded-lg text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 {selectedPlaylist.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/50' : 'bg-pink-950/80 text-pink-400 border border-pink-800/50'}">
+                {selectedPlaylist.provider === 'tidal' ? '🌊 Tidal Lossless' : '🍎 Apple Music'}
+              </span>
+              <button
+                onclick={() => { searchSubView = "results"; searchQuery = ""; }}
+                class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-xs transition-colors"
+                title="Start a new search"
+              >
+                New Search
+              </button>
+            </div>
+          </div>
         {:else}
           <!-- Search Bar & Provider Toggle -->
           <div class="mb-8">
@@ -1028,14 +1260,14 @@
                 type="text"
                 value={searchQuery}
                 oninput={handleSearchInput}
-                placeholder="Search artists, albums, or tracks (e.g. Daft Punk, Random Access Memories, Get Lucky)..."
+                placeholder="Search artists, albums, playlists, or tracks (e.g. Daft Punk, Synthwave, Get Lucky)..."
                 class="w-full bg-[#12100e] border border-[#2a2a2a] rounded-2xl pl-11 pr-10 py-3.5 text-sm text-white placeholder-zinc-600 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 shadow-lg transition-all"
               />
               {#if searchLoading}
                 <div class="absolute right-4 w-4 h-4 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin"></div>
               {:else if searchQuery}
                 <button
-                  onclick={() => { searchQuery = ""; searchResults = { songs: [], albums: [], artists: [] }; }}
+                  onclick={() => { searchQuery = ""; searchResults = { songs: [], albums: [], artists: [], playlists: [] }; }}
                   class="absolute right-4 text-zinc-500 hover:text-white text-xs font-bold"
                 >
                   ✕
@@ -1062,6 +1294,18 @@
                 class="px-3 py-1 rounded-lg text-xs font-semibold transition-all {activeEntityFilter === 'albums' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-[#15131a] text-zinc-400 border border-[#262330] hover:text-white'}"
               >
                 Albums ({searchResults.albums?.length || 0})
+              </button>
+              <button
+                onclick={() => (activeEntityFilter = "playlists")}
+                class="px-3 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 {activeEntityFilter === 'playlists' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-[#15131a] text-zinc-400 border border-[#262330] hover:text-white'}"
+              >
+                <span>📑 Playlists ({searchResults.playlists?.length || 0})</span>
+              </button>
+              <button
+                onclick={() => { activeEntityFilter = "genres"; if (catalogGenresList.length === 0) loadGenresAndPlaylists(); }}
+                class="px-3 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 {activeEntityFilter === 'genres' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'bg-[#15131a] text-zinc-400 border border-[#262330] hover:text-white'}"
+              >
+                <span>🎸 Genres</span>
               </button>
               <button
                 onclick={() => (activeEntityFilter = "songs")}
@@ -1211,15 +1455,191 @@
                 </div>
               {/if}
             </div>
+          {:else if activeEntityFilter === "genres"}
+            <!-- GENRES SHOWCASE HUB -->
+            <div class="mb-10">
+              <div class="flex items-center justify-between mb-4">
+                <div class="text-xs font-bold uppercase tracking-wider text-amber-500 flex items-center gap-2">
+                  <span>🎸 Browse Catalog by Genre</span>
+                  <span class="text-zinc-600 text-[11px] font-normal">({catalogGenresList.length} Genres)</span>
+                </div>
+                {#if selectedGenre}
+                  <button
+                    onclick={() => { selectedGenre = null; genreCharts = null; }}
+                    class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-zinc-400 hover:text-white transition-colors"
+                  >
+                    ← All Genres
+                  </button>
+                {/if}
+              </div>
+
+              <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 mb-8">
+                {#each catalogGenresList as g (g.id)}
+                  {@const isSelected = selectedGenre?.id === g.id}
+                  <button
+                    onclick={() => selectGenre(g)}
+                    class="p-4 rounded-2xl border text-left transition-all flex items-center gap-3 group {isSelected ? 'border-amber-500 bg-amber-500/15 ring-2 ring-amber-500/20' : 'border-[#23202e] bg-[#14121a] hover:border-amber-500/40 hover:bg-[#1c1924]'}"
+                  >
+                    <span class="text-2xl flex-shrink-0">{g.icon}</span>
+                    <div class="min-w-0">
+                      <div class="text-white text-xs font-bold truncate group-hover:text-amber-400 transition-colors">{g.name}</div>
+                      <div class="text-[10px] text-zinc-500 mt-0.5">Charts & Playlists</div>
+                    </div>
+                  </button>
+                {/each}
+              </div>
+
+              {#if genreLoading}
+                <div class="flex flex-col items-center justify-center py-16 gap-3">
+                  <div class="w-7 h-7 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin"></div>
+                  <div class="text-zinc-500 text-xs">Loading {selectedGenre?.name || "genre"} charts & curated playlists…</div>
+                </div>
+              {:else if genreError}
+                <div class="bg-red-950/30 border border-red-900/50 rounded-2xl p-4 text-red-400 text-xs">
+                  {genreError}
+                </div>
+              {:else if selectedGenre && genreCharts}
+                <div class="space-y-8">
+                  <!-- Genre Playlists -->
+                  {#if genreCharts.playlists && genreCharts.playlists.length > 0}
+                    <div>
+                      <div class="text-xs font-bold uppercase tracking-wider text-amber-400 mb-3 flex items-center gap-2">
+                        <span>{selectedGenre.icon} Featured {selectedGenre.name} Playlists</span>
+                        <span class="text-zinc-600 text-[11px] font-normal">({genreCharts.playlists.length})</span>
+                      </div>
+                      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                        {#each genreCharts.playlists as pl (pl.id)}
+                          <div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-[#14121a] hover:bg-[#1c1924] border border-[#23202e] hover:border-amber-500/40 transition-all group shadow-sm">
+                            <button
+                              onclick={() => openPlaylist(pl.id, pl.provider)}
+                              class="flex items-center gap-3 flex-1 min-w-0 text-left"
+                            >
+                              <div class="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-xl bg-zinc-800 overflow-hidden shrink-0 border border-white/5" style="width: 48px; height: 48px; min-width: 48px; min-height: 48px;">
+                                {#if pl.artwork_url}
+                                  <img src={formatArtwork(pl.artwork_url, 160)} alt={pl.title} width="48" height="48" class="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-xl object-cover shrink-0" style="width: 48px; height: 48px;" />
+                                {:else}
+                                  <div class="w-full h-full flex items-center justify-center text-zinc-500 text-sm">📑</div>
+                                {/if}
+                              </div>
+                              <div class="flex-1 min-w-0">
+                                <div class="text-white text-xs font-bold truncate group-hover:text-amber-400 transition-colors" title={pl.title}>{pl.title}</div>
+                                <div class="text-zinc-400 text-[11px] truncate mt-0.5">{pl.curator || "Apple Music"}</div>
+                              </div>
+                            </button>
+                            <button
+                              onclick={() => openPlaylist(pl.id, pl.provider)}
+                              class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-amber-500 hover:text-black text-zinc-300 text-[11px] font-semibold transition-colors shrink-0"
+                            >
+                              Inspect →
+                            </button>
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+
+                  <!-- Genre Top Albums -->
+                  {#if genreCharts.albums && genreCharts.albums.length > 0}
+                    <div>
+                      <div class="text-xs font-bold uppercase tracking-wider text-amber-400 mb-3 flex items-center gap-2">
+                        <span>💿 Top {selectedGenre.name} Albums</span>
+                        <span class="text-zinc-600 text-[11px] font-normal">({genreCharts.albums.length})</span>
+                      </div>
+                      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                        {#each genreCharts.albums as alb (alb.id)}
+                          <div class="group flex flex-col bg-[#14121a] rounded-2xl border border-[#23202e] hover:border-amber-500/40 overflow-hidden transition-all shadow-sm">
+                            <button onclick={() => openAlbum(alb.id, alb.provider || 'apple')} class="aspect-square bg-zinc-900 overflow-hidden relative text-left">
+                              {#if alb.artwork_url}
+                                <img src={formatArtwork(alb.artwork_url, 300)} alt={alb.title} class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                              {:else}
+                                <div class="w-full h-full flex items-center justify-center text-2xl text-zinc-600">💿</div>
+                              {/if}
+                            </button>
+                            <div class="p-3 flex flex-col flex-1">
+                              <button onclick={() => openAlbum(alb.id, alb.provider || 'apple')} class="text-left">
+                                <div class="text-white text-xs font-bold truncate group-hover:text-amber-400 transition-colors" title={alb.title}>{alb.title}</div>
+                                <div class="text-zinc-400 text-[11px] truncate mt-0.5" title={alb.artist}>{alb.artist}</div>
+                              </button>
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+
+                  <!-- Genre Top Songs -->
+                  {#if genreCharts.songs && genreCharts.songs.length > 0}
+                    <div>
+                      <div class="text-xs font-bold uppercase tracking-wider text-amber-400 mb-3 flex items-center gap-2">
+                        <span>🎵 Top {selectedGenre.name} Tracks</span>
+                        <span class="text-zinc-600 text-[11px] font-normal">({genreCharts.songs.length})</span>
+                      </div>
+                      <div class="divide-y divide-white/5 bg-[#14121a] rounded-2xl border border-[#23202e] overflow-hidden">
+                        {#each genreCharts.songs as s (s.id)}
+                          <div class="flex items-center justify-between p-3 hover:bg-white/5 transition-colors gap-3">
+                            <div class="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-xl bg-zinc-800 overflow-hidden shrink-0" style="width: 40px; height: 40px; min-width: 40px; min-height: 40px;">
+                              {#if s.artwork_url}
+                                <img src={formatArtwork(s.artwork_url, 80)} alt={s.title} width="40" height="40" class="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-xl object-cover shrink-0" style="width: 40px; height: 40px;" />
+                              {:else}
+                                <div class="w-full h-full flex items-center justify-center text-xs text-zinc-500">🎵</div>
+                              {/if}
+                            </div>
+                            <div class="flex-1 min-w-0">
+                              <div class="text-white text-xs font-bold truncate">{s.title}</div>
+                              <div class="text-zinc-400 text-[11px] truncate mt-0.5">{s.artist} {s.album ? `• ${s.album}` : ""}</div>
+                            </div>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                              <button
+                                onclick={() => openAddToPlaylistModal([s])}
+                                class="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-amber-300 text-xs font-semibold transition-colors"
+                                title="Add track to a custom or local playlist"
+                              >
+                                + Playlist
+                              </button>
+                              <button
+                                onclick={() => downloadSingleTrack(s)}
+                                class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-amber-500 hover:text-black text-zinc-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
+                              >
+                                <span>↓</span>
+                                <span>Download</span>
+                              </button>
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+            </div>
           {:else if !searchQuery.trim()}
-            <div class="flex flex-col items-center justify-center py-20 text-center text-zinc-600">
+            <div class="flex flex-col items-center justify-center py-12 text-center text-zinc-600">
               <div class="text-4xl mb-3 opacity-60">💿</div>
               <div class="text-white text-base font-semibold">Explore Lossless Music Catalog</div>
-              <div class="text-xs text-zinc-500 mt-1 max-w-md">
-                Search Apple Music and Tidal for any artist to download complete discographies, inspect albums with full tracklists, or download lossless tracks with unified library organization.
+              <div class="text-xs text-zinc-500 mt-1 max-w-md mb-8">
+                Search Apple Music and Tidal for artists, albums, curated playlists, or genres to download lossless tracks or build custom local playlists.
               </div>
+
+              {#if catalogGenresList.length > 0}
+                <div class="w-full max-w-4xl text-left">
+                  <div class="text-xs font-bold uppercase tracking-wider text-amber-500 mb-3 flex items-center gap-2">
+                    <span>🎸 Quick Genre Discovery</span>
+                  </div>
+                  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5">
+                    {#each catalogGenresList as g (g.id)}
+                      <button
+                        onclick={() => { activeEntityFilter = "genres"; selectGenre(g); }}
+                        class="p-3 rounded-2xl border border-[#23202e] bg-[#14121a] hover:border-amber-500/40 hover:bg-[#1c1924] text-left transition-all flex items-center gap-2.5 group"
+                      >
+                        <span class="text-xl shrink-0">{g.icon}</span>
+                        <span class="text-white text-xs font-semibold truncate group-hover:text-amber-400 transition-colors">{g.name}</span>
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             </div>
-          {:else if searchResults.artists.length === 0 && searchResults.albums.length === 0 && searchResults.songs.length === 0 && !searchLoading}
+          {:else if searchResults.artists.length === 0 && searchResults.albums.length === 0 && searchResults.songs.length === 0 && (!searchResults.playlists || searchResults.playlists.length === 0) && !searchLoading}
             <div class="flex flex-col items-center justify-center py-16 text-center text-zinc-600">
               <div class="text-3xl mb-2">🔍</div>
               <div class="text-zinc-400 text-sm">No matches found for "{searchQuery}"</div>
@@ -1282,6 +1702,51 @@
                           →
                         </button>
                       </div>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+
+            <!-- PLAYLISTS SECTION -->
+            {#if (activeEntityFilter === "all" || activeEntityFilter === "playlists") && searchResults.playlists && searchResults.playlists.length > 0}
+              <div class="mb-10">
+                <div class="text-xs font-bold uppercase tracking-wider text-amber-500 mb-3 flex items-center gap-2">
+                  <span>📑 Curated Playlists</span>
+                  <span class="text-zinc-600 text-[11px] font-normal">({searchResults.playlists.length})</span>
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {#each searchResults.playlists as pl (pl.id)}
+                    <div class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-[#14121a] hover:bg-[#1c1924] border border-[#23202e] hover:border-amber-500/40 transition-all group shadow-sm">
+                      <button
+                        onclick={() => openPlaylist(pl.id, pl.provider)}
+                        class="flex items-center gap-3 flex-1 min-w-0 text-left"
+                      >
+                        <div class="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-xl bg-zinc-800 overflow-hidden shrink-0 border border-white/5" style="width: 48px; height: 48px; min-width: 48px; min-height: 48px;">
+                          {#if pl.artwork_url}
+                            <img src={formatArtwork(pl.artwork_url, 160)} alt={pl.title} width="48" height="48" class="w-12 h-12 min-w-[48px] min-h-[48px] max-w-[48px] max-h-[48px] rounded-xl object-cover shrink-0" style="width: 48px; height: 48px;" />
+                          {:else}
+                            <div class="w-full h-full flex items-center justify-center text-zinc-500 text-sm">📑</div>
+                          {/if}
+                        </div>
+                        <div class="flex-1 min-w-0">
+                          <div class="flex items-center gap-2">
+                            <span class="text-white text-xs font-bold truncate group-hover:text-amber-400 transition-colors" title={pl.title}>{pl.title}</span>
+                            <span class="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider shrink-0 {pl.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/40' : 'bg-pink-950/80 text-pink-400 border border-pink-800/40'}">
+                              {pl.provider === 'tidal' ? '🌊 Tidal' : '🍎 Apple'}
+                            </span>
+                          </div>
+                          <div class="text-zinc-500 text-[11px] truncate mt-0.5">
+                            {pl.curator || "Curated Playlist"}{pl.track_count ? ` • ${pl.track_count} tracks` : ""}
+                          </div>
+                        </div>
+                      </button>
+                      <button
+                        onclick={() => openPlaylist(pl.id, pl.provider)}
+                        class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-amber-500 hover:text-black text-zinc-300 text-[11px] font-semibold transition-colors shrink-0"
+                      >
+                        Inspect →
+                      </button>
                     </div>
                   {/each}
                 </div>
@@ -1368,13 +1833,22 @@
                           {/if}
                         </div>
                       </div>
-                      <button
-                        onclick={() => downloadSingleTrack(s)}
-                        class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-amber-500 hover:text-black text-zinc-300 text-xs font-semibold transition-colors flex items-center gap-1.5 flex-shrink-0"
-                      >
-                        <span>↓</span>
-                        <span>Download</span>
-                      </button>
+                      <div class="flex items-center gap-1.5 flex-shrink-0">
+                        <button
+                          onclick={() => openAddToPlaylistModal([s])}
+                          class="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-amber-300 text-xs font-semibold transition-colors"
+                          title="Add track to a custom or local playlist"
+                        >
+                          + Playlist
+                        </button>
+                        <button
+                          onclick={() => downloadSingleTrack(s)}
+                          class="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-amber-500 hover:text-black text-zinc-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
+                        >
+                          <span>↓</span>
+                          <span>Download</span>
+                        </button>
+                      </div>
                     </div>
                   {/each}
                 </div>
@@ -1661,8 +2135,16 @@
                 </div>
               </div>
 
-              <!-- Download Album CTA -->
-              <div class="flex items-center gap-3 w-full md:w-auto">
+              <!-- Download Album & Add to Playlist CTA -->
+              <div class="flex items-center gap-2.5 flex-wrap w-full md:w-auto">
+                {#if selectedAlbum.tracks && selectedAlbum.tracks.length > 0}
+                  <button
+                    onclick={() => openAddToPlaylistModal(selectedAlbum?.tracks || [], selectedAlbum?.title, `${selectedAlbum?.artist} — ${selectedAlbum?.title}`, selectedAlbum?.artwork_url)}
+                    class="w-full md:w-auto px-4 py-3 rounded-2xl font-bold text-xs text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all flex items-center justify-center gap-2"
+                  >
+                    <span>+ Add Album to Playlist</span>
+                  </button>
+                {/if}
                 <button
                   onclick={downloadCurrentAlbum}
                   class="w-full md:w-auto px-6 py-3 rounded-2xl font-bold text-xs text-black transition-all hover:bg-amber-400 flex items-center justify-center gap-2 shadow-xl shadow-amber-500/20"
@@ -1679,7 +2161,7 @@
                 <span class="w-8 text-center">#</span>
                 <span class="flex-1">Title</span>
                 <span class="w-24 text-right pr-4">Duration</span>
-                <span class="w-28 text-right">Action</span>
+                <span class="w-44 text-right">Action</span>
               </div>
               <div class="divide-y divide-white/5">
                 {#each (selectedAlbum.tracks || []) as trk (trk.id)}
@@ -1692,13 +2174,182 @@
                       {/if}
                     </div>
                     <span class="w-24 text-right pr-4 text-zinc-500 font-mono">{formatDuration(trk.duration_ms)}</span>
-                    <div class="w-28 text-right">
+                    <div class="w-44 text-right flex items-center justify-end gap-1.5">
+                      <button
+                        onclick={() => openAddToPlaylistModal([trk])}
+                        class="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-amber-300 text-[11px] font-semibold transition-colors"
+                        title="Add track to custom/local playlist"
+                      >
+                        + Playlist
+                      </button>
                       <button
                         onclick={() => downloadSingleTrack(trk)}
                         class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-amber-500 hover:text-black text-zinc-400 text-[11px] font-semibold transition-colors inline-flex items-center gap-1"
                       >
                         <span>↓</span>
                         <span>Rip Track</span>
+                      </button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
+        {/if}
+
+        <!-- 1D. FULL PLAYLIST INSPECTOR SUBVIEW -->
+        {#if searchSubView === "playlist"}
+          {#if playlistLoading}
+            <div class="flex flex-col items-center justify-center py-24 gap-3">
+              <div class="w-8 h-8 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin"></div>
+              <div class="text-zinc-500 text-xs font-medium">Loading curated playlist & checking local library…</div>
+            </div>
+          {:else if playlistError}
+            <div class="bg-red-950/30 border border-red-900/50 rounded-2xl p-5 text-red-400 text-sm">
+              {playlistError}
+            </div>
+          {:else if selectedPlaylist}
+            <!-- Playlist Hero Header -->
+            <div class="p-6 rounded-3xl bg-gradient-to-r from-[#171420] via-[#14121a] to-[#121018] border border-[#282438] flex flex-col md:flex-row items-start md:items-center justify-between gap-6 mb-6 shadow-xl">
+              <div class="flex items-center gap-6 min-w-0">
+                <div class="w-28 h-28 min-w-[112px] min-h-[112px] max-w-[112px] max-h-[112px] rounded-2xl bg-zinc-800 overflow-hidden shrink-0 border border-white/10 shadow-lg" style="width: 112px; height: 112px; min-width: 112px; min-height: 112px;">
+                  {#if selectedPlaylist.artwork_url}
+                    <img src={formatArtwork(selectedPlaylist.artwork_url, 400)} alt={selectedPlaylist.title} width="112" height="112" class="w-28 h-28 min-w-[112px] min-h-[112px] max-w-[112px] max-h-[112px] object-cover shrink-0" style="width: 112px; height: 112px;" />
+                  {:else}
+                    <div class="w-full h-full flex items-center justify-center text-3xl text-zinc-500">📑</div>
+                  {/if}
+                </div>
+                <div class="min-w-0">
+                  <div class="flex items-center gap-2 mb-1 flex-wrap">
+                    <span class="text-[10px] uppercase tracking-widest text-amber-400 font-bold">Curated Playlist</span>
+                    <span class="px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider {selectedPlaylist.provider === 'tidal' ? 'bg-cyan-950/80 text-cyan-400 border border-cyan-800/50' : 'bg-pink-950/80 text-pink-400 border border-pink-800/50'}">
+                      {selectedPlaylist.provider === 'tidal' ? '🌊 Tidal Lossless' : '🍎 Apple Music ALAC'}
+                    </span>
+                  </div>
+                  <h1 class="text-white text-2xl font-bold truncate" title={selectedPlaylist.title}>{selectedPlaylist.title}</h1>
+                  <div class="text-zinc-300 text-sm font-semibold mt-0.5">{selectedPlaylist.curator || "Curated"}</div>
+                  {#if selectedPlaylist.description}
+                    <p class="text-zinc-400 text-xs mt-1.5 line-clamp-2 max-w-xl">{selectedPlaylist.description}</p>
+                  {/if}
+                  <div class="flex items-center gap-3 text-xs text-zinc-500 mt-2 flex-wrap">
+                    <span>{selectedPlaylist.tracks?.length || selectedPlaylist.track_count} Tracks</span>
+                    {#if selectedPlaylist.tracks}
+                      {@const inLibCount = selectedPlaylist.tracks.filter(t => t.in_library).length}
+                      {#if inLibCount > 0}
+                        <span>•</span>
+                        <span class="text-emerald-400 font-semibold">✓ {inLibCount} already in library</span>
+                      {/if}
+                    {/if}
+                  </div>
+                </div>
+              </div>
+
+              <!-- Playlist Primary CTAs -->
+              <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 w-full md:w-auto shrink-0">
+                <button
+                  onclick={() => {
+                    const chosen = (selectedPlaylist?.tracks || []).filter((t) => selectedPlaylistTrackIds.has(t.id));
+                    openAddToPlaylistModal(
+                      chosen.length > 0 ? chosen : (selectedPlaylist?.tracks || []),
+                      selectedPlaylist?.title,
+                      selectedPlaylist?.description || `Curated by ${selectedPlaylist?.curator || 'Catalog'}`,
+                      selectedPlaylist?.artwork_url,
+                    );
+                  }}
+                  class="px-4 py-3 rounded-2xl font-bold text-xs text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition-all flex items-center justify-center gap-2"
+                >
+                  <span>+ Save / Add to Custom Playlist ({selectedPlaylistTrackIds.size || selectedPlaylist.tracks?.length || 0})</span>
+                </button>
+                <button
+                  onclick={downloadSelectedPlaylistTracks}
+                  disabled={selectedPlaylistTrackIds.size === 0}
+                  class="px-5 py-3 rounded-2xl font-bold text-xs text-black transition-all hover:bg-amber-400 disabled:opacity-50 flex items-center justify-center gap-2 shadow-xl shadow-amber-500/20"
+                  style="background:var(--accent);"
+                >
+                  <span>↓ Download Selected Lossless ({selectedPlaylistTrackIds.size})</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Selection Controls Bar -->
+            <div class="flex items-center justify-between mb-3 px-1">
+              <div class="flex items-center gap-2">
+                <button
+                  onclick={selectAllPlaylistTracks}
+                  class="px-3 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors"
+                >
+                  Select All ({selectedPlaylist.tracks?.length || 0})
+                </button>
+                <button
+                  onclick={deselectAllPlaylistTracks}
+                  class="px-3 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  Deselect All
+                </button>
+              </div>
+              <div class="text-xs text-zinc-500">
+                {selectedPlaylistTrackIds.size} of {selectedPlaylist.tracks?.length || 0} tracks selected
+              </div>
+            </div>
+
+            <!-- Playlist Tracklist Table -->
+            <div class="bg-[#14121a] rounded-2xl border border-[#23202e] overflow-hidden mb-12">
+              <div class="px-5 py-3 border-b border-white/5 text-[11px] font-bold text-zinc-500 uppercase tracking-wider flex items-center gap-3">
+                <span class="w-5 text-center">✓</span>
+                <span class="w-8 text-center">#</span>
+                <span class="flex-1">Track / Artist / Album</span>
+                <span class="w-24 text-right">Status</span>
+                <span class="w-20 text-right">Duration</span>
+                <span class="w-40 text-right">Action</span>
+              </div>
+              <div class="divide-y divide-white/5">
+                {#each (selectedPlaylist.tracks || []) as trk, idx (trk.id)}
+                  {@const isChecked = selectedPlaylistTrackIds.has(trk.id)}
+                  <div class="px-5 py-2.5 hover:bg-white/5 transition-colors flex items-center gap-3 text-xs group">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onchange={() => togglePlaylistTrackSelection(trk.id)}
+                      class="w-4 h-4 rounded text-amber-500 accent-amber-500 cursor-pointer shrink-0"
+                    />
+                    <span class="w-8 text-center text-zinc-500 font-mono font-medium shrink-0">{trk.track_number || idx + 1}</span>
+                    <div class="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] rounded-lg bg-zinc-800 overflow-hidden shrink-0 border border-white/5" style="width: 40px; height: 40px; min-width: 40px; min-height: 40px;">
+                      {#if trk.artwork_url}
+                        <img src={formatArtwork(trk.artwork_url, 80)} alt={trk.title} width="40" height="40" class="w-10 h-10 min-w-[40px] min-h-[40px] max-w-[40px] max-h-[40px] object-cover shrink-0" style="width: 40px; height: 40px;" />
+                      {:else}
+                        <div class="w-full h-full flex items-center justify-center text-xs text-zinc-500">🎵</div>
+                      {/if}
+                    </div>
+                    <div class="flex-1 min-w-0 pr-2">
+                      <div class="text-white font-semibold truncate group-hover:text-amber-400 transition-colors">{trk.title}</div>
+                      <div class="text-zinc-500 text-[11px] truncate mt-0.5">
+                        {trk.artist}{trk.album ? ` • ${trk.album}` : ""}
+                      </div>
+                    </div>
+                    <div class="w-24 text-right shrink-0">
+                      {#if trk.in_library}
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-500/30">
+                          ✓ In Library
+                        </span>
+                      {:else}
+                        <span class="text-[10px] text-zinc-600">Catalog</span>
+                      {/if}
+                    </div>
+                    <span class="w-20 text-right text-zinc-500 font-mono shrink-0">{formatDuration(trk.duration_ms)}</span>
+                    <div class="w-40 text-right flex items-center justify-end gap-1.5 shrink-0">
+                      <button
+                        onclick={() => openAddToPlaylistModal([trk])}
+                        class="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-amber-300 text-[11px] font-semibold transition-colors"
+                        title="Add track to custom/local playlist"
+                      >
+                        + Playlist
+                      </button>
+                      <button
+                        onclick={() => downloadSingleTrack(trk)}
+                        class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-amber-500 hover:text-black text-zinc-400 text-[11px] font-semibold transition-colors inline-flex items-center gap-1"
+                      >
+                        <span>↓</span>
+                        <span>Rip</span>
                       </button>
                     </div>
                   </div>
@@ -2303,4 +2954,141 @@
       </div>
     {/if}
   </div>
+
+  <!-- ADD TO CUSTOM / LOCAL PLAYLIST MODAL -->
+  {#if showAddToPlaylistModal}
+    <div
+      class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div class="w-full max-w-md rounded-3xl bg-[#14121a] border border-amber-500/30 shadow-2xl p-6 space-y-5">
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <div class="text-[10px] uppercase tracking-widest text-amber-400 font-bold">Custom Playlist Curation</div>
+            <h3 class="text-white text-lg font-bold mt-0.5">
+              Add {modalTargetTracks.length} {modalTargetTracks.length === 1 ? "Track" : "Tracks"} to Playlist
+            </h3>
+            <p class="text-zinc-500 text-xs mt-1">
+              Build a custom local M3U8 / Navidrome playlist without needing an Apple Music playlist URL.
+            </p>
+          </div>
+          <button
+            onclick={() => { showAddToPlaylistModal = false; }}
+            class="text-zinc-500 hover:text-white text-sm font-bold px-2 py-1"
+          >
+            ✕
+          </button>
+        </div>
+
+        <!-- Mode Selector -->
+        <div class="grid grid-cols-2 gap-2 p-1 rounded-xl bg-[#0d0c12] border border-white/5">
+          <button
+            type="button"
+            onclick={() => (modalDestinationMode = "new")}
+            class="py-2 rounded-lg text-xs font-bold transition-colors {modalDestinationMode === 'new' ? 'bg-amber-500 text-black' : 'text-zinc-400 hover:text-white'}"
+          >
+            + Create New Playlist
+          </button>
+          <button
+            type="button"
+            onclick={() => (modalDestinationMode = "existing")}
+            disabled={localPlaylists.length === 0}
+            class="py-2 rounded-lg text-xs font-bold transition-colors disabled:opacity-40 {modalDestinationMode === 'existing' ? 'bg-amber-500 text-black' : 'text-zinc-400 hover:text-white'}"
+          >
+            Existing Playlist ({localPlaylists.length})
+          </button>
+        </div>
+
+        {#if modalDestinationMode === "new"}
+          <div class="space-y-3">
+            <div>
+              <label for="new-pl-name" class="block text-[10px] uppercase tracking-wider text-zinc-400 font-semibold mb-1">
+                Playlist Name
+              </label>
+              <input
+                id="new-pl-name"
+                bind:value={modalNewPlaylistName}
+                placeholder="e.g. Late Night Synthwave"
+                class="w-full bg-[#0d0c12] border border-[#2a2a2a] focus:border-amber-500 rounded-xl px-3.5 py-2.5 text-xs text-white outline-none"
+              />
+            </div>
+            <div>
+              <label for="new-pl-desc" class="block text-[10px] uppercase tracking-wider text-zinc-400 font-semibold mb-1">
+                Description (Optional)
+              </label>
+              <input
+                id="new-pl-desc"
+                bind:value={modalNewPlaylistDescription}
+                placeholder="Custom local playlist synced to M3U8 & Navidrome"
+                class="w-full bg-[#0d0c12] border border-[#2a2a2a] focus:border-amber-500 rounded-xl px-3.5 py-2 text-xs text-white outline-none"
+              />
+            </div>
+          </div>
+        {:else}
+          <div>
+            <label for="existing-pl-select" class="block text-[10px] uppercase tracking-wider text-zinc-400 font-semibold mb-1">
+              Select Destination Playlist
+            </label>
+            <select
+              id="existing-pl-select"
+              bind:value={modalSelectedPlaylistName}
+              class="w-full bg-[#0d0c12] border border-[#2a2a2a] focus:border-amber-500 rounded-xl px-3.5 py-2.5 text-xs text-white outline-none"
+            >
+              {#each localPlaylists as pl (pl.name)}
+                <option value={pl.name}>
+                  {pl.name} {pl.is_custom ? "(Custom)" : ""}
+                </option>
+              {/each}
+            </select>
+          </div>
+        {/if}
+
+        <!-- Auto-download missing toggle -->
+        <label class="flex items-start gap-2.5 p-3 rounded-xl bg-black/40 border border-white/5 cursor-pointer">
+          <input
+            type="checkbox"
+            bind:checked={modalDownloadMissing}
+            class="mt-0.5 rounded bg-zinc-900 border-zinc-700 text-amber-500 accent-amber-500 cursor-pointer"
+          />
+          <div class="text-xs">
+            <div class="text-white font-semibold">Auto-download missing tracks in lossless ({format})</div>
+            <div class="text-zinc-500 text-[11px] mt-0.5">
+              Tracks already in your library are linked immediately. Missing tracks are queued in the background and automatically added to the playlist &amp; M3U8 when finished.
+            </div>
+          </div>
+        </label>
+
+        {#if modalError}
+          <div class="p-3 rounded-xl bg-red-950/40 border border-red-800/50 text-red-300 text-xs">
+            {modalError}
+          </div>
+        {/if}
+
+        {#if modalFeedback}
+          <div class="p-3 rounded-xl bg-emerald-950/40 border border-emerald-800/50 text-emerald-300 text-xs font-semibold">
+            {modalFeedback}
+          </div>
+        {/if}
+
+        <div class="flex items-center justify-end gap-2.5 pt-2">
+          <button
+            type="button"
+            onclick={() => { showAddToPlaylistModal = false; }}
+            class="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white text-xs font-semibold transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onclick={submitAddToPlaylist}
+            disabled={modalSubmitting}
+            class="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-colors disabled:opacity-50"
+          >
+            {modalSubmitting ? "Saving…" : "Save to Playlist"}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
